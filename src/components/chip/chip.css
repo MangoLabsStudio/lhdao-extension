@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/*
+ * Chip Shadow DOM 内部样式表。
+ *
+ * `:host { all: initial; }` 把宿主元素重置成 inherit-naïve,Twitter 的
+ * 全局 CSS 不会渗进来;同时 Tailwind 的 utility 仅在 shadow root 内生效,
+ * 不会污染 timeline。
+ *
+ * 字体显式声明 system stack 而不依赖外部 font-loading,Shadow DOM 隔离
+ * 后 inherited font-family 拿不到 Twitter 的 Chirp。
+ */
+
+:host {
+  all: initial;
+  display: block;
+  font-family:
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  color-scheme: light dark;
+}
+
+/* 让 chip 内的元素继承重置后的 box-sizing,Tailwind 默认 border-box */
+:host *,
+:host *::before,
+:host *::after {
+  box-sizing: border-box;
+}
