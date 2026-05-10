@@ -92,8 +92,21 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
   if (json?.errors?.length) {
     const first = json.errors[0]
     const code = first?.extensions?.code
-    const detail = code ? `${code}: ${first?.message}` : first?.message
-    throw new GqlError(detail ?? 'GraphQL error', json.errors, res.status)
+    const message = first?.message ?? 'GraphQL error'
+    // NestJS GraphQLExceptionFilter 对 BadRequest/Forbidden 等会把原始
+    // response 塞进 extensions.details。当 message 退化成 code 字面量
+    // (e.g. 'BAD_USER_INPUT: BAD_USER_INPUT')时,details 通常才是真凶。
+    const details = first?.extensions?.details
+    let detailStr = ''
+    if (details && typeof details === 'object') {
+      try {
+        detailStr = ' · ' + JSON.stringify(details).slice(0, 300)
+      } catch {
+        detailStr = ''
+      }
+    }
+    const head = code ? `${code}: ${message}` : message
+    throw new GqlError(head + detailStr, json.errors, res.status)
   }
 
   // 没 errors 但 HTTP 状态非 2xx → 真的是 transport 层失败
