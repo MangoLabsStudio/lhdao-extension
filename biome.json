@@ -29,11 +29,6 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": [
-      "src/**",
-      "wxt.config.ts",
-      "tailwind.config.ts",
-      "vitest.config.ts"
-    ]
+    "includes": ["src/**", "wxt.config.ts", "vitest.config.ts", "!**/*.css"]
   }
 }

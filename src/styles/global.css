@@ -1,0 +1,17 @@
+@import 'tailwindcss';
+
+/*
+ * Lighthouse extension global styles.
+ *
+ * Tailwind 4 uses a single @import directive. Custom design tokens go via
+ * @theme below. Content-script chip styles live in their Shadow DOM root —
+ * see src/components/chip/ for the encapsulated styles.
+ */
+
+@theme {
+  /* Brand palette — modern Teal-Cyan SaaS, matches lhdao web app. */
+  --color-brand-50: oklch(0.98 0.02 195);
+  --color-brand-500: oklch(0.7 0.15 195);
+  --color-brand-600: oklch(0.62 0.16 195);
+  --color-brand-700: oklch(0.52 0.15 195);
+}

@@ -1,26 +1,22 @@
 {
+  "extends": "./.wxt/tsconfig.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "types": ["chrome", "wxt/client"],
+    "types": ["chrome"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
     },
-    "noEmit": true,
-    "resolveJsonModule": true,
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true,
-    "useDefineForClassFields": true,
     "verbatimModuleSyntax": false
   },
-  "include": ["src", "wxt.config.ts", "tailwind.config.ts", "vitest.config.ts"],
-  "exclude": ["node_modules", ".output", ".wxt"]
+  "include": [
+    ".wxt/wxt.d.ts",
+    "src/**/*",
+    "wxt.config.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": ["node_modules", ".output", ".wxt/types"]
 }
