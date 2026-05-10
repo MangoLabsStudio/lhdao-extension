@@ -32,13 +32,36 @@ export type MsgResponse =
 
 /**
  * submit-task 失败的标准 code。让 content script 决定 toast 文案,
- * 后端透传的 GraphQL extensions.code 也优先 map 到这里。
+ * 后端 GraphQL 错误 message 走正则 match → 这些 code,UI 渲染查表。
+ *
+ * 通用类:
+ *   - NO_TOKEN / TOKEN_INVALID  — auth 失败,引导去 options 页
+ *   - NETWORK / INTERNAL        — 系统错,请用户重试
+ *
+ * Reserve 阶段:
+ *   - SLOT_FULL          — 席位满 (高频)
+ *   - BOT_BLOCKED        — 用户被反作弊系统拒绝
+ *   - RESERVE_FAILED     — 其他预约失败兜底
+ *
+ * Verify 阶段:
+ *   - ALREADY_DONE       — 已完成,幂等成功
+ *   - COMMENT_MISSING    — 评论没含规定关键字
+ *   - WRONG_X_ACCOUNT    — 用了非绑定的 X 账号
+ *   - API_NOT_READY      — Twitter API 缓存延迟,5s 后会重试
+ *   - ACTION_NOT_DETECTED — 没检测到对应动作 (用户没真的点赞 / RT 等)
+ *   - VERIFY_FAILED      — 其他验证失败兜底
  */
 export type SubmitErrorCode =
   | 'NO_TOKEN'
   | 'TOKEN_INVALID'
   | 'SLOT_FULL'
+  | 'BOT_BLOCKED'
+  | 'RESERVE_FAILED'
   | 'ALREADY_DONE'
+  | 'COMMENT_MISSING'
+  | 'WRONG_X_ACCOUNT'
+  | 'API_NOT_READY'
   | 'ACTION_NOT_DETECTED'
+  | 'VERIFY_FAILED'
   | 'NETWORK'
   | 'INTERNAL'
