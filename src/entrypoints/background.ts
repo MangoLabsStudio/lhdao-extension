@@ -141,15 +141,21 @@ function flattenTasks(
     const tweetId = c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null
     if (!tweetId) continue
 
+    // COMMENT 类任务必须含 campaign-level 第一个 keyword(后端验证规则)。
+    // LIKE / RT 不需要 keyword,即便 campaign 上挂了也无所谓。
+    const firstKeyword = c.keywords?.[0] ?? null
+
     for (const a of c.actions) {
       if (!SUPPORTED_ACTIONS.has(a.actionType)) continue
+      const isCommentish =
+        a.actionType === 'COMMENT' || a.actionType === 'COMMENT_LIKE'
       const bucket = map[tweetId] ?? []
       bucket.push({
         campaignId: c.id,
         tweetId,
         actionType: a.actionType,
         expectedReward: a.baseReward,
-        commentKeyword: a.commentGuide,
+        commentKeyword: isCommentish ? firstKeyword : null,
       })
       map[tweetId] = bucket
     }

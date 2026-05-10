@@ -34,6 +34,13 @@ export interface MeResult {
 }
 
 // ── 拉可参与的 engagement 任务 ────────────────────────────────────────
+//
+// 字段来自 backend src/modules/unified-campaign/dto/campaign.model.ts:
+//   - UnifiedCampaignModel.keywords: string[]   ← 评论关键字 (campaign 级)
+//   - UnifiedCampaignActionModel.{actionType,baseReward,targetCount}
+//
+// 没有 effectiveTier / commentGuide(我之前 queries 拍脑袋写的)。
+// 真实的 user-tier 奖励数额会在 verifyEngagement 完成后由后端返回。
 
 export const AVAILABLE_ENGAGEMENTS_QUERY = `
   query AvailableEngagements {
@@ -42,12 +49,11 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       type
       mode
       targetUrl
-      effectiveTier
+      keywords
       actions {
         actionType
         baseReward
         targetCount
-        commentGuide
       }
     }
   }
@@ -60,12 +66,11 @@ export interface AvailableEngagement {
   type: string
   mode: string
   targetUrl: string | null
-  effectiveTier: string | null
+  keywords: string[]
   actions: Array<{
     actionType: EngagementActionType
     baseReward: number
     targetCount: number | null
-    commentGuide: string | null
   }>
 }
 
