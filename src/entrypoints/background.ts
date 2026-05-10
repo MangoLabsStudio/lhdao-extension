@@ -53,6 +53,37 @@ export default defineBackground(() => {
       const token = await localStore.get('apiToken')
       return { type: 'token-status', configured: !!token }
     }
+    if (req.type === 'force-sync') {
+      // popup "刷新" 按钮的入口 — 等 sync 跑完再 return,UI 可以即时
+      // 看到错误或最新计数,不用等下一个 60s alarm。
+      await syncTasks()
+      const err = await sessionStore.get('lastSyncError')
+      const httpStatus = await sessionStore.get('lastSyncHttpStatus')
+      if (err) {
+        return {
+          type: 'sync-result',
+          ok: false,
+          error: err,
+          httpStatus: httpStatus ?? undefined,
+        }
+      }
+      const map = (await sessionStore.get('tasksByTweetId')) ?? {}
+      let taskCount = 0
+      let tweetCount = 0
+      for (const arr of Object.values(map)) {
+        if (arr.length > 0) {
+          tweetCount += 1
+          taskCount += arr.length
+        }
+      }
+      return {
+        type: 'sync-result',
+        ok: true,
+        lastSyncAt: (await sessionStore.get('lastSyncAt')) ?? Date.now(),
+        taskCount,
+        tweetCount,
+      }
+    }
     return { type: 'ack' }
   })
 
@@ -72,6 +103,8 @@ async function syncTasks(): Promise<void> {
   if (!token) {
     // 没 token 就清空缓存,避免遗留旧任务被点击
     await sessionStore.set('tasksByTweetId', {})
+    await sessionStore.set('lastSyncError', 'No API token configured')
+    await sessionStore.set('lastSyncHttpStatus', null)
     return
   }
 
@@ -82,8 +115,14 @@ async function syncTasks(): Promise<void> {
     const map = flattenTasks(data.availableEngagements)
     await sessionStore.set('tasksByTweetId', map)
     await sessionStore.set('lastSyncAt', Date.now())
+    await sessionStore.set('lastSyncError', null)
+    await sessionStore.set('lastSyncHttpStatus', null)
     broadcastToContent({ type: 'tasks-updated' })
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    const httpStatus = e instanceof GqlError ? (e.httpStatus ?? null) : null
+    await sessionStore.set('lastSyncError', msg)
+    await sessionStore.set('lastSyncHttpStatus', httpStatus)
     console.warn('[lhdao] sync failed', e)
     // 不清空缓存 — 网络抖动时旧数据比空数据更可用
   }

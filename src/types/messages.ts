@@ -18,6 +18,8 @@ export type MsgRequest =
   | { type: 'submit-task'; campaignId: string }
   /** content script 询问当前是否已配置 token (popup 也用) */
   | { type: 'has-token' }
+  /** popup 触发立即同步 — 不等 60s alarm,等 sync 跑完再返回结果 */
+  | { type: 'force-sync' }
   /** BG → CS 广播:任务列表已更新,请重新查询 */
   | { type: 'tasks-updated' }
 
@@ -28,6 +30,14 @@ export type MsgResponse =
   | { type: 'submit-result'; ok: true; reward: number }
   | { type: 'submit-result'; ok: false; code: SubmitErrorCode; message: string }
   | { type: 'token-status'; configured: boolean }
+  | {
+      type: 'sync-result'
+      ok: true
+      lastSyncAt: number
+      taskCount: number
+      tweetCount: number
+    }
+  | { type: 'sync-result'; ok: false; error: string; httpStatus?: number }
   | { type: 'ack' }
 
 /**

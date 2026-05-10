@@ -8,6 +8,8 @@ interface PopupSummary {
   taskCount: number
   tweetCount: number
   lastSyncAt: number | null
+  lastSyncError: string | null
+  lastSyncHttpStatus: number | null
 }
 
 /**
@@ -16,11 +18,15 @@ interface PopupSummary {
  */
 export function App() {
   const [s, setS] = React.useState<PopupSummary | null>(null)
+  const [syncing, setSyncing] = React.useState(false)
 
-  const refresh = React.useCallback(async () => {
+  // 只读模式刷新:不触发 sync,只重读 storage 的当前快照
+  const readSummary = React.useCallback(async () => {
     const tokenStatus = await sendMessage({ type: 'has-token' })
     const map = (await sessionStore.get('tasksByTweetId')) ?? {}
     const lastSync = await sessionStore.get('lastSyncAt')
+    const lastSyncError = await sessionStore.get('lastSyncError')
+    const lastSyncHttpStatus = await sessionStore.get('lastSyncHttpStatus')
     let taskCount = 0
     let tweetCount = 0
     for (const arr of Object.values(map) as CampaignTaskCache[][]) {
@@ -35,14 +41,28 @@ export function App() {
       taskCount,
       tweetCount,
       lastSyncAt: lastSync ?? null,
+      lastSyncError: lastSyncError ?? null,
+      lastSyncHttpStatus: lastSyncHttpStatus ?? null,
     })
   }, [])
 
+  // "刷新" 按钮:触发 BG 立即 sync,等结果后再读
+  const forceSync = React.useCallback(async () => {
+    if (syncing) return
+    setSyncing(true)
+    try {
+      await sendMessage({ type: 'force-sync' })
+    } finally {
+      setSyncing(false)
+      await readSummary()
+    }
+  }, [syncing, readSummary])
+
   React.useEffect(() => {
-    void refresh()
-    const interval = setInterval(refresh, 5000)
+    void readSummary()
+    const interval = setInterval(readSummary, 5000)
     return () => clearInterval(interval)
-  }, [refresh])
+  }, [readSummary])
 
   const openOptions = () => {
     chrome.runtime.openOptionsPage()
@@ -59,7 +79,13 @@ export function App() {
       ) : !s.hasToken ? (
         <NoTokenBlock onOpenOptions={openOptions} />
       ) : (
-        <ActiveBlock summary={s} onOpenWeb={openWeb} onRefresh={refresh} />
+        <ActiveBlock
+          summary={s}
+          syncing={syncing}
+          onOpenWeb={openWeb}
+          onForceSync={forceSync}
+          onOpenOptions={openOptions}
+        />
       )}
       <Footer onOpenOptions={openOptions} />
     </div>
@@ -112,13 +138,20 @@ function NoTokenBlock({ onOpenOptions }: { onOpenOptions: () => void }) {
 
 function ActiveBlock({
   summary,
+  syncing,
   onOpenWeb,
-  onRefresh,
+  onForceSync,
+  onOpenOptions,
 }: {
   summary: PopupSummary
+  syncing: boolean
   onOpenWeb: () => void
-  onRefresh: () => void
+  onForceSync: () => void
+  onOpenOptions: () => void
 }) {
+  const hasError = !!summary.lastSyncError
+  const dotColor = hasError ? 'bg-rose-500' : 'bg-emerald-500'
+
   return (
     <>
       {/* KPI grid */}
@@ -129,20 +162,36 @@ function ActiveBlock({
 
       {/* Sync status */}
       <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10.5px] dark:border-slate-800 dark:bg-slate-900">
-        <span className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-          {summary.lastSyncAt
-            ? `上次同步 ${fmtRelative(summary.lastSyncAt)}`
-            : '尚未同步'}
+        <span className="flex min-w-0 items-center gap-1.5 text-slate-500 dark:text-slate-400">
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} />
+          <span className="truncate">
+            {syncing
+              ? '同步中…'
+              : summary.lastSyncAt
+                ? `上次同步 ${fmtRelative(summary.lastSyncAt)}`
+                : hasError
+                  ? '同步失败'
+                  : '尚未同步'}
+          </span>
         </span>
         <button
           type="button"
-          onClick={onRefresh}
-          className="text-teal-600 hover:underline dark:text-teal-400"
+          onClick={onForceSync}
+          disabled={syncing}
+          className="shrink-0 text-teal-600 hover:underline disabled:opacity-50 dark:text-teal-400"
         >
-          刷新
+          {syncing ? '...' : '刷新'}
         </button>
       </div>
+
+      {/* Sync error banner — surface real reason here so user doesn't need DevTools */}
+      {hasError && (
+        <SyncErrorBanner
+          error={summary.lastSyncError ?? ''}
+          httpStatus={summary.lastSyncHttpStatus}
+          onOpenOptions={onOpenOptions}
+        />
+      )}
 
       {/* Open web */}
       <button
@@ -154,6 +203,51 @@ function ActiveBlock({
         <ChevronIcon />
       </button>
     </>
+  )
+}
+
+function SyncErrorBanner({
+  error,
+  httpStatus,
+  onOpenOptions,
+}: {
+  error: string
+  httpStatus: number | null
+  onOpenOptions: () => void
+}) {
+  const { title, hint, action } = diagnoseSyncError(error, httpStatus)
+  return (
+    <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 dark:border-rose-900/40 dark:bg-rose-950/30">
+      <div className="flex items-start gap-1.5">
+        <span className="mt-px shrink-0 text-rose-500">⚠</span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-bold text-rose-700 dark:text-rose-300">
+            {title}
+          </p>
+          <p className="mt-0.5 text-[10.5px] leading-snug text-rose-600/90 dark:text-rose-300/80">
+            {hint}
+          </p>
+          <details className="mt-1">
+            <summary className="cursor-pointer text-[10px] text-rose-500/70 hover:text-rose-700 dark:text-rose-400/70 dark:hover:text-rose-300">
+              查看原始错误
+            </summary>
+            <p className="mt-1 break-all rounded bg-white/60 p-1.5 font-mono text-[9.5px] text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">
+              {httpStatus ? `[HTTP ${httpStatus}] ` : ''}
+              {error}
+            </p>
+          </details>
+          {action === 'reconfigure' && (
+            <button
+              type="button"
+              onClick={onOpenOptions}
+              className="mt-1.5 text-[10.5px] font-bold text-rose-700 hover:underline dark:text-rose-300"
+            >
+              重新粘贴 token →
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -276,4 +370,74 @@ function fmtRelative(epochMs: number): string {
   if (diff < 60_000) return `${Math.floor(diff / 1000)}s 前`
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m 前`
   return `${Math.floor(diff / 3_600_000)}h 前`
+}
+
+interface SyncDiagnosis {
+  title: string
+  hint: string
+  action?: 'reconfigure'
+}
+
+/**
+ * 把 sync 失败的 error message + httpStatus 翻译成中文人话 + 修复建议。
+ * 顺序很重要 — 先 match 具体 code,再 fallback 通用文案。
+ */
+function diagnoseSyncError(
+  err: string,
+  httpStatus: number | null,
+): SyncDiagnosis {
+  if (err === 'No API token configured') {
+    return {
+      title: '未配置 token',
+      hint: '点 "去配置" 粘贴在 lhdao 网站创建的 plugin token',
+      action: 'reconfigure',
+    }
+  }
+  if (httpStatus === 401) {
+    return {
+      title: 'Token 无效',
+      hint: 'token 已被吊销 / 在错的环境创建。BETA 构建必须配 lhdaobeta.top 上创建的 token,反之亦然。',
+      action: 'reconfigure',
+    }
+  }
+  if (/PLUGIN_TOKEN_SCOPE_DENIED/i.test(err)) {
+    return {
+      title: '后端 scope 守门拦截',
+      hint: '后端启用了 plugin token 范围限制,但 availableEngagements 还没贴 @AllowPluginToken()。Railway 上 backend 部署可能不完整,等 deploy 完或重新触发。',
+    }
+  }
+  if (httpStatus === 403) {
+    return {
+      title: '权限被拒',
+      hint: 'HTTP 403 — 后端拒绝了请求。详见下方原始错误。',
+    }
+  }
+  if (httpStatus === 404) {
+    return {
+      title: 'GraphQL 端点找不到',
+      hint: 'API_ENDPOINT 配置错了,或后端服务未启动。',
+    }
+  }
+  if (httpStatus && httpStatus >= 500) {
+    return {
+      title: '后端错误',
+      hint: `HTTP ${httpStatus} — 后端内部错误,稍后重试或联系开发。`,
+    }
+  }
+  if (/Cannot query field/i.test(err)) {
+    return {
+      title: 'GraphQL schema 不匹配',
+      hint: '部署的后端 schema 缺少 availableEngagements 字段,可能 Railway 没部署到最新 dev。',
+    }
+  }
+  if (/Network error|Failed to fetch/i.test(err)) {
+    return {
+      title: '网络 / CORS 错误',
+      hint: '可能后端没把 chrome-extension://* 加进 CORS 白名单,或本机连不上 lhdaobeta.top。',
+    }
+  }
+  return {
+    title: '同步失败',
+    hint: '展开下方查看完整错误。',
+  }
 }

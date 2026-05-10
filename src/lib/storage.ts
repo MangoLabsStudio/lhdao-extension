@@ -23,6 +23,10 @@ interface SessionSchema {
   tasksByTweetId: Record<string, CampaignTaskCache[]>
   /** 上次 background SW 拉取任务的时间戳 (ms since epoch) */
   lastSyncAt: number
+  /** 上次同步的错误信息;成功时为 null */
+  lastSyncError: string | null
+  /** 上次同步的错误对应 HTTP status (401/403/...);非 HTTP 错误为 null */
+  lastSyncHttpStatus: number | null
 }
 
 /**
