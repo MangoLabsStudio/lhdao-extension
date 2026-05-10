@@ -51,13 +51,12 @@ jobs:
         run: pnpm run build:firefox
         continue-on-error: true # firefox 还没主流回归,失败不卡 PR
 
-      - name: Inspect build output
-        run: ls -lah .output/ && find .output -maxdepth 3 -type f | head -30
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ github.sha }}
           path: '.output/**/*'
+          # .output/ 是 dot-prefixed dir,默认会被 upload-artifact 视作隐藏忽略
+          include-hidden-files: true
           retention-days: 7
           if-no-files-found: error
