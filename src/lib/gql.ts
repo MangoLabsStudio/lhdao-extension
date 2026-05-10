@@ -8,6 +8,10 @@ import { localStore } from './storage'
  *   - httpStatus === 401      → token 失效,跳吊销 / 重新粘贴流程
  *   - httpStatus === undefined → 网络层错误(离线 / DNS 等)
  *   - graphqlErrors           → 业务异常(如 BAD_USER_INPUT、SLOT_FULL)
+ *
+ * 注意 Apollo Server 4 有一些情况会返回 4xx 状态码 + JSON body 的
+ * `{ errors: [...] }`(典型如 schema 校验失败、未知字段),所以即使 res.ok
+ * 为 false 我们也要先尝试读 body 才能拿到真正错误信息。
  */
 export class GqlError extends Error {
   constructor(
@@ -52,6 +56,11 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        // Apollo Server 4 csrfPrevention 校验:任意一个非 CORS-safelisted
+        // 请求头都会让 preflight 触发。我们已经因为 Authorization 触发了,
+        // 但显式加上这个让任何 Apollo 配置都能通过。
+        'apollo-require-preflight': 'true',
+        'X-Apollo-Operation-Name': inferOperationName(query) ?? 'unknown',
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ query, variables }),
@@ -61,20 +70,51 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
     throw new GqlError(`Network error: ${(e as Error).message}`)
   }
 
-  if (!res.ok) {
-    throw new GqlError(`HTTP ${res.status}`, undefined, res.status)
+  // 不管 res.ok,先尝试解析 body — Apollo 4xx 通常带 errors 数组
+  let bodyText: string
+  try {
+    bodyText = await res.text()
+  } catch {
+    bodyText = ''
   }
 
-  const json = (await res.json()) as GqlResponse<TResult>
-  if (json.errors?.length) {
-    throw new GqlError(
-      json.errors[0]?.message ?? 'GraphQL error',
-      json.errors,
-      res.status,
-    )
+  let json: GqlResponse<TResult> | null = null
+  if (bodyText) {
+    try {
+      json = JSON.parse(bodyText) as GqlResponse<TResult>
+    } catch {
+      // 不是 JSON — 可能是 nginx / cloudflare 返回的 HTML 错误页
+      json = null
+    }
   }
-  if (json.data === undefined) {
+
+  // GraphQL 层 errors(无论 status 如何都要冒泡)
+  if (json?.errors?.length) {
+    const first = json.errors[0]
+    const code = first?.extensions?.code
+    const detail = code ? `${code}: ${first?.message}` : first?.message
+    throw new GqlError(detail ?? 'GraphQL error', json.errors, res.status)
+  }
+
+  // 没 errors 但 HTTP 状态非 2xx → 真的是 transport 层失败
+  if (!res.ok) {
+    const snippet = bodyText.slice(0, 200) || '(empty body)'
+    throw new GqlError(`HTTP ${res.status}: ${snippet}`, undefined, res.status)
+  }
+
+  if (!json || json.data === undefined) {
     throw new GqlError('GraphQL response missing data', undefined, res.status)
   }
   return json.data
+}
+
+/**
+ * 从 query 字符串里 sniff operation name(给 X-Apollo-Operation-Name header
+ * 用)。失败返回 null,header 那边走 'unknown' fallback。
+ */
+function inferOperationName(query: string): string | null {
+  const m = query.match(
+    /^\s*(?:query|mutation|subscription)\s+([_A-Za-z][_A-Za-z0-9]*)/m,
+  )
+  return m ? m[1] : null
 }
