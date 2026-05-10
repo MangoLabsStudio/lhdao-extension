@@ -47,12 +47,20 @@ export function App() {
   const verify = async () => {
     if (!valid || state.kind === 'verifying') return
     setState({ kind: 'verifying' })
+
+    // 关键:先 set token 给 gql() 用,验证失败立刻 remove 回滚 — 避免
+    // 一个无效 token 留在 storage 让 popup 误认为已绑定。
+    await localStore.set('apiToken', trimmed)
     try {
-      await localStore.set('apiToken', trimmed)
       const r = await gql<MeResult>(ME_QUERY)
-      if (r.me) setState({ kind: 'bound', user: r.me })
-      else setState({ kind: 'error', message: 'token 无效或用户不存在' })
+      if (r.me) {
+        setState({ kind: 'bound', user: r.me })
+        return
+      }
+      await localStore.remove('apiToken')
+      setState({ kind: 'error', message: 'token 无效或用户不存在' })
     } catch (e) {
+      await localStore.remove('apiToken')
       setState({ kind: 'error', message: errorText(e) })
     }
   }
