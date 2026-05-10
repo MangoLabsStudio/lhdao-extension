@@ -55,5 +55,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ github.sha }}
-          path: .output/
+          # upload-artifact@v4 不接受裸目录,要 glob
+          path: |
+            .output/**
           retention-days: 7
+          if-no-files-found: error
