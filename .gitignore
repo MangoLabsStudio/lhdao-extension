@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# WXT build artifacts
+.output/
+.wxt/
+
+# Distribution zips
+*.zip
+
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# pnpm store fragments
+.pnpm-store/
