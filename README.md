@@ -12,17 +12,24 @@ engagement 任务,点击一键预约 + 验证 + 结算 LUX。
 
 ```bash
 pnpm install
-pnpm run dev          # WXT dev mode,Chrome 自动加载
+pnpm run dev          # WXT dev mode (prod endpoints,Chrome 自动加载)
+pnpm run dev:beta     # 同上,但连 lhdaobeta.top + service.lhdaobeta.top
 pnpm run dev:firefox  # Firefox 调试
 ```
 
 构建:
 
 ```bash
-pnpm run build         # → .output/chrome-mv3/
+pnpm run build         # → .output/chrome-mv3/ (prod 端点)
+pnpm run build:beta    # → .output/chrome-mv3/ (beta 端点)
 pnpm run build:firefox # → .output/firefox-mv2/
-pnpm run zip           # 生成发布包
+pnpm run zip           # 生成发布包 (prod)
+pnpm run zip:beta      # 生成发布包 (beta)
 ```
+
+> **注意**:plugin token 数据库 per-env 不通用 — 在 lhdaobeta 创建的
+> token 只能配合 `:beta` 构建的扩展使用,反之亦然。两个端点必须一起切,
+> 上面的 `:beta` script 已经做好这件事。
 
 ## 安装(内测)
 

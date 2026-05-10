@@ -32,16 +32,32 @@ GraphQL API. All business logic stays on the backend.
 ## Commands
 
 ```bash
-pnpm run dev          # WXT dev server, auto-loads to Chrome
+pnpm run dev          # WXT dev server, auto-loads to Chrome (prod endpoints)
+pnpm run dev:beta     # 同上,但指向 lhdaobeta.top + service.lhdaobeta.top
 pnpm run dev:firefox  # Firefox dev mode
-pnpm run build        # → .output/chrome-mv3/
+pnpm run build        # → .output/chrome-mv3/ (prod endpoints)
+pnpm run build:beta   # → .output/chrome-mv3/ (beta endpoints)
 pnpm run build:edge   # → .output/edge-mv3/
-pnpm run zip          # produce release zip
+pnpm run zip          # produce release zip (prod)
+pnpm run zip:beta     # produce release zip (beta)
 pnpm run typecheck    # tsc --noEmit
 pnpm run lint         # biome check
 pnpm run lint:fix     # biome check --write
 pnpm run test         # vitest run
 ```
+
+## Endpoint switching
+
+两个端点 (API + Web) **必须一起切**,因为 plugin token 数据库 per-env
+不通用 — beta 创建的 token 只在 beta backend 上有记录。
+
+| Env  | __API_ENDPOINT__                       | __WEB_ENDPOINT__         |
+|------|----------------------------------------|--------------------------|
+| prod | https://service.lhdao.top/graphql      | https://lhdao.top        |
+| beta | https://service.lhdaobeta.top/graphql  | https://lhdaobeta.top    |
+
+`pnpm run *:beta` 已经把这两个 env var 一起设好,只用一个 npm script。
+手动指定也行:`WXT_API_ENDPOINT=... WXT_WEB_ENDPOINT=... pnpm build`。
 
 ## Code Style
 

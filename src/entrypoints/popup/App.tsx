@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { WEB_ENDPOINT } from '@/lib/env'
 import { sendMessage } from '@/lib/messaging'
 import { type CampaignTaskCache, sessionStore } from '@/lib/storage'
 
@@ -47,7 +48,7 @@ export function App() {
     chrome.runtime.openOptionsPage()
   }
   const openWeb = () => {
-    chrome.tabs.create({ url: 'https://lhdao.top/campaigns' })
+    chrome.tabs.create({ url: `${WEB_ENDPOINT}/campaigns` })
   }
 
   return (
@@ -192,26 +193,37 @@ function KpiCard({
 // ── Footer ───────────────────────────────────────────────────────────
 
 function Footer({ onOpenOptions }: { onOpenOptions: () => void }) {
+  const isBeta = WEB_ENDPOINT.includes('lhdaobeta')
   return (
-    <footer className="mt-4 border-t border-slate-200 pt-2 text-[10px] text-slate-400 dark:border-slate-800 dark:text-slate-500">
-      <button
-        type="button"
-        onClick={onOpenOptions}
-        className="hover:text-teal-600 hover:underline dark:hover:text-teal-400"
-      >
-        设置
-      </button>
-      <span className="mx-1.5">·</span>
-      <a
-        href="https://github.com/MangoLabsStudio/lhdao-extension"
-        target="_blank"
-        rel="noreferrer"
-        className="hover:text-teal-600 hover:underline dark:hover:text-teal-400"
-      >
-        GitHub
-      </a>
-      <span className="mx-1.5">·</span>
-      <span>v0.1.0</span>
+    <footer className="mt-4 flex items-center justify-between gap-2 border-t border-slate-200 pt-2 text-[10px] text-slate-400 dark:border-slate-800 dark:text-slate-500">
+      <span>
+        <button
+          type="button"
+          onClick={onOpenOptions}
+          className="hover:text-teal-600 hover:underline dark:hover:text-teal-400"
+        >
+          设置
+        </button>
+        <span className="mx-1.5">·</span>
+        <a
+          href="https://github.com/MangoLabsStudio/lhdao-extension"
+          target="_blank"
+          rel="noreferrer"
+          className="hover:text-teal-600 hover:underline dark:hover:text-teal-400"
+        >
+          GitHub
+        </a>
+        <span className="mx-1.5">·</span>
+        <span>v0.1.0</span>
+      </span>
+      {isBeta && (
+        <span
+          className="rounded bg-amber-100 px-1.5 py-px font-bold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+          title={`build targets ${WEB_ENDPOINT}`}
+        >
+          BETA
+        </span>
+      )}
     </footer>
   )
 }

@@ -26,9 +26,16 @@ export default defineConfig({
   vite: () => ({
     plugins: [tailwindcss()],
     define: {
-      // Compile-time API endpoint. Override via WXT_API_ENDPOINT for staging.
+      // Compile-time endpoints. Override via env vars to target staging.
+      //
+      // 这两个端点要一起切 — token 数据库 per-env 不通用:
+      //   prod : __API_ENDPOINT__ = service.lhdao.top      __WEB_ENDPOINT__ = lhdao.top
+      //   beta : __API_ENDPOINT__ = service.lhdaobeta.top  __WEB_ENDPOINT__ = lhdaobeta.top
       __API_ENDPOINT__: JSON.stringify(
         process.env.WXT_API_ENDPOINT ?? 'https://service.lhdao.top/graphql',
+      ),
+      __WEB_ENDPOINT__: JSON.stringify(
+        process.env.WXT_WEB_ENDPOINT ?? 'https://lhdao.top',
       ),
     },
   }),

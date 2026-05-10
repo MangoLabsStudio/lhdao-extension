@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
 import { ME_QUERY, type MeResult } from '@/lib/queries'
 import { localStore } from '@/lib/storage'
@@ -136,7 +137,7 @@ function Step1Instructions() {
         创建成功后,弹窗会显示 <b>明文 token(只显示一次)</b>,立即点击复制。
       </p>
       <a
-        href="https://lhdao.top/settings/plugin-tokens"
+        href={`${WEB_ENDPOINT}/settings/plugin-tokens`}
         target="_blank"
         rel="noreferrer"
         className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
@@ -144,6 +145,12 @@ function Step1Instructions() {
         打开 lhdao 设置页
         <ExternalIcon />
       </a>
+      <p className="mt-2 text-[10.5px] text-slate-400 dark:text-slate-600">
+        当前环境:
+        <code className="ml-1 rounded bg-slate-100 px-1 py-px font-mono text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+          {hostFrom(WEB_ENDPOINT)}
+        </code>
+      </p>
     </section>
   )
 }
@@ -380,4 +387,13 @@ function errorText(e: unknown): string {
     return e.message
   }
   return e instanceof Error ? e.message : String(e)
+}
+
+/** 从 https://lhdaobeta.top 抽出 lhdaobeta.top 给 UI 显示 */
+function hostFrom(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
 }
