@@ -100,7 +100,7 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
     let detailStr = ''
     if (details && typeof details === 'object') {
       try {
-        detailStr = ' · ' + JSON.stringify(details).slice(0, 300)
+        detailStr = ` · ${JSON.stringify(details).slice(0, 300)}`
       } catch {
         detailStr = ''
       }

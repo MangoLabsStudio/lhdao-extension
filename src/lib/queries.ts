@@ -81,20 +81,38 @@ export interface AvailableEngagementsResult {
 // ── 预约 / 验证 ──────────────────────────────────────────────────────
 
 export const RESERVE_SLOT_MUTATION = `
-  mutation ReserveEngagementSlot($campaignId: String!) {
-    reserveEngagementSlot(campaignId: $campaignId) {
+  mutation ReserveEngagementSlot($campaignId: String!, $confirmCascade: Boolean) {
+    reserveEngagementSlot(campaignId: $campaignId, confirmCascade: $confirmCascade) {
       reserved
       reservedTier
       cooldownSeconds
+      releasedSeats
+      activeReservations
+      cascadeWarning {
+        userTier
+        effectiveTier
+        userTierRewardLux
+        effectiveTierRewardLux
+      }
     }
   }
 `
+
+export interface CascadeWarning {
+  userTier: string
+  effectiveTier: string
+  userTierRewardLux: number
+  effectiveTierRewardLux: number
+}
 
 export interface ReserveSlotResult {
   reserveEngagementSlot: {
     reserved: boolean
     reservedTier: string | null
     cooldownSeconds: number | null
+    releasedSeats: number | null
+    activeReservations: number | null
+    cascadeWarning: CascadeWarning | null
   }
 }
 

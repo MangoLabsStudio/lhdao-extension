@@ -50,7 +50,7 @@ export default defineBackground(() => {
       return submitTask(req.campaignId)
     }
     if (req.type === 'reserve-task') {
-      return reserveOnly(req.campaignId)
+      return reserveOnly(req.campaignId, req.confirmCascade)
     }
     if (req.type === 'verify-task') {
       return verifyOnly(req.campaignId)
@@ -277,26 +277,60 @@ function sleep(ms: number): Promise<void> {
  * 只调 reserveEngagementSlot,占席位但不验证。让用户去 Twitter 真正做
  * 动作后再触发 verify。"Already participated" 视为成功(用户已经抢过)。
  */
-async function reserveOnly(campaignId: string): Promise<MsgResponse> {
+async function reserveOnly(
+  campaignId: string,
+  confirmCascade?: boolean,
+): Promise<MsgResponse> {
   try {
     const data = await gql<ReserveSlotResult>(RESERVE_SLOT_MUTATION, {
       campaignId,
+      confirmCascade: confirmCascade ?? null,
     })
     const r = data.reserveEngagementSlot
-    if (r && !r.reserved) {
-      // reserved:false 是 "活动已过期" 兜底路径(后端 resolver 在过期时
-      // 返回 {reserved:false, cooldownSeconds:0},不抛异常)
+
+    if (r?.reserved) {
+      return {
+        type: 'reserve-result',
+        ok: true,
+        cooldownSeconds: r.cooldownSeconds ?? undefined,
+      }
+    }
+
+    // —— reserved:false 的多种软失败情况,逐一辨认给 UI 友好文案 ——
+    if (r?.cascadeWarning) {
+      // 用户 tier 满了,后端建议级联到 effectiveTier 但需要前端再确认
+      const w = r.cascadeWarning
       return {
         type: 'reserve-result',
         ok: false,
         code: 'RESERVE_FAILED',
-        message: 'Campaign expired or unavailable',
+        message: `本档已满,可降到 ${w.effectiveTier} 档拿 ${w.effectiveTierRewardLux} LUX (原 ${w.userTierRewardLux})。点重抢确认降档。`,
       }
     }
+
+    const cooldown = r?.cooldownSeconds ?? 0
+    if (cooldown > 0) {
+      // 批次未释放 / 曲线冷却中,backend 给了下次释放秒数
+      const min = Math.floor(cooldown / 60)
+      const sec = cooldown % 60
+      const human = min > 0 ? `${min}m${sec}s` : `${sec}s`
+      return {
+        type: 'reserve-result',
+        ok: false,
+        code: 'SLOT_FULL',
+        message: `席位未释放,${human} 后再试 (active=${r?.activeReservations ?? '?'}, released=${r?.releasedSeats ?? '?'})`,
+      }
+    }
+
+    // 没 cooldown + 没 cascade + reserved:false 通常是:
+    //   - 活动 expiresAt 过了
+    //   - 完成名额已满 (completedCount >= totalSeats)
+    //   - tier 不在 tierSeats 名单 (effectiveTier == null,且 cascade 也没了)
     return {
       type: 'reserve-result',
-      ok: true,
-      cooldownSeconds: r?.cooldownSeconds ?? undefined,
+      ok: false,
+      code: 'RESERVE_FAILED',
+      message: 'Slot unavailable (expired / slots full / tier not eligible)',
     }
   } catch (e) {
     if (e instanceof GqlError) {

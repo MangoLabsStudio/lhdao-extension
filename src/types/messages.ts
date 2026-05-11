@@ -14,8 +14,9 @@ import type { CampaignTaskCache } from '@/lib/storage'
 export type MsgRequest =
   /** content script 询问某条推文上挂着哪些任务 */
   | { type: 'get-tasks-for-tweet'; tweetId: string }
-  /** 抢单第一步:仅占席位 (reserveEngagementSlot) */
-  | { type: 'reserve-task'; campaignId: string }
+  /** 抢单第一步:仅占席位 (reserveEngagementSlot)。confirmCascade 让用户
+   *  在收到 cascadeWarning 后点重抢时确认降档接受 */
+  | { type: 'reserve-task'; campaignId: string; confirmCascade?: boolean }
   /** 抢单第二步:仅验证 + 发奖 (verifyEngagement) */
   | { type: 'verify-task'; campaignId: string }
   /** [legacy] reserve + verify 一锅炖 — 兼容老调用,新代码用 reserve / verify 分两步 */

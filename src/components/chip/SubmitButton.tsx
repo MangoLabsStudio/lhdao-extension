@@ -46,49 +46,53 @@ export function SubmitButton({ tasks }: Props) {
     return () => clearInterval(id)
   }, [state])
 
-  const reserve = React.useCallback(async () => {
-    setState({ kind: 'reserving' })
-    let minCooldown: number | undefined
-    let lastErr: { code: SubmitErrorCode; message: string } | null = null
+  const reserve = React.useCallback(
+    async (confirmCascade?: boolean) => {
+      setState({ kind: 'reserving' })
+      let minCooldown: number | undefined
+      let lastErr: { code: SubmitErrorCode; message: string } | null = null
 
-    for (const t of tasks) {
-      const r = await sendMessage({
-        type: 'reserve-task',
-        campaignId: t.campaignId,
-      })
-      if (r.type !== 'reserve-result') continue
-      if (r.ok) {
-        if (r.cooldownSeconds != null) {
-          minCooldown = Math.min(minCooldown ?? Infinity, r.cooldownSeconds)
+      for (const t of tasks) {
+        const r = await sendMessage({
+          type: 'reserve-task',
+          campaignId: t.campaignId,
+          confirmCascade,
+        })
+        if (r.type !== 'reserve-result') continue
+        if (r.ok) {
+          if (r.cooldownSeconds != null) {
+            minCooldown = Math.min(minCooldown ?? Infinity, r.cooldownSeconds)
+          }
+        } else {
+          lastErr = { code: r.code, message: r.message }
         }
-      } else {
-        lastErr = { code: r.code, message: r.message }
       }
-    }
 
-    if (lastErr && minCooldown === undefined) {
-      // 把详细 error 也打到页面 Console,方便用户 F12 → Console 看
-      console.error(
-        '[lhdao] reserve failed:',
-        lastErr.code,
-        '·',
-        lastErr.message,
-      )
-      setState({
-        kind: 'error',
-        phase: 'reserve',
-        code: lastErr.code,
-        raw: lastErr.message,
-      })
-    } else {
-      setState({
-        kind: 'reserved',
-        cooldownDeadlineMs: minCooldown
-          ? Date.now() + minCooldown * 1000
-          : undefined,
-      })
-    }
-  }, [tasks])
+      if (lastErr && minCooldown === undefined) {
+        // 把详细 error 也打到页面 Console,方便用户 F12 → Console 看
+        console.error(
+          '[lhdao] reserve failed:',
+          lastErr.code,
+          '·',
+          lastErr.message,
+        )
+        setState({
+          kind: 'error',
+          phase: 'reserve',
+          code: lastErr.code,
+          raw: lastErr.message,
+        })
+      } else {
+        setState({
+          kind: 'reserved',
+          cooldownDeadlineMs: minCooldown
+            ? Date.now() + minCooldown * 1000
+            : undefined,
+        })
+      }
+    },
+    [tasks],
+  )
 
   const verify = React.useCallback(async () => {
     setState({ kind: 'verifying' })
@@ -141,7 +145,12 @@ export function SubmitButton({ tasks }: Props) {
       case 'reserved':
         return verify()
       case 'error':
-        return state.phase === 'reserve' ? reserve() : verify()
+        // 上次失败是 cascade 警告 → 这次重抢自动 confirmCascade=true 接受降档
+        if (state.phase === 'reserve') {
+          const isCascade = /降到\s*\w+\s*档/.test(state.raw)
+          return reserve(isCascade)
+        }
+        return verify()
       default:
         return
     }
@@ -228,9 +237,7 @@ function labelForState(state: State, cooldownLeft: number | null): string {
         state.code === 'VERIFY_FAILED' ||
         state.code === 'INTERNAL'
       const label = isGeneric && state.raw ? state.raw.slice(0, 18) : friendly
-      return state.phase === 'reserve'
-        ? `${label} · 重抢`
-        : `${label} · 重验证`
+      return state.phase === 'reserve' ? `${label} · 重抢` : `${label} · 重验证`
     }
   }
 }
