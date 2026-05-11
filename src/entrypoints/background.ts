@@ -49,6 +49,12 @@ export default defineBackground(() => {
     if (req.type === 'submit-task') {
       return submitTask(req.campaignId)
     }
+    if (req.type === 'reserve-task') {
+      return reserveOnly(req.campaignId)
+    }
+    if (req.type === 'verify-task') {
+      return verifyOnly(req.campaignId)
+    }
     if (req.type === 'has-token') {
       const token = await localStore.get('apiToken')
       return { type: 'token-status', configured: !!token }
@@ -227,15 +233,20 @@ async function submitTask(campaignId: string): Promise<MsgResponse> {
   }
 }
 
-function reserveError(msg: string, httpStatus?: number): MsgResponse {
+interface CodedError {
+  code: SubmitErrorCode
+  message: string
+}
+
+function reserveErrorCode(msg: string, httpStatus?: number): CodedError {
   let code: SubmitErrorCode = 'RESERVE_FAILED'
   if (httpStatus === 401) code = 'TOKEN_INVALID'
   else if (/Slot full/i.test(msg)) code = 'SLOT_FULL'
   else if (/BotUserBlocked/i.test(msg)) code = 'BOT_BLOCKED'
-  return { type: 'submit-result', ok: false, code, message: msg }
+  return { code, message: msg }
 }
 
-function verifyError(msg: string, httpStatus?: number): MsgResponse {
+function verifyErrorCode(msg: string, httpStatus?: number): CodedError {
   let code: SubmitErrorCode = 'VERIFY_FAILED'
   if (httpStatus === 401) code = 'TOKEN_INVALID'
   else if (/CommentMissingKeyword/i.test(msg)) code = 'COMMENT_MISSING'
@@ -243,9 +254,86 @@ function verifyError(msg: string, httpStatus?: number): MsgResponse {
   else if (/TwitterApiNotReady/i.test(msg)) code = 'API_NOT_READY'
   else if (/ActionNotDetected|NotDetected/i.test(msg))
     code = 'ACTION_NOT_DETECTED'
-  return { type: 'submit-result', ok: false, code, message: msg }
+  return { code, message: msg }
+}
+
+function reserveError(msg: string, httpStatus?: number): MsgResponse {
+  const { code, message } = reserveErrorCode(msg, httpStatus)
+  return { type: 'submit-result', ok: false, code, message }
+}
+
+function verifyError(msg: string, httpStatus?: number): MsgResponse {
+  const { code, message } = verifyErrorCode(msg, httpStatus)
+  return { type: 'submit-result', ok: false, code, message }
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+// ── reserve / verify split (两步抢单) ───────────────────────────────
+
+/**
+ * 只调 reserveEngagementSlot,占席位但不验证。让用户去 Twitter 真正做
+ * 动作后再触发 verify。"Already participated" 视为成功(用户已经抢过)。
+ */
+async function reserveOnly(campaignId: string): Promise<MsgResponse> {
+  try {
+    const data = await gql<
+      ReserveSlotResult & {
+        reserveEngagementSlot: { cooldownSeconds?: number }
+      }
+    >(RESERVE_SLOT_MUTATION, { campaignId })
+    return {
+      type: 'reserve-result',
+      ok: true,
+      cooldownSeconds: data.reserveEngagementSlot?.cooldownSeconds,
+    }
+  } catch (e) {
+    if (e instanceof GqlError) {
+      if (/Already participated/i.test(e.message)) {
+        return { type: 'reserve-result', ok: true } // 幂等成功
+      }
+      const { code, message } = reserveErrorCode(e.message, e.httpStatus)
+      return { type: 'reserve-result', ok: false, code, message }
+    }
+    return {
+      type: 'reserve-result',
+      ok: false,
+      code: 'INTERNAL',
+      message: e instanceof Error ? e.message : String(e),
+    }
+  }
+}
+
+/**
+ * 只调 verifyEngagement (1 次 5s 重试)。前提是用户已经 reserve 过且
+ * 已经去 Twitter 完成动作。返回 actualReward。
+ */
+async function verifyOnly(campaignId: string): Promise<MsgResponse> {
+  for (let i = 0; i < 2; i++) {
+    try {
+      const data = await gql<VerifyEngagementResult>(
+        VERIFY_ENGAGEMENT_MUTATION,
+        { campaignId },
+      )
+      const reward = Number(data.verifyEngagement?.actualReward ?? 0)
+      void syncTasks()
+      return { type: 'verify-result', ok: true, reward }
+    } catch (e) {
+      if (i === 1) {
+        const msg = e instanceof Error ? e.message : String(e)
+        const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
+        const { code, message } = verifyErrorCode(msg, httpStatus)
+        return { type: 'verify-result', ok: false, code, message }
+      }
+      await sleep(VERIFY_RETRY_DELAY_MS)
+    }
+  }
+  return {
+    type: 'verify-result',
+    ok: false,
+    code: 'INTERNAL',
+    message: 'unreachable',
+  }
 }

@@ -14,7 +14,11 @@ import type { CampaignTaskCache } from '@/lib/storage'
 export type MsgRequest =
   /** content script 询问某条推文上挂着哪些任务 */
   | { type: 'get-tasks-for-tweet'; tweetId: string }
-  /** content script 提交 chip 点击 — BG 走 reserve + verify 流程 */
+  /** 抢单第一步:仅占席位 (reserveEngagementSlot) */
+  | { type: 'reserve-task'; campaignId: string }
+  /** 抢单第二步:仅验证 + 发奖 (verifyEngagement) */
+  | { type: 'verify-task'; campaignId: string }
+  /** [legacy] reserve + verify 一锅炖 — 兼容老调用,新代码用 reserve / verify 分两步 */
   | { type: 'submit-task'; campaignId: string }
   /** content script 询问当前是否已配置 token (popup 也用) */
   | { type: 'has-token' }
@@ -27,6 +31,15 @@ export type MsgRequest =
 
 export type MsgResponse =
   | { type: 'tasks'; tasks: CampaignTaskCache[] }
+  | { type: 'reserve-result'; ok: true; cooldownSeconds?: number }
+  | {
+      type: 'reserve-result'
+      ok: false
+      code: SubmitErrorCode
+      message: string
+    }
+  | { type: 'verify-result'; ok: true; reward: number }
+  | { type: 'verify-result'; ok: false; code: SubmitErrorCode; message: string }
   | { type: 'submit-result'; ok: true; reward: number }
   | { type: 'submit-result'; ok: false; code: SubmitErrorCode; message: string }
   | { type: 'token-status'; configured: boolean }

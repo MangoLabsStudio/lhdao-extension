@@ -5,10 +5,9 @@ interface Props {
 }
 
 /**
- * 推文 handle / time 行右侧的极简徽章。**只显示奖励**,动作类型与
- * 关键字提示走 tooltip(避免推文头行被撑大或换行)。
- *
- * 设计目标:像 X 上的 verified blue tick 一样——存在感低,但能看到。
+ * 推文 handle / time 行右侧的极简徽章。**只显示奖励数字**,没有 logo
+ * (放在头行容易被 Twitter 的 layout 撑大,纯文字配色就够辨识)。
+ * 动作类型 + 关键字提示走 tooltip。
  */
 export function MetadataBadge({ tasks }: Props) {
   if (tasks.length === 0) return null
@@ -24,15 +23,19 @@ export function MetadataBadge({ tasks }: Props) {
 
   return (
     <span
-      className="ml-1 inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-full bg-teal-500/10 px-1.5 py-0 align-middle text-[10.5px] font-bold leading-[16px] text-teal-600 dark:bg-teal-400/15 dark:text-teal-300"
+      style={{ fontSize: '11px', lineHeight: '16px' }}
+      className="ml-1 inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-teal-500/12 px-1.5 align-middle font-bold text-teal-700 dark:bg-teal-400/18 dark:text-teal-300"
       title={tooltip}
-      aria-label={tooltip}
     >
-      <LighthouseGlyph />
       <span className="tabular-nums">
         +{single ? single.expectedReward : total}
       </span>
-      <span className="text-[8.5px] font-medium opacity-70">LUX</span>
+      <span
+        style={{ fontSize: '9px' }}
+        className="ml-0.5 font-medium opacity-70"
+      >
+        LUX
+      </span>
     </span>
   )
 }
@@ -48,14 +51,4 @@ function actionLabel(type: CampaignTaskCache['actionType']): string {
     case 'COMMENT_LIKE':
       return '评论+赞'
   }
-}
-
-function LighthouseGlyph() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" aria-hidden="true">
-      <title>Lighthouse</title>
-      <path d="M8 1 L4 5 H6 V13 H10 V5 H12 Z" fill="currentColor" />
-      <circle cx="8" cy="14.5" r="1" fill="currentColor" opacity="0.7" />
-    </svg>
-  )
 }

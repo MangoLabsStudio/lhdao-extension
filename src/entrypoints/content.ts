@@ -1,7 +1,11 @@
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import chipCss from '@/components/chip/chip.css?raw'
-import highlightCss from '@/components/chip/highlight.css?raw'
+// ⚠ ?inline 让 Vite 把 chip.css 走 PostCSS + Tailwind 4 编译流程返回**编译后**
+// 的 CSS 字符串。用 ?raw 会拿到字面量 `@import 'tailwindcss'`,Shadow DOM
+// 里浏览器把它当无效 URL,Tailwind utilities 全失效 (SVG 退回默认 300x150
+// 等 bug)。
+import chipCss from '@/components/chip/chip.css?inline'
+import highlightCss from '@/components/chip/highlight.css?inline'
 import { MetadataBadge } from '@/components/chip/MetadataBadge'
 import { SubmitButton } from '@/components/chip/SubmitButton'
 import { sendMessage } from '@/lib/messaging'
@@ -74,6 +78,13 @@ export default defineContentScript({
     observer.observe(document.body, { childList: true, subtree: true })
     scheduleScan()
 
+    // SPA 导航监听:Twitter 用 pushState 切换路由,焦点 tweet id 会变,
+    // 已挂载的 SubmitButton 需要重新计算 isFocal。
+    watchUrlChanges(() => {
+      unmountAll()
+      scheduleScan()
+    })
+
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'tasks-updated') {
         unmountAll()
@@ -117,7 +128,7 @@ async function scanTimeline() {
     if (r.type !== 'tasks' || r.tasks.length === 0) continue
 
     article.setAttribute(ARTICLE_FLAG, '1')
-    const state = mountArticle(article, r.tasks)
+    const state = mountArticle(article, r.tasks, tweetId)
     if (state) mounted.set(tweetId, state)
   }
 }
@@ -127,6 +138,7 @@ async function scanTimeline() {
 function mountArticle(
   article: Element,
   tasks: CampaignTaskCache[],
+  currentTweetId: string,
 ): MountedArticle | null {
   const state: MountedArticle = {
     article,
@@ -170,18 +182,21 @@ function mountArticle(
       }
     }
 
-    // ④ Submit button (end of action row,作为最后一个 flex item)
-    // 找包含 like/reply/retweet 的 role="group" 容器,append 进去让它和
-    // 原生 reply/retweet/like/bookmark/share 一起被 justify-content 自动
-    // 分配。**不要** 加 margin-left:auto,那会撑出一个大空隙看着突兀。
-    const actionRow = findActionRow(article)
-    if (actionRow) {
-      const host = createShadowHost('lhdao-submit', 'inline-flex')
-      host.style.alignItems = 'center'
-      actionRow.appendChild(host)
-      const root = renderInto(host, createElement(SubmitButton, { tasks }))
-      state.hosts.push(host)
-      state.roots.push(root)
+    // ④ Submit button — **仅在详情页的焦点推文上注入**,timeline 卡片不显示
+    // 防止 timeline 视觉太杂。从 location.pathname 解析 /<user>/status/<id>,
+    // 命中且 tweetId 匹配当前 article 才挂。
+    const focalTweetId = getFocalTweetId()
+    const isFocal = focalTweetId != null && focalTweetId === currentTweetId
+    if (isFocal) {
+      const actionRow = findActionRow(article)
+      if (actionRow) {
+        const host = createShadowHost('lhdao-submit', 'inline-flex')
+        host.style.alignItems = 'center'
+        actionRow.appendChild(host)
+        const root = renderInto(host, createElement(SubmitButton, { tasks }))
+        state.hosts.push(host)
+        state.roots.push(root)
+      }
     }
 
     return state
@@ -251,6 +266,37 @@ function createShadowHost(
   host.style.display = display
   host.setAttribute('data-lhdao-host', '1')
   return host
+}
+
+/**
+ * 从当前 URL 解析"焦点推文 id" — 详情页路径形如
+ * `/<user>/status/<id>`(可带后续 /photo/N 或 query),timeline / home /
+ * profile 等页面没有 status 路径,返回 null。
+ */
+function getFocalTweetId(): string | null {
+  const m = location.pathname.match(/\/status\/(\d+)/)
+  return m ? m[1] : null
+}
+
+/** Twitter SPA 用 pushState,监听 popstate + 包装 pushState/replaceState */
+function watchUrlChanges(cb: () => void) {
+  let last = location.pathname
+  const notify = () => {
+    if (location.pathname !== last) {
+      last = location.pathname
+      cb()
+    }
+  }
+  window.addEventListener('popstate', notify)
+  // 包装 history.pushState/replaceState 让我们能感知 SPA 导航
+  for (const fn of ['pushState', 'replaceState'] as const) {
+    const original = history[fn]
+    history[fn] = function (...args: Parameters<typeof original>) {
+      const result = original.apply(this, args)
+      setTimeout(notify, 0)
+      return result
+    }
+  }
 }
 
 function renderInto(host: HTMLElement, node: React.ReactNode): Root {

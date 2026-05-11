@@ -55,26 +55,28 @@ article[data-lhdao-active="1"] {
   animation: lhdao-glow-pulse 2.4s ease-in-out infinite;
 }
 
+/* Halo 收紧 — 4-10-16 而不是 6-18-36,避免在小图标周围扩散过大 */
+
 [data-lhdao-glow="like"] {
   box-shadow:
-    0 0 6px 1px rgba(244, 63, 94, 0.55),
-    0 0 18px 6px rgba(244, 63, 94, 0.3),
-    0 0 36px 14px rgba(6, 182, 212, 0.18) !important;
+    0 0 4px 0 rgba(244, 63, 94, 0.55),
+    0 0 10px 2px rgba(244, 63, 94, 0.3),
+    0 0 16px 4px rgba(6, 182, 212, 0.18) !important;
 }
 
 [data-lhdao-glow="retweet"] {
   box-shadow:
-    0 0 6px 1px rgba(34, 197, 94, 0.55),
-    0 0 18px 6px rgba(34, 197, 94, 0.3),
-    0 0 36px 14px rgba(6, 182, 212, 0.18) !important;
+    0 0 4px 0 rgba(34, 197, 94, 0.55),
+    0 0 10px 2px rgba(34, 197, 94, 0.3),
+    0 0 16px 4px rgba(6, 182, 212, 0.18) !important;
 }
 
 [data-lhdao-glow="reply"],
 [data-lhdao-glow="comment"] {
   box-shadow:
-    0 0 6px 1px rgba(20, 184, 166, 0.6),
-    0 0 18px 6px rgba(20, 184, 166, 0.32),
-    0 0 36px 14px rgba(6, 182, 212, 0.2) !important;
+    0 0 4px 0 rgba(20, 184, 166, 0.6),
+    0 0 10px 2px rgba(20, 184, 166, 0.32),
+    0 0 16px 4px rgba(6, 182, 212, 0.2) !important;
 }
 
 @keyframes lhdao-glow-pulse {
