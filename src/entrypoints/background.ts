@@ -151,8 +151,19 @@ function flattenTasks(
     // LIKE / RT 不需要 keyword,即便 campaign 上挂了也无所谓。
     const firstKeyword = c.keywords?.[0] ?? null
 
-    for (const a of c.actions) {
-      if (!SUPPORTED_ACTIONS.has(a.actionType)) continue
+    // 优先使用后端按用户 tier 级联算好的 expectedReward(campaign 级总额),
+    // 单 action campaign 用整额;多 action 把总额平均分给每个 supported action。
+    // fallback 到 a.baseReward(老 backend 没暴露 expectedReward 的兜底)。
+    const supportedActions = c.actions.filter((a) =>
+      SUPPORTED_ACTIONS.has(a.actionType),
+    )
+    const effectiveTotal = c.expectedReward
+    const perAction =
+      effectiveTotal != null && supportedActions.length > 0
+        ? effectiveTotal / supportedActions.length
+        : null
+
+    for (const a of supportedActions) {
       const isCommentish =
         a.actionType === 'COMMENT' || a.actionType === 'COMMENT_LIKE'
       const bucket = map[tweetId] ?? []
@@ -160,7 +171,7 @@ function flattenTasks(
         campaignId: c.id,
         tweetId,
         actionType: a.actionType,
-        expectedReward: a.baseReward,
+        expectedReward: perAction ?? a.baseReward,
         commentKeyword: isCommentish ? firstKeyword : null,
       })
       map[tweetId] = bucket

@@ -228,18 +228,23 @@ function mountArticle(
 }
 
 /**
- * 找一个稳定的"头部锚点"挂 Badge。优先级:
- *   1. [data-testid="User-Name"] 内部最后一个 child(展示名 + @handle
- *      容器,所有视图存在)
- *   2. article 内第一个 <time> 元素的最近 <a>(timeline 卡片头部)
- * 都没就 null。
+ * 找一个稳定的"头部锚点"挂 Badge。期望视觉上 badge 紧跟在时间戳右边,
+ * 跟 "@handle · 1小时" 在同一行内联流动。
+ *
+ * 优先级:
+ *   1. [data-testid="User-Name"] 内的 <time> 元素的最近 <a>(时间戳链接,
+ *      插在它后面就和 handle/dot/time 同一行)
+ *   2. article 内第一个 <time>(timeline 卡片头部 fallback)
+ *   3. User-Name 容器(最终兜底)
  */
 function findBadgeAnchor(article: Element): Element | null {
   const userName = article.querySelector('[data-testid="User-Name"]')
   if (userName) {
-    // 把 badge 插在 User-Name 容器外、紧跟它后面,这样既不破坏其内部
-    // 多层 a 标签结构,又在视觉上贴着 @handle / 名字。
-    return userName as Element
+    const timeInUserName = userName.querySelector('time')
+    const timeAnchor = timeInUserName?.closest('a')
+    if (timeAnchor) return timeAnchor // 同一行,跟在时间戳后
+    if (timeInUserName) return timeInUserName as Element
+    return userName as Element // 兜底,放 User-Name 之后(新行)
   }
   const timeEl = article.querySelector('time')
   return timeEl?.closest('a') ?? timeEl ?? null

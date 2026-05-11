@@ -50,6 +50,8 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       mode
       targetUrl
       keywords
+      expectedReward
+      effectiveTier
       actions {
         actionType
         baseReward
@@ -67,6 +69,10 @@ export interface AvailableEngagement {
   mode: string
   targetUrl: string | null
   keywords: string[]
+  /** 用户级联后实际能拿到的总奖励 (LUX),后端 listAvailableCampaigns 计算 */
+  expectedReward: number | null
+  /** 用户实际能进的 tier 桶,如果级联了会跟 userTier 不同 */
+  effectiveTier: string | null
   actions: Array<{
     actionType: EngagementActionType
     baseReward: number

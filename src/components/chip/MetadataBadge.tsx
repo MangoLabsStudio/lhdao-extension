@@ -21,15 +21,15 @@ export function MetadataBadge({ tasks }: Props) {
       }`
     : `Lighthouse · ${tasks.length} 个任务 · 合计 +${total} LUX`
 
+  const displayReward = fmtReward(single ? single.expectedReward : total)
+
   return (
     <span
       style={{ fontSize: '11px', lineHeight: '16px' }}
       className="ml-1 inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-teal-500/12 px-1.5 align-middle font-bold text-teal-700 dark:bg-teal-400/18 dark:text-teal-300"
       title={tooltip}
     >
-      <span className="tabular-nums">
-        +{single ? single.expectedReward : total}
-      </span>
+      <span className="tabular-nums">+{displayReward}</span>
       <span
         style={{ fontSize: '9px' }}
         className="ml-0.5 font-medium opacity-70"
@@ -38,6 +38,13 @@ export function MetadataBadge({ tasks }: Props) {
       </span>
     </span>
   )
+}
+
+function fmtReward(n: number): string {
+  if (!Number.isFinite(n)) return '0'
+  if (Number.isInteger(n)) return String(n)
+  // 1 位小数(LUX 分发精度通常 0.1),去掉尾随零
+  return Number(n.toFixed(1)).toString()
 }
 
 function actionLabel(type: CampaignTaskCache['actionType']): string {
