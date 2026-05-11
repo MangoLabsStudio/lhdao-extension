@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lighthouse · Mission Card v2 — UX preview</title>
+    <style>
+      /* ─── Design tokens (OKLCH, brand teal-cyan + tinted slates) ─── */
+      :root {
+        --brand-teal-50: oklch(0.97 0.02 195);
+        --brand-teal-100: oklch(0.93 0.05 195);
+        --brand-teal-200: oklch(0.87 0.08 195);
+        --brand-teal-300: oklch(0.78 0.11 195);
+        --brand-teal-500: oklch(0.7 0.13 195);
+        --brand-teal-600: oklch(0.6 0.13 195);
+        --brand-teal-700: oklch(0.5 0.12 195);
+        --brand-cyan-300: oklch(0.83 0.1 215);
+        --brand-cyan-400: oklch(0.77 0.12 215);
+        --brand-cyan-500: oklch(0.74 0.13 215);
+
+        --emerald-50: oklch(0.96 0.04 155);
+        --emerald-200: oklch(0.86 0.1 155);
+        --emerald-600: oklch(0.6 0.16 155);
+        --emerald-700: oklch(0.5 0.15 155);
+
+        --rose-50: oklch(0.96 0.025 25);
+        --rose-200: oklch(0.85 0.09 25);
+        --rose-500: oklch(0.66 0.21 25);
+        --rose-600: oklch(0.58 0.22 25);
+
+        /* tinted slates (subtly toward teal) */
+        --bg: oklch(0.985 0.004 195);
+        --surface: oklch(1 0 0);
+        --line: oklch(0.92 0.005 195);
+        --line-strong: oklch(0.86 0.008 195);
+        --text-strong: oklch(0.22 0.012 195);
+        --text-default: oklch(0.36 0.012 195);
+        --text-soft: oklch(0.56 0.012 195);
+        --text-mute: oklch(0.72 0.008 195);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --brand-teal-50: oklch(0.25 0.07 195);
+          --brand-teal-100: oklch(0.32 0.09 195);
+          --brand-teal-200: oklch(0.4 0.1 195);
+          --brand-teal-300: oklch(0.55 0.13 195);
+          --brand-teal-500: oklch(0.7 0.14 195);
+          --brand-teal-600: oklch(0.78 0.14 195);
+          --brand-teal-700: oklch(0.85 0.12 195);
+          --brand-cyan-300: oklch(0.83 0.13 215);
+          --brand-cyan-400: oklch(0.85 0.14 215);
+          --brand-cyan-500: oklch(0.88 0.15 215);
+
+          --emerald-50: oklch(0.28 0.09 155);
+          --emerald-200: oklch(0.45 0.13 155);
+          --emerald-600: oklch(0.75 0.16 155);
+          --emerald-700: oklch(0.82 0.16 155);
+
+          --rose-50: oklch(0.3 0.1 25);
+          --rose-200: oklch(0.45 0.16 25);
+          --rose-500: oklch(0.78 0.2 25);
+          --rose-600: oklch(0.84 0.2 25);
+
+          --bg: oklch(0.16 0.01 220);
+          --surface: oklch(0.21 0.012 220);
+          --line: oklch(0.3 0.01 220);
+          --line-strong: oklch(0.4 0.012 220);
+          --text-strong: oklch(0.96 0.005 195);
+          --text-default: oklch(0.85 0.008 195);
+          --text-soft: oklch(0.65 0.012 195);
+          --text-mute: oklch(0.48 0.012 195);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text-default);
+        font-family:
+          ui-sans-serif,
+          -apple-system,
+          "PingFang SC",
+          "Hiragino Sans",
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          "Helvetica Neue",
+          sans-serif;
+        font-feature-settings:
+          "kern" 1,
+          "ss01" 1;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      /* ─── Page chrome ─── */
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 56px 24px 96px;
+      }
+      .page-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-bottom: 32px;
+      }
+      .page-header h1 {
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        color: var(--text-strong);
+        margin: 0;
+      }
+      .page-header .subtitle {
+        font-size: 13px;
+        color: var(--text-soft);
+      }
+      .page-header .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: var(--brand-teal-50);
+        color: var(--brand-teal-700);
+        border: 1px solid var(--brand-teal-200);
+      }
+      .page-intro {
+        font-size: 13.5px;
+        line-height: 1.6;
+        color: var(--text-soft);
+        max-width: 65ch;
+        margin: 0 0 48px;
+      }
+      .page-intro b {
+        color: var(--text-default);
+        font-weight: 600;
+      }
+
+      /* ─── State grid ─── */
+      .states {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 36px;
+      }
+      .state {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        gap: 36px;
+        align-items: start;
+      }
+      .state-meta {
+        position: sticky;
+        top: 24px;
+      }
+      .state-label {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font-weight: 700;
+        color: var(--text-strong);
+        margin-bottom: 4px;
+      }
+      .state-letter {
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        font-weight: 800;
+        background: var(--text-strong);
+        color: var(--bg);
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      .state-name {
+        font-size: 15px;
+      }
+      .state-desc {
+        font-size: 12.5px;
+        line-height: 1.55;
+        color: var(--text-soft);
+        margin: 0;
+      }
+      .state-desc code {
+        font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+        font-size: 11px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        padding: 1px 5px;
+        border-radius: 3px;
+        color: var(--text-default);
+      }
+
+      /* ─── Faux Twitter article ─── */
+      .tweet {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px 20px;
+        max-width: 600px;
+      }
+      .tweet[data-active] {
+        background-image: linear-gradient(
+          135deg,
+          color-mix(in oklch, var(--brand-teal-500) 6%, var(--surface)) 0%,
+          color-mix(in oklch, var(--brand-cyan-500) 2%, var(--surface)) 60%,
+          var(--surface) 100%
+        );
+        outline: 1px solid color-mix(in oklch, var(--brand-teal-500) 22%, transparent);
+        outline-offset: -1px;
+      }
+      .tweet-header {
+        display: grid;
+        grid-template-columns: 40px 1fr auto auto;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .tweet-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 9999px;
+        background: linear-gradient(
+          135deg,
+          var(--brand-teal-300),
+          var(--brand-cyan-300)
+        );
+      }
+      .tweet-meta {
+        min-width: 0;
+        line-height: 1.25;
+      }
+      .tweet-name {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text-strong);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .tweet-verified {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        background: var(--brand-teal-500);
+        color: var(--surface);
+        font-size: 9px;
+        font-weight: 800;
+      }
+      .tweet-handle {
+        font-size: 13px;
+        color: var(--text-mute);
+      }
+      .tweet-more {
+        color: var(--text-mute);
+        font-size: 18px;
+        line-height: 1;
+        cursor: default;
+      }
+      .tweet-body {
+        font-size: 14.5px;
+        line-height: 1.5;
+        color: var(--text-default);
+        margin: 0 0 14px;
+      }
+      .tweet-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        justify-content: space-between;
+        padding-top: 4px;
+        margin-right: 12px;
+        max-width: 460px;
+      }
+      .tweet-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12.5px;
+        color: var(--text-mute);
+        padding: 6px 8px;
+        border-radius: 999px;
+      }
+      .tweet-action.glow {
+        animation: lhdao-breath 1.6s ease-in-out infinite;
+        color: var(--brand-teal-500);
+      }
+      @keyframes lhdao-breath {
+        0%,
+        100% {
+          color: var(--brand-teal-500);
+          filter: brightness(1);
+        }
+        50% {
+          color: var(--brand-cyan-500);
+          filter: brightness(1.3);
+        }
+      }
+      .tweet-action svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+      }
+
+      /* ─── MISSION CARD — the actual subject of this mockup ─── */
+
+      .mission {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 4px;
+        font-size: 12.5px;
+        font-weight: 700;
+        white-space: nowrap;
+        vertical-align: middle;
+      }
+
+      /* idle: single CTA pill */
+      .mission-idle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 14px;
+        border-radius: 999px;
+        background: linear-gradient(
+          90deg,
+          var(--brand-teal-600) 0%,
+          var(--brand-cyan-500) 100%
+        );
+        color: oklch(1 0 0);
+        font-size: 12.5px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 1px 3px color-mix(in oklch, var(--brand-teal-500) 35%, transparent);
+        border: none;
+      }
+      .mission-idle:hover {
+        filter: brightness(1.06);
+      }
+      .mission-idle svg {
+        width: 14px;
+        height: 14px;
+        fill: currentColor;
+      }
+
+      /* reserving / verifying: same idle pill but greyer + spinner */
+      .mission-busy {
+        background: var(--brand-teal-100);
+        color: var(--brand-teal-700);
+        box-shadow: none;
+      }
+      .mission-busy svg {
+        animation: lhdao-spin 1s linear infinite;
+      }
+      @keyframes lhdao-spin {
+        from {
+          transform: rotate(0);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* reserved: expanded mission card */
+      .mission-reserved {
+        display: inline-grid;
+        grid-template-columns: auto auto auto;
+        gap: 14px;
+        align-items: center;
+        height: 36px;
+        padding: 0 6px 0 10px;
+        border-radius: 18px;
+        background: color-mix(in oklch, var(--brand-teal-50) 92%, transparent);
+        border: 1px solid var(--brand-teal-200);
+        animation: lhdao-expand 220ms cubic-bezier(0.22, 1, 0.36, 1);
+        font-size: 12px;
+      }
+      @keyframes lhdao-expand {
+        from {
+          opacity: 0;
+          transform: translateY(-4px) scaleX(0.85);
+          transform-origin: right center;
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      /* mission card · progress dots */
+      .mission-progress {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--text-mute);
+      }
+      .mission-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--line-strong);
+        position: relative;
+      }
+      .mission-dot.done {
+        background: var(--brand-teal-500);
+      }
+      .mission-dot.active {
+        background: var(--brand-teal-500);
+        box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand-teal-500) 22%, transparent);
+        animation: lhdao-dot-pulse 1.4s ease-in-out infinite;
+      }
+      @keyframes lhdao-dot-pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand-teal-500) 22%, transparent);
+        }
+        50% {
+          box-shadow: 0 0 0 5px color-mix(in oklch, var(--brand-teal-500) 8%, transparent);
+        }
+      }
+      .mission-line {
+        width: 10px;
+        height: 1px;
+        background: var(--line-strong);
+      }
+      .mission-line.lit {
+        background: var(--brand-teal-300);
+      }
+
+      /* mission card · instruction (middle column) */
+      .mission-instruction {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--brand-teal-700);
+        font-weight: 700;
+        font-size: 12px;
+      }
+      .mission-instruction svg {
+        width: 13px;
+        height: 13px;
+        fill: currentColor;
+      }
+      .mission-instruction kbd {
+        display: inline-flex;
+        align-items: center;
+        font-family: inherit;
+        font-size: 11.5px;
+        font-weight: 700;
+        background: var(--surface);
+        border: 1px solid var(--brand-teal-200);
+        color: var(--brand-teal-700);
+        padding: 1px 5px;
+        border-radius: 4px;
+        line-height: 1.4;
+      }
+
+      /* mission card · verify (right column) */
+      .mission-verify {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 26px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--brand-teal-700);
+        font-size: 11.5px;
+        font-weight: 700;
+        cursor: pointer;
+        border: 1px solid var(--brand-teal-300);
+        font-variant-numeric: tabular-nums;
+      }
+      .mission-verify:hover {
+        background: var(--brand-teal-50);
+      }
+      .mission-verify svg {
+        width: 12px;
+        height: 12px;
+        fill: currentColor;
+      }
+      .mission-verify .cooldown {
+        color: var(--text-mute);
+        font-weight: 500;
+        font-size: 10.5px;
+        margin-left: 2px;
+      }
+      .mission-verify.ready {
+        background: var(--brand-teal-600);
+        color: oklch(1 0 0);
+        border-color: transparent;
+        box-shadow: 0 0 0 0 color-mix(in oklch, var(--brand-teal-500) 50%, transparent);
+        animation: lhdao-verify-ready 1.6s ease-out infinite;
+      }
+      @keyframes lhdao-verify-ready {
+        0% {
+          box-shadow: 0 0 0 0 color-mix(in oklch, var(--brand-teal-500) 50%, transparent);
+        }
+        80%,
+        100% {
+          box-shadow: 0 0 0 8px color-mix(in oklch, var(--brand-teal-500) 0%, transparent);
+        }
+      }
+
+      /* done state */
+      .mission-done {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 12px;
+        border-radius: 999px;
+        background: var(--emerald-50);
+        color: var(--emerald-700);
+        font-size: 12.5px;
+        font-weight: 700;
+        border: 1px solid var(--emerald-200);
+        font-variant-numeric: tabular-nums;
+      }
+      .mission-done svg {
+        width: 14px;
+        height: 14px;
+        fill: currentColor;
+      }
+
+      /* error state — note: NOT a left stripe (impeccable BAN 1) */
+      .mission-error {
+        display: inline-grid;
+        grid-template-columns: auto auto auto;
+        gap: 12px;
+        align-items: center;
+        height: 36px;
+        padding: 0 6px 0 10px;
+        border-radius: 18px;
+        background: color-mix(in oklch, var(--rose-50) 92%, transparent);
+        border: 1px solid var(--rose-200);
+        font-size: 12px;
+      }
+      .mission-error .mission-dot.error {
+        background: var(--rose-500);
+        box-shadow: 0 0 0 3px color-mix(in oklch, var(--rose-500) 22%, transparent);
+      }
+      .mission-error .mission-instruction {
+        color: var(--rose-600);
+      }
+      .mission-error-retry {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 26px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--rose-600);
+        font-size: 11.5px;
+        font-weight: 700;
+        cursor: pointer;
+        border: 1px solid var(--rose-200);
+      }
+
+      /* badge — same as production, just for visual fidelity */
+      .reward-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        padding: 0 6px;
+        font-size: 11px;
+        line-height: 16px;
+        font-weight: 700;
+        color: var(--brand-teal-700);
+        background: color-mix(in oklch, var(--brand-teal-500) 12%, transparent);
+        border-radius: 999px;
+        margin-right: 6px;
+        font-variant-numeric: tabular-nums;
+      }
+      .reward-badge .lux {
+        font-size: 9px;
+        font-weight: 500;
+        opacity: 0.7;
+        margin-left: 2px;
+      }
+
+      /* footer guidance */
+      .footnote {
+        margin-top: 64px;
+        padding-top: 24px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--text-soft);
+        line-height: 1.7;
+      }
+      .footnote strong {
+        color: var(--text-default);
+      }
+
+      /* small-screen fallback */
+      @media (max-width: 760px) {
+        .state {
+          grid-template-columns: 1fr;
+        }
+        .state-meta {
+          position: static;
+        }
+        .tweet {
+          max-width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <h1>Mission Card v2</h1>
+          <p class="subtitle">抢单 → 做动作 → 验证 · UI 视觉预览</p>
+        </div>
+        <span class="badge">
+          <span style="width:8px;height:8px;border-radius:999px;background:var(--brand-teal-500);"></span>
+          静态 mockup
+        </span>
+      </header>
+
+      <p class="page-intro">
+        所有 6 个状态串成一个完整流程,每个状态嵌在伪 Twitter 推文卡片里(还原插件实际嵌入的视觉环境)。
+        <b>关注重点</b>:推文 <b>状态 B</b> 是核心改动 — 抢到席位后从单按钮 → 三栏 mission card,
+        左侧步骤点告诉你处在哪一步,中间动作引导,右侧 verify(冷却中先 outline,冷却完毕后 pulse 提示可点)。
+      </p>
+
+      <section class="states">
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <!-- A. IDLE -->
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <article class="state">
+          <div class="state-meta">
+            <div class="state-label">
+              <span class="state-letter">A</span>
+              <span class="state-name">Idle</span>
+            </div>
+            <p class="state-desc">
+              未抢单状态。单一 CTA 按钮 + 奖励 badge。用户清楚知道
+              "这条推文有 +1.2 LUX 可抢"。
+            </p>
+          </div>
+          <div class="tweet" data-active>
+            <header class="tweet-header">
+              <div class="tweet-avatar"></div>
+              <div class="tweet-meta">
+                <div class="tweet-name">
+                  YuChen 大王 <span class="tweet-verified">✓</span>
+                </div>
+                <div class="tweet-handle">@YuChen · 1小时</div>
+              </div>
+              <span class="reward-badge"
+                >+1.2<span class="lux">LUX</span></span
+              >
+              <button class="mission-idle">
+                <svg viewBox="0 0 24 24"><path d="M13 2L3 14h7l-1 8 11-14h-7z"/></svg>
+                claim
+              </button>
+              <span class="tweet-more" style="margin-left:6px">⋯</span>
+            </header>
+            <p class="tweet-body">链上都在挖这个,网页挖矿,仅需主网 gas...</p>
+            <div class="tweet-actions">
+              <span class="tweet-action glow">
+                <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                238
+              </span>
+              <span class="tweet-action">
+                <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                66
+              </span>
+              <span class="tweet-action">
+                <svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                35
+              </span>
+              <span class="tweet-action">5.4万 查看</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <!-- A.1 RESERVING -->
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <article class="state">
+          <div class="state-meta">
+            <div class="state-label">
+              <span class="state-letter">A·1</span>
+              <span class="state-name">Reserving</span>
+            </div>
+            <p class="state-desc">
+              点 claim 后立即进入,后端 <code>reserveSlot</code> 请求中。
+              按钮形状不变,变浅 + spinner 替换闪电图标,~300ms-1s。
+            </p>
+          </div>
+          <div class="tweet" data-active>
+            <header class="tweet-header">
+              <div class="tweet-avatar"></div>
+              <div class="tweet-meta">
+                <div class="tweet-name">
+                  YuChen 大王 <span class="tweet-verified">✓</span>
+                </div>
+                <div class="tweet-handle">@YuChen · 1小时</div>
+              </div>
+              <span class="reward-badge"
+                >+1.2<span class="lux">LUX</span></span
+              >
+              <button class="mission-idle mission-busy">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-dasharray="40 18" stroke-linecap="round"/></svg>
+                抢单中
+              </button>
+              <span class="tweet-more" style="margin-left:6px">⋯</span>
+            </header>
+            <p class="tweet-body">链上都在挖这个,网页挖矿,仅需主网 gas...</p>
+            <div class="tweet-actions">
+              <span class="tweet-action glow"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg> 238</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg> 66</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" fill="none" stroke="currentColor" stroke-width="2"/></svg> 35</span>
+              <span class="tweet-action">5.4万 查看</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <!-- B. RESERVED -->
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <article class="state">
+          <div class="state-meta">
+            <div class="state-label">
+              <span class="state-letter">B</span>
+              <span class="state-name">Reserved · 核心改动</span>
+            </div>
+            <p class="state-desc">
+              抢到了。卡片<b>从右向左展开</b>三栏:
+              <br />· <b>左</b> 3 点进度(已抢→动作→验证),当前点 pulse
+              <br />· <b>中</b> 动作引导,带 X 同款 SVG 图标
+              <br />· <b>右</b> verify 按钮 outline + 倒计时;冷却结束后变实心 + halo,
+              告诉用户"现在该点了"
+            </p>
+          </div>
+          <div class="tweet" data-active>
+            <header class="tweet-header">
+              <div class="tweet-avatar"></div>
+              <div class="tweet-meta">
+                <div class="tweet-name">
+                  YuChen 大王 <span class="tweet-verified">✓</span>
+                </div>
+                <div class="tweet-handle">@YuChen · 1小时</div>
+              </div>
+              <span class="reward-badge"
+                >+1.2<span class="lux">LUX</span></span
+              >
+              <div class="mission-reserved">
+                <div class="mission-progress" title="进度: 已抢席位 / 等待动作 / 等待验证">
+                  <span class="mission-dot done"></span>
+                  <span class="mission-line lit"></span>
+                  <span class="mission-dot active"></span>
+                  <span class="mission-line"></span>
+                  <span class="mission-dot"></span>
+                </div>
+                <span class="mission-instruction">
+                  <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                  <span>去点 <kbd>赞</kbd></span>
+                </span>
+                <button class="mission-verify">
+                  verify <span class="cooldown">· 58s</span>
+                </button>
+              </div>
+              <span class="tweet-more" style="margin-left:6px">⋯</span>
+            </header>
+            <p class="tweet-body">链上都在挖这个,网页挖矿,仅需主网 gas...</p>
+            <div class="tweet-actions">
+              <span class="tweet-action glow"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg> 238</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg> 66</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" fill="none" stroke="currentColor" stroke-width="2"/></svg> 35</span>
+              <span class="tweet-action">5.4万 查看</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <!-- B.1 RESERVED — verify ready -->
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <article class="state">
+          <div class="state-meta">
+            <div class="state-label">
+              <span class="state-letter">B·1</span>
+              <span class="state-name">Reserved (cooldown 走完)</span>
+            </div>
+            <p class="state-desc">
+              冷却倒计时为 0 之后,verify 按钮从 outline →
+              <b>实心 + ripple halo</b>。用户做完动作的时刻这个 pulse
+              告诉他"可以点了"。
+            </p>
+          </div>
+          <div class="tweet" data-active>
+            <header class="tweet-header">
+              <div class="tweet-avatar"></div>
+              <div class="tweet-meta">
+                <div class="tweet-name">
+                  YuChen 大王 <span class="tweet-verified">✓</span>
+                </div>
+                <div class="tweet-handle">@YuChen · 1小时</div>
+              </div>
+              <span class="reward-badge"
+                >+1.2<span class="lux">LUX</span></span
+              >
+              <div class="mission-reserved">
+                <div class="mission-progress">
+                  <span class="mission-dot done"></span>
+                  <span class="mission-line lit"></span>
+                  <span class="mission-dot done"></span>
+                  <span class="mission-line lit"></span>
+                  <span class="mission-dot active"></span>
+                </div>
+                <span class="mission-instruction">
+                  <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  做完了? 点这里 →
+                </span>
+                <button class="mission-verify ready">
+                  <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  verify
+                </button>
+              </div>
+              <span class="tweet-more" style="margin-left:6px">⋯</span>
+            </header>
+            <p class="tweet-body">链上都在挖这个,网页挖矿,仅需主网 gas...</p>
+            <div class="tweet-actions">
+              <span class="tweet-action glow"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg> 238</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg> 66</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" fill="none" stroke="currentColor" stroke-width="2"/></svg> 35</span>
+              <span class="tweet-action">5.4万 查看</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <!-- C. VERIFYING -->
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <article class="state">
+          <div class="state-meta">
+            <div class="state-label">
+              <span class="state-letter">C</span>
+              <span class="state-name">Verifying</span>
+            </div>
+            <p class="state-desc">
+              点 verify 后,卡片收缩回单按钮形态 +
+              <code>spinner</code>。后端调 Twitter API 校验动作,3-5 秒。
+            </p>
+          </div>
+          <div class="tweet" data-active>
+            <header class="tweet-header">
+              <div class="tweet-avatar"></div>
+              <div class="tweet-meta">
+                <div class="tweet-name">
+                  YuChen 大王 <span class="tweet-verified">✓</span>
+                </div>
+                <div class="tweet-handle">@YuChen · 1小时</div>
+              </div>
+              <span class="reward-badge"
+                >+1.2<span class="lux">LUX</span></span
+              >
+              <button class="mission-idle mission-busy">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-dasharray="40 18" stroke-linecap="round"/></svg>
+                验证中
+              </button>
+              <span class="tweet-more" style="margin-left:6px">⋯</span>
+            </header>
+            <p class="tweet-body">链上都在挖这个,网页挖矿,仅需主网 gas...</p>
+            <div class="tweet-actions">
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg> 239</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg> 66</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" fill="none" stroke="currentColor" stroke-width="2"/></svg> 35</span>
+              <span class="tweet-action">5.4万 查看</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <!-- D. DONE -->
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <article class="state">
+          <div class="state-meta">
+            <div class="state-label">
+              <span class="state-letter">D</span>
+              <span class="state-name">Done</span>
+            </div>
+            <p class="state-desc">
+              成功状态。emerald 终态,显示实际入账金额。整张推文的发光
+              80ms 后渐隐(任务已完成,该推文不再需要注意力)。
+            </p>
+          </div>
+          <div class="tweet">
+            <header class="tweet-header">
+              <div class="tweet-avatar"></div>
+              <div class="tweet-meta">
+                <div class="tweet-name">
+                  YuChen 大王 <span class="tweet-verified">✓</span>
+                </div>
+                <div class="tweet-handle">@YuChen · 1小时</div>
+              </div>
+              <span class="mission-done">
+                <svg viewBox="0 0 24 24"><path d="M12 2l1.7 6.3L20 10l-6.3 1.7L12 18l-1.7-6.3L4 10l6.3-1.7z"/></svg>
+                +1.2 LUX
+              </span>
+              <span class="tweet-more" style="margin-left:6px">⋯</span>
+            </header>
+            <p class="tweet-body">链上都在挖这个,网页挖矿,仅需主网 gas...</p>
+            <div class="tweet-actions">
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg> 239</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg> 66</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" fill="none" stroke="currentColor" stroke-width="2"/></svg> 35</span>
+              <span class="tweet-action">5.4万 查看</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <!-- E. ERROR -->
+        <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+        <article class="state">
+          <div class="state-meta">
+            <div class="state-label">
+              <span class="state-letter">E</span>
+              <span class="state-name">Error</span>
+            </div>
+            <p class="state-desc">
+              失败时<b>不</b>退到 idle,而是
+              <b>保留当前阶段的卡片</b>,把右侧 verify 换成 retry。
+              中间显示具体业务原因 (e.g. <code>COMMENT_MISSING</code>),
+              进度点标红表示卡在哪一步。<br /><br />
+              <b>不用</b> border-left 红条 (impeccable BAN 1) — 用整 rose
+              色相 + 边框圆角化整张卡。
+            </p>
+          </div>
+          <div class="tweet" data-active>
+            <header class="tweet-header">
+              <div class="tweet-avatar"></div>
+              <div class="tweet-meta">
+                <div class="tweet-name">
+                  YuChen 大王 <span class="tweet-verified">✓</span>
+                </div>
+                <div class="tweet-handle">@YuChen · 1小时</div>
+              </div>
+              <span class="reward-badge"
+                >+1.2<span class="lux">LUX</span></span
+              >
+              <div class="mission-error">
+                <div class="mission-progress">
+                  <span class="mission-dot done"></span>
+                  <span class="mission-line lit"></span>
+                  <span class="mission-dot done"></span>
+                  <span class="mission-line"></span>
+                  <span class="mission-dot error"></span>
+                </div>
+                <span class="mission-instruction">
+                  <svg viewBox="0 0 24 24"><path d="M12 2L2 22h20L12 2z M12 9v6 M12 18.5v.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                  评论缺关键字
+                </span>
+                <button class="mission-error-retry">
+                  <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  再试
+                </button>
+              </div>
+              <span class="tweet-more" style="margin-left:6px">⋯</span>
+            </header>
+            <p class="tweet-body">链上都在挖这个,网页挖矿,仅需主网 gas...</p>
+            <div class="tweet-actions">
+              <span class="tweet-action glow"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg> 238</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg> 66</span>
+              <span class="tweet-action"><svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" fill="none" stroke="currentColor" stroke-width="2"/></svg> 35</span>
+              <span class="tweet-action">5.4万 查看</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <footer class="footnote">
+        <strong>关键设计抉择 · 一句话清单</strong>
+        <ul>
+          <li>
+            <strong>展开方向</strong>:reserve 后从右向左展开三栏(动画 <code>scaleX</code> 从 0.85 起步,
+            <code>transform-origin: right center</code>),保证不挤动其他 Twitter UI 元素
+          </li>
+          <li>
+            <strong>三点进度</strong>:实心 / 空心 + 横线连接,完成段亮色。比 stepper 盒子轻盈
+          </li>
+          <li>
+            <strong>动作引导</strong>:中间用 <code>&lt;kbd&gt;</code> 视觉强调动作名词(赞 / 转 / 评论),
+            带 X 原版 SVG 让用户立刻认出
+          </li>
+          <li>
+            <strong>verify ready</strong>:冷却倒计时归零后,按钮从 outline → 实心 + ripple halo
+            动画,告诉用户"该点了"
+          </li>
+          <li>
+            <strong>error 不退回 idle</strong>:卡片保留三栏结构,只把 verify 换成 retry,
+            进度点标红显示卡在哪一步。语境保留
+          </li>
+          <li>
+            <strong>不违反 impeccable</strong>:无 border-left stripe、无 gradient text、
+            无 glassmorphism;按钮渐变 OK(background-only)
+          </li>
+        </ul>
+      </footer>
+    </div>
+  </body>
+</html>
