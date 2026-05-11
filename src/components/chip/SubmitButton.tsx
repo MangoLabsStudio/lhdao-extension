@@ -14,18 +14,20 @@ type RowState =
   | { kind: 'error'; code: SubmitErrorCode; raw: string }
 
 /**
- * 插在 Twitter action button 行末尾的 "我做完了" 按钮(灯塔配色)。
+ * 插在 Twitter action button 行末尾的 "verify" 按钮。
  *
- * 单任务直接 submit;多任务 (同一推文挂多个 campaign) 顺序逐个 submit,
- * 任意一个失败都不阻塞后续 — 最终 reward 汇总展示。
+ * 视觉风格:贴齐 Twitter action button 的 ghost 风(透明背景 + 单色 icon +
+ * 可选 label,hover 才出现淡色底)。这样它看起来是动作行的一员,而不是
+ * 突兀的外挂卡片。
  *
- * COMMENT 类任务下方多一行关键字提示,用户可以一眼看到要带什么词。
+ * 单任务直接 submit;多任务顺序逐个 submit,reward 累加,任一失败保留为
+ * lastErr 显示。
  */
 export function SubmitButton({ tasks }: Props) {
   const [state, setState] = React.useState<RowState>({ kind: 'idle' })
 
   const submit = React.useCallback(async () => {
-    if (state.kind === 'submitting') return
+    if (state.kind !== 'idle' && state.kind !== 'error') return
     setState({ kind: 'submitting' })
 
     let totalReward = 0
@@ -49,81 +51,70 @@ export function SubmitButton({ tasks }: Props) {
     } else if (lastErr) {
       setState({ kind: 'error', code: lastErr.code, raw: lastErr.message })
     } else {
-      setState({
-        kind: 'error',
-        code: 'INTERNAL',
-        raw: 'no response',
-      })
+      setState({ kind: 'error', code: 'INTERNAL', raw: 'no response' })
     }
   }, [tasks, state.kind])
 
-  // 找有关键字要求的 COMMENT 任务,展示 hint
-  const keywordHint = React.useMemo(() => {
-    const kw = tasks.find(
-      (t) =>
-        (t.actionType === 'COMMENT' || t.actionType === 'COMMENT_LIKE') &&
-        t.commentKeyword,
-    )?.commentKeyword
-    return kw ?? null
-  }, [tasks])
-
   return (
-    <div className="lhdao-submit-wrap inline-flex items-center gap-1.5 align-middle">
-      {keywordHint && state.kind === 'idle' && (
-        <span
-          className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-600 dark:bg-rose-950/40 dark:text-rose-400"
-          title="评论需含此关键字"
-        >
-          <KeywordIcon />
-          <code className="font-mono">{keywordHint}</code>
-        </span>
-      )}
-
-      <button
-        type="button"
-        onClick={submit}
-        disabled={state.kind === 'submitting' || state.kind === 'done'}
-        className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-3 text-[11.5px] font-bold leading-none transition active:scale-[0.97] disabled:cursor-not-allowed ${stateClasses(state)}`}
-        title={state.kind === 'error' ? state.raw : undefined}
-      >
-        {state.kind === 'idle' && (
-          <>
-            <CheckIcon className="h-3 w-3" />
-            我做完了
-          </>
-        )}
-        {state.kind === 'submitting' && (
-          <>
-            <SpinnerIcon className="h-3 w-3 animate-spin" />
-            提交中
-          </>
-        )}
-        {state.kind === 'done' && (
-          <>
-            <SparkleIcon className="h-3 w-3" />
-            <span className="tabular-nums">+{state.reward} LUX</span>
-          </>
-        )}
-        {state.kind === 'error' && (
-          <>
-            <RetryIcon className="h-3 w-3" />
-            {friendlyError(state.code)} · 重试
-          </>
-        )}
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={submit}
+      disabled={state.kind === 'submitting' || state.kind === 'done'}
+      title={state.kind === 'error' ? state.raw : undefined}
+      className={btnClasses(state)}
+    >
+      <IconForState state={state} />
+      <span className="tabular-nums">{labelForState(state)}</span>
+    </button>
   )
 }
 
-function stateClasses(state: RowState): string {
+// ── style derivation ─────────────────────────────────────────────────
+
+/**
+ * 模仿 Twitter action button 的 ghost 样式:透明底,hover 才出现淡色圆圈。
+ * 高度 h-9 跟 Twitter 自家按钮一致,圆角 full,inline-flex 不破坏行内对齐。
+ */
+function btnClasses(state: RowState): string {
+  const base =
+    'group inline-flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] font-medium leading-none transition-all duration-150 disabled:cursor-not-allowed select-none'
+
   switch (state.kind) {
     case 'idle':
+      return `${base} text-teal-600 hover:bg-teal-500/10 hover:text-teal-700 active:scale-[0.96] dark:text-teal-400 dark:hover:bg-teal-400/15 dark:hover:text-teal-300`
     case 'submitting':
-      return 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-sm hover:opacity-90'
+      return `${base} text-teal-500/70 dark:text-teal-400/70`
     case 'done':
-      return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:ring-emerald-900/40'
+      return `${base} text-emerald-600 dark:text-emerald-400`
     case 'error':
-      return 'border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 dark:border-rose-900/40 dark:bg-slate-950 dark:text-rose-400 dark:hover:bg-rose-950/30'
+      return `${base} text-rose-600 hover:bg-rose-500/10 hover:text-rose-700 active:scale-[0.96] dark:text-rose-400 dark:hover:bg-rose-400/15 dark:hover:text-rose-300`
+  }
+}
+
+function labelForState(state: RowState): string {
+  switch (state.kind) {
+    case 'idle':
+      return 'verify'
+    case 'submitting':
+      return ''
+    case 'done':
+      return `+${state.reward}`
+    case 'error':
+      return friendlyError(state.code)
+  }
+}
+
+function IconForState({ state }: { state: RowState }) {
+  const cls = 'h-[18px] w-[18px]'
+  switch (state.kind) {
+    case 'idle':
+      return <CheckIcon className={cls} />
+    case 'submitting':
+      return <SpinnerIcon className={`${cls} animate-spin`} />
+    case 'done':
+      return <SparkleIcon className={cls} />
+    case 'error':
+      return <RetryIcon className={cls} />
   }
 }
 
@@ -151,21 +142,21 @@ function friendlyError(code: SubmitErrorCode): string {
     case 'RESERVE_FAILED':
     case 'VERIFY_FAILED':
     case 'INTERNAL':
-      return '系统错误'
+      return '重试'
   }
 }
 
-// ── icons (inline SVG,Shadow DOM-safe) ──────────────────────────
+// ── icons (Twitter 系自家 button 用 ~20px icon,我们贴齐) ────────
 
 function CheckIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-      <title>Done</title>
+      <title>Verify</title>
       <path
         d="M5 13l4 4L19 7"
         fill="none"
         stroke="currentColor"
-        strokeWidth="3"
+        strokeWidth="2.4"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -182,7 +173,7 @@ function SpinnerIcon({ className }: { className?: string }) {
         r="9"
         fill="none"
         stroke="currentColor"
-        strokeWidth="2.5"
+        strokeWidth="2.2"
         strokeDasharray="40 18"
         strokeLinecap="round"
       />
@@ -211,20 +202,6 @@ function RetryIcon({ className }: { className?: string }) {
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-function KeywordIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" aria-hidden="true">
-      <title>Keyword</title>
-      <path
-        d="M3 7h18M3 12h18M3 17h12"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
       />
     </svg>
   )

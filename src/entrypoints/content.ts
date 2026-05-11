@@ -170,14 +170,14 @@ function mountArticle(
       }
     }
 
-    // ④ Submit button (end of action row)
-    // 找包含 like/reply/retweet 的 role="group" 容器,把按钮塞在最后
+    // ④ Submit button (end of action row,作为最后一个 flex item)
+    // 找包含 like/reply/retweet 的 role="group" 容器,append 进去让它和
+    // 原生 reply/retweet/like/bookmark/share 一起被 justify-content 自动
+    // 分配。**不要** 加 margin-left:auto,那会撑出一个大空隙看着突兀。
     const actionRow = findActionRow(article)
     if (actionRow) {
-      const host = createShadowHost('lhdao-submit', 'inline-block')
-      // margin-left:auto 让按钮贴右(action row 通常用 flex justify-between)
-      host.style.marginLeft = 'auto'
-      host.style.paddingLeft = '8px'
+      const host = createShadowHost('lhdao-submit', 'inline-flex')
+      host.style.alignItems = 'center'
       actionRow.appendChild(host)
       const root = renderInto(host, createElement(SubmitButton, { tasks }))
       state.hosts.push(host)
@@ -244,7 +244,7 @@ function unmountAll() {
 
 function createShadowHost(
   className: string,
-  display: 'inline' | 'inline-block',
+  display: 'inline' | 'inline-block' | 'inline-flex',
 ): HTMLElement {
   const host = document.createElement('span')
   host.className = className
