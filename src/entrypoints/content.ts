@@ -148,12 +148,14 @@ function mountArticle(
   }
 
   try {
-    // ② Metadata badge (after time element)
-    const timeEl = article.querySelector('time')
-    const headerAnchor = timeEl?.closest('a') ?? timeEl?.parentElement
-    if (headerAnchor?.parentElement) {
+    // ② Metadata badge — 优先 User-Name 容器(@handle / 名字行,所有页面
+    // 视图都稳定存在),退而求其次找 <time>(可能在 timeline 是相对时间在
+    // 头行,在详情页是底部完整日期 — 不同位置会跑偏)。
+    const badgeAnchor = findBadgeAnchor(article)
+    if (badgeAnchor) {
       const host = createShadowHost('lhdao-badge', 'inline')
-      headerAnchor.parentElement.insertBefore(host, headerAnchor.nextSibling)
+      // 让 badge 紧跟在 anchor 后面(同一行内联)
+      badgeAnchor.parentElement?.insertBefore(host, badgeAnchor.nextSibling)
       const root = renderInto(host, createElement(MetadataBadge, { tasks }))
       state.hosts.push(host)
       state.roots.push(root)
@@ -205,6 +207,24 @@ function mountArticle(
     // 部分挂载成功也算,后续 unmount 会清干净
     return state.hosts.length > 0 ? state : null
   }
+}
+
+/**
+ * 找一个稳定的"头部锚点"挂 Badge。优先级:
+ *   1. [data-testid="User-Name"] 内部最后一个 child(展示名 + @handle
+ *      容器,所有视图存在)
+ *   2. article 内第一个 <time> 元素的最近 <a>(timeline 卡片头部)
+ * 都没就 null。
+ */
+function findBadgeAnchor(article: Element): Element | null {
+  const userName = article.querySelector('[data-testid="User-Name"]')
+  if (userName) {
+    // 把 badge 插在 User-Name 容器外、紧跟它后面,这样既不破坏其内部
+    // 多层 a 标签结构,又在视觉上贴着 @handle / 名字。
+    return userName as Element
+  }
+  const timeEl = article.querySelector('time')
+  return timeEl?.closest('a') ?? timeEl ?? null
 }
 
 function findActionRow(article: Element): Element | null {

@@ -67,6 +67,13 @@ export function SubmitButton({ tasks }: Props) {
     }
 
     if (lastErr && minCooldown === undefined) {
+      // 把详细 error 也打到页面 Console,方便用户 F12 → Console 看
+      console.error(
+        '[lhdao] reserve failed:',
+        lastErr.code,
+        '·',
+        lastErr.message,
+      )
       setState({
         kind: 'error',
         phase: 'reserve',
@@ -104,6 +111,12 @@ export function SubmitButton({ tasks }: Props) {
     if (totalReward > 0) {
       setState({ kind: 'done', reward: totalReward })
     } else if (lastErr) {
+      console.error(
+        '[lhdao] verify failed:',
+        lastErr.code,
+        '·',
+        lastErr.message,
+      )
       setState({
         kind: 'error',
         phase: 'verify',
@@ -111,6 +124,7 @@ export function SubmitButton({ tasks }: Props) {
         raw: lastErr.message,
       })
     } else {
+      console.error('[lhdao] verify: no response from background')
       setState({
         kind: 'error',
         phase: 'verify',
@@ -204,10 +218,20 @@ function labelForState(state: State, cooldownLeft: number | null): string {
       return '验证中'
     case 'done':
       return `+${state.reward} LUX`
-    case 'error':
+    case 'error': {
+      // 优先用 friendlyError 的具体 code 翻译;若是 RESERVE_FAILED /
+      // VERIFY_FAILED / INTERNAL 这类兜底 code,直接用后端原文(截 18 字)
+      // 而不是显示无信息的 "失败"。完整原文 hover title 看。
+      const friendly = friendlyError(state.code)
+      const isGeneric =
+        state.code === 'RESERVE_FAILED' ||
+        state.code === 'VERIFY_FAILED' ||
+        state.code === 'INTERNAL'
+      const label = isGeneric && state.raw ? state.raw.slice(0, 18) : friendly
       return state.phase === 'reserve'
-        ? `${friendlyError(state.code)} · 重抢`
-        : `${friendlyError(state.code)} · 重验证`
+        ? `${label} · 重抢`
+        : `${label} · 重验证`
+    }
   }
 }
 
