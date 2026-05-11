@@ -83,13 +83,19 @@ export interface AvailableEngagementsResult {
 export const RESERVE_SLOT_MUTATION = `
   mutation ReserveEngagementSlot($campaignId: String!) {
     reserveEngagementSlot(campaignId: $campaignId) {
-      success
+      reserved
+      reservedTier
+      cooldownSeconds
     }
   }
 `
 
 export interface ReserveSlotResult {
-  reserveEngagementSlot: { success: boolean }
+  reserveEngagementSlot: {
+    reserved: boolean
+    reservedTier: string | null
+    cooldownSeconds: number | null
+  }
 }
 
 export const VERIFY_ENGAGEMENT_MUTATION = `

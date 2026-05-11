@@ -279,15 +279,24 @@ function sleep(ms: number): Promise<void> {
  */
 async function reserveOnly(campaignId: string): Promise<MsgResponse> {
   try {
-    const data = await gql<
-      ReserveSlotResult & {
-        reserveEngagementSlot: { cooldownSeconds?: number }
+    const data = await gql<ReserveSlotResult>(RESERVE_SLOT_MUTATION, {
+      campaignId,
+    })
+    const r = data.reserveEngagementSlot
+    if (r && !r.reserved) {
+      // reserved:false 是 "活动已过期" 兜底路径(后端 resolver 在过期时
+      // 返回 {reserved:false, cooldownSeconds:0},不抛异常)
+      return {
+        type: 'reserve-result',
+        ok: false,
+        code: 'RESERVE_FAILED',
+        message: 'Campaign expired or unavailable',
       }
-    >(RESERVE_SLOT_MUTATION, { campaignId })
+    }
     return {
       type: 'reserve-result',
       ok: true,
-      cooldownSeconds: data.reserveEngagementSlot?.cooldownSeconds,
+      cooldownSeconds: r?.cooldownSeconds ?? undefined,
     }
   } catch (e) {
     if (e instanceof GqlError) {

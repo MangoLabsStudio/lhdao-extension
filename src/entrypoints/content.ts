@@ -63,6 +63,8 @@ interface MountedArticle {
 }
 
 const mounted = new Map<string, MountedArticle>() // key = tweetId
+/** tweetId 的 get-tasks RPC await 期间的占位,防止 race 导致双挂载 */
+const inFlight = new Set<string>()
 
 // ── entrypoint ──────────────────────────────────────────────────────
 
@@ -122,14 +124,30 @@ async function scanTimeline() {
     if (article.hasAttribute(ARTICLE_FLAG)) continue
     const tweetId = extractTweetIdFromArticle(article)
     if (!tweetId) continue
-    if (mounted.has(tweetId)) continue
+    if (mounted.has(tweetId) || inFlight.has(tweetId)) continue
 
-    const r = await sendMessage({ type: 'get-tasks-for-tweet', tweetId })
-    if (r.type !== 'tasks' || r.tasks.length === 0) continue
-
+    // 关键:在 await sendMessage 之前**先**占位,否则 MutationObserver
+    // 在等响应期间触发的下一次 scan 会拿到同一个 article(还没 ARTICLE_FLAG)
+    // 再发一次 RPC,两次都进 mount → 双 badge / 双按钮。
+    inFlight.add(tweetId)
     article.setAttribute(ARTICLE_FLAG, '1')
-    const state = mountArticle(article, r.tasks, tweetId)
-    if (state) mounted.set(tweetId, state)
+
+    try {
+      const r = await sendMessage({ type: 'get-tasks-for-tweet', tweetId })
+      if (r.type !== 'tasks' || r.tasks.length === 0) {
+        // 没任务 — 撤销占位,article 可能后续会有任务被 sync 进来
+        article.removeAttribute(ARTICLE_FLAG)
+        continue
+      }
+      const state = mountArticle(article, r.tasks, tweetId)
+      if (state) {
+        mounted.set(tweetId, state)
+      } else {
+        article.removeAttribute(ARTICLE_FLAG)
+      }
+    } finally {
+      inFlight.delete(tweetId)
+    }
   }
 }
 
@@ -269,9 +287,13 @@ function unmountAll() {
     unmountArticle(state)
   }
   mounted.clear()
-  // 兜底:清理 stale 标记(article 可能已离开 DOM)
+  inFlight.clear()
+  // 兜底:清理 stale 标记(article 可能已离开 DOM)+ 拖延 host(若有)
   for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
     a.removeAttribute(ARTICLE_FLAG)
+  }
+  for (const h of document.querySelectorAll('[data-lhdao-host="1"]')) {
+    h.remove()
   }
 }
 
