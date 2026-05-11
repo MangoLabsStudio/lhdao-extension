@@ -82,9 +82,18 @@ export default defineContentScript({
 
     // SPA 导航监听:Twitter 用 pushState 切换路由,焦点 tweet id 会变,
     // 已挂载的 SubmitButton 需要重新计算 isFocal。
+    //
+    // 关键 timing bug:pushState 触发的瞬间,Twitter 尚未渲染新 article DOM,
+    // 单次 rAF scan 命中不了新页面的推文。MutationObserver 理论上能捕到
+    // 后续插入,但实测 timeline → detail 切换偶尔遗漏。叠加多次 setTimeout
+    // 重扫做兜底,scan 内部有 mounted Map 去重,多扫不会重复挂。
     watchUrlChanges(() => {
       unmountAll()
       scheduleScan()
+      setTimeout(scheduleScan, 100)
+      setTimeout(scheduleScan, 400)
+      setTimeout(scheduleScan, 1000)
+      setTimeout(scheduleScan, 2000)
     })
 
     chrome.runtime.onMessage.addListener((msg) => {
@@ -119,6 +128,19 @@ function scheduleScan() {
 }
 
 async function scanTimeline() {
+  // —— 1. 清扫 stale 挂载 ———————————————————————————————————————
+  // Twitter SPA 导航时同一条 tweetId 可能换 article DOM 节点 (timeline
+  // 卡片 → 详情页 article)。旧的 article.isConnected === false,需要主动
+  // 从 mounted Map 移除,否则后续新 article 因为 mounted.has(tweetId) 命中
+  // 被跳过 → 用户进详情页插件不渲染,要刷新才出。
+  for (const [tweetId, state] of mounted.entries()) {
+    if (!state.article.isConnected) {
+      unmountArticle(state)
+      mounted.delete(tweetId)
+    }
+  }
+
+  // —— 2. 扫新 article 挂载 ——————————————————————————————————————
   const articles = document.querySelectorAll('article')
   for (const article of articles) {
     if (article.hasAttribute(ARTICLE_FLAG)) continue
