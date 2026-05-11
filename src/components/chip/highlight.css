@@ -2,11 +2,11 @@
  * Article-level styles that live OUTSIDE Shadow DOM.
  *
  * 这些规则要在 x.com / twitter.com 文档级别生效 (因为目标是 Twitter 的
- * <article> 元素本身,Shadow DOM 隔离反而碍事)。content script 启动时
- * 通过 document.head.appendChild(<style>) 注入一次。
+ * <article> / <button> 元素本身,Shadow DOM 隔离反而碍事)。content
+ * script 启动时 document.head.appendChild(<style>) 注入一次。
  *
- * 全部规则只在 article 显式贴了 data-lhdao-active="1" 时才生效,
- * 取消挂载时 removeAttribute 即可恢复原貌。
+ * 全部规则只在元素显式贴了对应 attribute (data-lhdao-active /
+ * data-lhdao-glow) 时才生效,取消挂载 removeAttribute 即可恢复原貌。
  */
 
 /* ── Article highlight ──────────────────────────────────────────── */
@@ -38,60 +38,58 @@ article[data-lhdao-active="1"] {
   }
 }
 
-/* ── Action button halo (软辉光,无硬边缘) ───────────────────────── */
+/* ── Action button tint + breathing (方案 B) ─────────────────────── */
 /*
- * 关键点:绝不用 `0 0 0 Npx <color>` 形式(这是硬环不是辉光)。
- * 用多层 blur shadow + spread 制造放射感:
- *   - 第一层:近距小 spread,饱和度高,贴近按钮形状
- *   - 第二层:中距大 blur,主辉光
- *   - 第三层:远距 cyan 外晕,品牌一致性
+ * 不画外圈 halo / 圆环。直接把 Twitter action button (reply / retweet /
+ * like) 的图标染成品牌色,色相在 teal-500 ↔ cyan-500 之间来回过渡,
+ * brightness 也跟着脉动 → 呼吸渐变。
  *
- * pulse 动画在 brightness 上做(不动 box-shadow,避免重排)。
+ * Twitter 自家 SVG 是 fill: currentColor,所以我们只需要改 button 的
+ * `color`。强制 `fill: currentColor !important` 兜底防止有些 SVG path
+ * 写死 fill。
+ *
+ * 数字 (like count) 跟 icon 同色 — Twitter 用同一个 color CSS 控制。
  */
 
 [data-lhdao-glow] {
-  position: relative;
-  border-radius: 9999px !important;
-  animation: lhdao-glow-pulse 2.4s ease-in-out infinite;
+  animation: lhdao-breath-tint 2.4s ease-in-out infinite;
 }
 
-/* Halo 收紧 — 4-10-16 而不是 6-18-36,避免在小图标周围扩散过大 */
-
-[data-lhdao-glow="like"] {
-  box-shadow:
-    0 0 4px 0 rgba(244, 63, 94, 0.55),
-    0 0 10px 2px rgba(244, 63, 94, 0.3),
-    0 0 16px 4px rgba(6, 182, 212, 0.18) !important;
+[data-lhdao-glow] svg,
+[data-lhdao-glow] svg path,
+[data-lhdao-glow] svg g {
+  fill: currentColor !important;
 }
 
-[data-lhdao-glow="retweet"] {
-  box-shadow:
-    0 0 4px 0 rgba(34, 197, 94, 0.55),
-    0 0 10px 2px rgba(34, 197, 94, 0.3),
-    0 0 16px 4px rgba(6, 182, 212, 0.18) !important;
-}
-
-[data-lhdao-glow="reply"],
-[data-lhdao-glow="comment"] {
-  box-shadow:
-    0 0 4px 0 rgba(20, 184, 166, 0.6),
-    0 0 10px 2px rgba(20, 184, 166, 0.32),
-    0 0 16px 4px rgba(6, 182, 212, 0.2) !important;
-}
-
-@keyframes lhdao-glow-pulse {
+@keyframes lhdao-breath-tint {
   0%,
   100% {
-    filter: brightness(1) saturate(1);
+    color: rgb(13, 148, 136); /* teal-600 */
+    filter: brightness(1);
   }
   50% {
-    filter: brightness(1.18) saturate(1.15);
+    color: rgb(6, 182, 212); /* cyan-500 */
+    filter: brightness(1.18);
   }
 }
 
-/* respect reduced motion */
+@media (prefers-color-scheme: dark) {
+  @keyframes lhdao-breath-tint {
+    0%,
+    100% {
+      color: rgb(45, 212, 191); /* teal-400 */
+      filter: brightness(1);
+    }
+    50% {
+      color: rgb(34, 211, 238); /* cyan-400 */
+      filter: brightness(1.2);
+    }
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-lhdao-glow] {
     animation: none;
+    color: rgb(13, 148, 136); /* 静态 teal */
   }
 }
