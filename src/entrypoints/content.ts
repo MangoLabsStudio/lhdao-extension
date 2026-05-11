@@ -6,8 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 // 等 bug)。
 import chipCss from '@/components/chip/chip.css?inline'
 import highlightCss from '@/components/chip/highlight.css?inline'
-import { MetadataBadge } from '@/components/chip/MetadataBadge'
-import { SubmitButton } from '@/components/chip/SubmitButton'
+import { TopHeaderGroup } from '@/components/chip/TopHeaderGroup'
 import { sendMessage } from '@/lib/messaging'
 import type { CampaignTaskCache } from '@/lib/storage'
 import { extractTweetIdFromArticle } from '@/lib/twitter-dom'
@@ -188,31 +187,32 @@ function mountArticle(
   }
 
   try {
-    // ② Metadata badge — 优先 User-Name 容器(@handle / 名字行,所有页面
-    // 视图都稳定存在),退而求其次找 <time>(可能在 timeline 是相对时间在
-    // 头行,在详情页是底部完整日期 — 不同位置会跑偏)。
-    const badgeAnchor = findBadgeAnchor(article)
-    if (badgeAnchor) {
-      const host = createShadowHost('lhdao-badge', 'inline')
-      // 让 badge 紧跟在 anchor 后面(同一行内联)
-      badgeAnchor.parentElement?.insertBefore(host, badgeAnchor.nextSibling)
-      const root = renderInto(host, createElement(MetadataBadge, { tasks }))
+    // ② + ④ Top header group — badge + (焦点推文 only) submit button,
+    // 一起塞到推文头部右上角 (3-dot caret 菜单的左侧)。这样视觉上
+    // "Lighthouse 任务"成为推文的元数据属性,而不是底部 action 列里
+    // 抢眼的额外按钮。
+    const focalTweetId = getFocalTweetId()
+    const isFocal = focalTweetId != null && focalTweetId === currentTweetId
+    const caretAnchor = findTopRightAnchor(article)
+    if (caretAnchor?.parentElement) {
+      const host = createShadowHost('lhdao-top', 'inline-flex')
+      host.style.alignItems = 'center'
+      host.style.marginRight = '6px'
+      caretAnchor.parentElement.insertBefore(host, caretAnchor)
+      const root = renderInto(
+        host,
+        createElement(TopHeaderGroup, { tasks, isFocal }),
+      )
       state.hosts.push(host)
       state.roots.push(root)
     }
 
-    // ③ Action button glow
-    const glowKeys = new Set<string>()
-    for (const t of tasks) {
-      for (const k of ACTION_TYPE_TO_GLOW_KEY[t.actionType] ?? []) {
-        glowKeys.add(k)
-      }
-    }
+    // ③ Action button glow — 高亮 Twitter 原生 like/retweet/reply 按钮,
+    // 引导用户先去做动作再回来 verify。
     for (const t of tasks) {
       for (const sel of ACTION_TYPE_TO_SELECTOR[t.actionType] ?? []) {
         const btn = article.querySelector(sel)
         if (btn && !btn.hasAttribute('data-lhdao-glow')) {
-          // 用第一个匹配的 glow key (例如 like / retweet / reply)
           const key = sel.includes('like')
             ? 'like'
             : sel.includes('retweet')
@@ -221,23 +221,6 @@ function mountArticle(
           btn.setAttribute('data-lhdao-glow', key)
           state.glowedButtons.push(btn)
         }
-      }
-    }
-
-    // ④ Submit button — **仅在详情页的焦点推文上注入**,timeline 卡片不显示
-    // 防止 timeline 视觉太杂。从 location.pathname 解析 /<user>/status/<id>,
-    // 命中且 tweetId 匹配当前 article 才挂。
-    const focalTweetId = getFocalTweetId()
-    const isFocal = focalTweetId != null && focalTweetId === currentTweetId
-    if (isFocal) {
-      const actionRow = findActionRow(article)
-      if (actionRow) {
-        const host = createShadowHost('lhdao-submit', 'inline-flex')
-        host.style.alignItems = 'center'
-        actionRow.appendChild(host)
-        const root = renderInto(host, createElement(SubmitButton, { tasks }))
-        state.hosts.push(host)
-        state.roots.push(root)
       }
     }
 
@@ -250,31 +233,22 @@ function mountArticle(
 }
 
 /**
- * 找一个稳定的"头部锚点"挂 Badge。期望视觉上 badge 紧跟在时间戳右边,
- * 跟 "@handle · 1小时" 在同一行内联流动。
+ * 找推文头部右上角的锚点 — 3-dot 菜单 (data-testid="caret") 的元素本身,
+ * 调用方 `insertBefore(host, caret)` 让我们的 group 出现在它左边。
  *
- * 优先级:
- *   1. [data-testid="User-Name"] 内的 <time> 元素的最近 <a>(时间戳链接,
- *      插在它后面就和 handle/dot/time 同一行)
- *   2. article 内第一个 <time>(timeline 卡片头部 fallback)
- *   3. User-Name 容器(最终兜底)
+ * fallback:有些视图 caret 在子层,用 [aria-label="More"] 也能命中。
  */
-function findBadgeAnchor(article: Element): Element | null {
-  const userName = article.querySelector('[data-testid="User-Name"]')
-  if (userName) {
-    const timeInUserName = userName.querySelector('time')
-    const timeAnchor = timeInUserName?.closest('a')
-    if (timeAnchor) return timeAnchor // 同一行,跟在时间戳后
-    if (timeInUserName) return timeInUserName as Element
-    return userName as Element // 兜底,放 User-Name 之后(新行)
-  }
-  const timeEl = article.querySelector('time')
-  return timeEl?.closest('a') ?? timeEl ?? null
+function findTopRightAnchor(article: Element): Element | null {
+  const caret =
+    article.querySelector('[data-testid="caret"]') ??
+    article.querySelector('[aria-label="More"]') ??
+    article.querySelector('button[aria-haspopup="menu"]')
+  return caret as Element | null
 }
 
-function findActionRow(article: Element): Element | null {
-  // Twitter action buttons (reply/retweet/like/...) 通常在一个 role="group"
-  // 父容器里。找包含 [data-testid="like"] 或 [data-testid="reply"] 的 group。
+// (legacy 兼容兜底:有些 article 没 caret 我们目前直接 skip 顶部注入;
+// 未来如需 fallback 到 action row,在这里加 findActionRow 实现。)
+function _legacyFindActionRow(article: Element): Element | null {
   const groups = article.querySelectorAll('[role="group"]')
   for (const g of groups) {
     if (
@@ -285,7 +259,6 @@ function findActionRow(article: Element): Element | null {
       return g
     }
   }
-  // 兜底:任意有 like 按钮的最近父元素
   const like =
     article.querySelector('[data-testid="like"]') ??
     article.querySelector('[data-testid="reply"]')
