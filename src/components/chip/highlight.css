@@ -1,0 +1,94 @@
+/*
+ * Article-level styles that live OUTSIDE Shadow DOM.
+ *
+ * 这些规则要在 x.com / twitter.com 文档级别生效 (因为目标是 Twitter 的
+ * <article> 元素本身,Shadow DOM 隔离反而碍事)。content script 启动时
+ * 通过 document.head.appendChild(<style>) 注入一次。
+ *
+ * 全部规则只在 article 显式贴了 data-lhdao-active="1" 时才生效,
+ * 取消挂载时 removeAttribute 即可恢复原貌。
+ */
+
+/* ── Article highlight ──────────────────────────────────────────── */
+
+article[data-lhdao-active="1"] {
+  background-image: linear-gradient(
+    135deg,
+    rgba(20, 184, 166, 0.06) 0%,
+    rgba(6, 182, 212, 0.02) 60%,
+    transparent 100%
+  );
+  outline: 1px solid rgba(20, 184, 166, 0.22);
+  outline-offset: -1px;
+  border-radius: 12px;
+  transition:
+    background 200ms ease,
+    outline-color 200ms ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  article[data-lhdao-active="1"] {
+    background-image: linear-gradient(
+      135deg,
+      rgba(20, 184, 166, 0.1) 0%,
+      rgba(6, 182, 212, 0.04) 60%,
+      transparent 100%
+    );
+    outline-color: rgba(20, 184, 166, 0.32);
+  }
+}
+
+/* ── Action button glow ─────────────────────────────────────────── */
+/*
+ * Twitter 的 action button 是 <button data-testid="like" | "retweet" |
+ * "reply">。我们在 content.ts 里给匹配任务类型的 button 加 data-lhdao-glow
+ * 属性,这里画 halo。
+ *
+ * 颜色按 Twitter 原生 hover 色保留(like=rose / retweet=green / reply=teal),
+ * 再叠一层 cyan 外辉光做品牌一致性。pulse 动画提示"这是该点的按钮"。
+ */
+
+[data-lhdao-glow] {
+  position: relative;
+  border-radius: 9999px !important;
+  animation: lhdao-glow-pulse 2.4s ease-in-out infinite;
+}
+
+[data-lhdao-glow="like"] {
+  box-shadow:
+    0 0 0 2px rgba(244, 63, 94, 0.55),
+    0 0 14px 2px rgba(244, 63, 94, 0.35),
+    0 0 20px 4px rgba(6, 182, 212, 0.25) !important;
+}
+
+[data-lhdao-glow="retweet"] {
+  box-shadow:
+    0 0 0 2px rgba(34, 197, 94, 0.55),
+    0 0 14px 2px rgba(34, 197, 94, 0.35),
+    0 0 20px 4px rgba(6, 182, 212, 0.25) !important;
+}
+
+[data-lhdao-glow="reply"],
+[data-lhdao-glow="comment"] {
+  box-shadow:
+    0 0 0 2px rgba(20, 184, 166, 0.6),
+    0 0 14px 2px rgba(20, 184, 166, 0.4),
+    0 0 20px 4px rgba(6, 182, 212, 0.3) !important;
+}
+
+@keyframes lhdao-glow-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.15);
+  }
+}
+
+/* respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  [data-lhdao-glow] {
+    animation: none;
+  }
+}
