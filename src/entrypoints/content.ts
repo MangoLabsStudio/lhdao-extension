@@ -6,7 +6,8 @@ import { createRoot, type Root } from 'react-dom/client'
 // 等 bug)。
 import chipCss from '@/components/chip/chip.css?inline'
 import highlightCss from '@/components/chip/highlight.css?inline'
-import { TopHeaderGroup } from '@/components/chip/TopHeaderGroup'
+import { MetadataBadge } from '@/components/chip/MetadataBadge'
+import { SubmitButton } from '@/components/chip/SubmitButton'
 import { sendMessage } from '@/lib/messaging'
 import type { CampaignTaskCache } from '@/lib/storage'
 import { extractTweetIdFromArticle } from '@/lib/twitter-dom'
@@ -64,6 +65,21 @@ interface MountedArticle {
 const mounted = new Map<string, MountedArticle>() // key = tweetId
 /** tweetId 的 get-tasks RPC await 期间的占位,防止 race 导致双挂载 */
 const inFlight = new Set<string>()
+
+/**
+ * 页面级 submit/claim 按钮的挂载状态 — 锚在底部 inline reply composer
+ * 的 [data-testid="tweetButtonInline"] 旁边。仅详情页存在(timeline 没
+ * inline composer)。生命周期跟 URL 焦点 tweetId 绑定,SPA 切换时随之
+ * 重挂。
+ */
+interface BottomMissionState {
+  host: HTMLElement
+  root: Root
+  tweetId: string
+  anchor: Element
+}
+let bottomMission: BottomMissionState | null = null
+let bottomInFlight = false
 
 // ── entrypoint ──────────────────────────────────────────────────────
 
@@ -123,6 +139,7 @@ function scheduleScan() {
   requestAnimationFrame(async () => {
     rafScheduled = false
     await scanTimeline()
+    await scanBottomMission()
   })
 }
 
@@ -187,22 +204,18 @@ function mountArticle(
   }
 
   try {
-    // ② + ④ Top header group — badge + (焦点推文 only) submit button,
-    // 一起塞到推文头部右上角 (3-dot caret 菜单的左侧)。这样视觉上
-    // "Lighthouse 任务"成为推文的元数据属性,而不是底部 action 列里
-    // 抢眼的额外按钮。
-    const focalTweetId = getFocalTweetId()
-    const isFocal = focalTweetId != null && focalTweetId === currentTweetId
+    // ② Metadata badge — 顶部右上角 (3-dot caret 菜单的左侧),展示
+    // "+N LUX" 奖励信息。Article-level 挂载,timeline 卡片和详情页都有。
+    // 注意:submit/claim 按钮**不在这里**,在底部 reply composer 旁
+    // (见下方 scanBottomMission),原因:用户做评论类任务时本来就要去
+    // 那个 textarea 打字,把 verify 按钮放在那里语境最自然。
     const caretAnchor = findTopRightAnchor(article)
     if (caretAnchor?.parentElement) {
       const host = createShadowHost('lhdao-top', 'inline-flex')
       host.style.alignItems = 'center'
       host.style.marginRight = '6px'
       caretAnchor.parentElement.insertBefore(host, caretAnchor)
-      const root = renderInto(
-        host,
-        createElement(TopHeaderGroup, { tasks, isFocal }),
-      )
+      const root = renderInto(host, createElement(MetadataBadge, { tasks }))
       state.hosts.push(host)
       state.roots.push(root)
     }
@@ -223,6 +236,12 @@ function mountArticle(
         }
       }
     }
+
+    // 注意:focal 焦点推文的 ④ submit/claim 按钮不在这里挂,而是
+    // scanBottomMission() 单独负责 — 它锚在 inline reply composer 的
+    // [data-testid="tweetButtonInline"] 旁边,这是页面级 (非 per-article)
+    // 元素,生命周期跟 URL 焦点 tweet 绑定。
+    void currentTweetId // suppress unused, 旧代码留下的参数
 
     return state
   } catch (e) {
@@ -288,6 +307,7 @@ function unmountAll() {
   }
   mounted.clear()
   inFlight.clear()
+  unmountBottomMission()
   // 兜底:清理 stale 标记(article 可能已离开 DOM)+ 拖延 host(若有)
   for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
     a.removeAttribute(ARTICLE_FLAG)
@@ -295,6 +315,79 @@ function unmountAll() {
   for (const h of document.querySelectorAll('[data-lhdao-host="1"]')) {
     h.remove()
   }
+}
+
+// ── Bottom mission — 锚在 inline reply composer 的 reply 按钮旁 ─────
+
+async function scanBottomMission() {
+  if (bottomInFlight) return
+
+  const focalTweetId = getFocalTweetId()
+  if (!focalTweetId) {
+    unmountBottomMission()
+    return
+  }
+
+  // 当前焦点 tweet 在 sessionStore 里有任务吗?
+  let tasks: CampaignTaskCache[] = []
+  bottomInFlight = true
+  try {
+    const r = await sendMessage({
+      type: 'get-tasks-for-tweet',
+      tweetId: focalTweetId,
+    })
+    if (r.type === 'tasks') tasks = r.tasks
+  } finally {
+    bottomInFlight = false
+  }
+
+  if (tasks.length === 0) {
+    unmountBottomMission()
+    return
+  }
+
+  // 找 inline reply composer 的 reply 按钮 — Twitter 用
+  // [data-testid="tweetButtonInline"] 标识。其父容器通常是 flex 行,
+  // 包含 toolbar 各种 icon button + 最右边的 reply 按钮。
+  const anchor = document.querySelector(
+    '[data-testid="tweetButtonInline"]',
+  ) as HTMLElement | null
+  if (!anchor?.parentElement) {
+    // reply composer 还没渲染出来 — scheduleScan 的后续轮次会再来
+    unmountBottomMission()
+    return
+  }
+
+  // 已经挂在正确位置 + 正确 tweetId → 跳过(避免重复挂)
+  if (
+    bottomMission &&
+    bottomMission.tweetId === focalTweetId &&
+    bottomMission.anchor === anchor &&
+    bottomMission.host.isConnected
+  ) {
+    return
+  }
+
+  // 不一致 — 拆掉重挂
+  unmountBottomMission()
+
+  const host = createShadowHost('lhdao-bottom', 'inline-flex')
+  host.style.alignItems = 'center'
+  host.style.marginRight = '8px'
+  anchor.parentElement.insertBefore(host, anchor)
+  const root = renderInto(host, createElement(SubmitButton, { tasks }))
+  bottomMission = { host, root, tweetId: focalTweetId, anchor }
+}
+
+function unmountBottomMission() {
+  if (!bottomMission) return
+  try {
+    bottomMission.root.unmount()
+  } catch {
+    // ignore
+  }
+  bottomMission.host.remove()
+  bottomMission = null
 }
 
 // ── shadow DOM helpers ──────────────────────────────────────────────
