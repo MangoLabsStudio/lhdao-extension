@@ -62,12 +62,18 @@ function flush() {
   state = null
 
   if (accumulatedMs >= 1000) {
-    // 发完即弃 — BG SW 内自己处理 token 缺失 / 网络错
-    void sendMessage({
-      type: 'record-dwell',
-      tweetId,
-      durationMs: Math.floor(accumulatedMs),
-    })
+    // 发完即弃 — BG SW 内自己处理 token 缺失 / 网络错。
+    // catch 兜住 "Extension context invalidated" (扩展被 reload),
+    // dwell tracker 不再上报但页面其他部分继续运作。
+    try {
+      void sendMessage({
+        type: 'record-dwell',
+        tweetId,
+        durationMs: Math.floor(accumulatedMs),
+      })
+    } catch {
+      // 扩展已 reload,无能为力。不喷错误。
+    }
   }
 }
 

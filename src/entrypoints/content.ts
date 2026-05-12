@@ -57,6 +57,87 @@ const mounted = new Map<string, MountedArticle>() // key = tweetId
 /** tweetId 的 get-tasks RPC await 期间的占位,防止 race 导致双挂载 */
 const inFlight = new Set<string>()
 
+/**
+ * 扩展被 reload 后, content script 跟 BG SW 的连接断了 — chrome.runtime
+ * 所有调用都会抛 "Extension context invalidated"。这时候继续扫描没意义,
+ * 错误日志还会刷屏。检测到一次就 set 这个 flag,所有 entry point 立刻
+ * 静默退出 + unmount 所有已挂的视觉元素。用户刷新页面后,新 content
+ * script 会从干净状态启动。
+ */
+let contextDead = false
+
+/**
+ * 判断 error 是不是扩展上下文失效。是的话 mark dead + cleanup,返回 true
+ * 让调用方退出当前循环。
+ */
+function handleContextError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  if (
+    !/Extension context invalidated|Receiving end does not exist/i.test(msg)
+  ) {
+    return false
+  }
+  if (!contextDead) {
+    contextDead = true
+    console.warn('[lhdao] extension reloaded — refresh this page to recover')
+    try {
+      unmountAll()
+    } catch {
+      // ignore
+    }
+    showReloadHint()
+  }
+  return true
+}
+
+/**
+ * 在页面顶部贴一个**不打扰**的小条提示用户刷新。点 × 可关闭。
+ * 直接 inline style,不依赖 chip.css / Tailwind (这时候 BG 都没了,
+ * 想动态从扩展拿资源也不可能)。
+ */
+function showReloadHint() {
+  if (document.getElementById('lhdao-reload-hint')) return
+  const banner = document.createElement('div')
+  banner.id = 'lhdao-reload-hint'
+  banner.setAttribute('role', 'status')
+  banner.style.cssText = [
+    'position: fixed',
+    'top: 12px',
+    'left: 50%',
+    'transform: translateX(-50%)',
+    'z-index: 2147483647',
+    'background: rgb(20, 184, 166)',
+    'color: white',
+    'font-size: 12.5px',
+    'font-weight: 600',
+    'font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif',
+    'padding: 6px 10px 6px 14px',
+    'border-radius: 999px',
+    'box-shadow: 0 4px 14px rgba(20, 184, 166, 0.35)',
+    'display: inline-flex',
+    'align-items: center',
+    'gap: 10px',
+    'cursor: default',
+  ].join(';')
+  banner.innerHTML = `
+    <span>🗼 Lighthouse 已更新,刷新页面继续</span>
+    <button id="lhdao-reload-btn" type="button" style="
+      background: rgba(255,255,255,0.2); color: white; border: none;
+      padding: 2px 8px; border-radius: 999px; font: inherit;
+      cursor: pointer;">刷新</button>
+    <button id="lhdao-dismiss-btn" type="button" aria-label="dismiss" style="
+      background: transparent; color: rgba(255,255,255,0.85); border: none;
+      cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;">×</button>
+  `
+  document.body.appendChild(banner)
+  banner.querySelector('#lhdao-reload-btn')?.addEventListener('click', () => {
+    location.reload()
+  })
+  banner.querySelector('#lhdao-dismiss-btn')?.addEventListener('click', () => {
+    banner.remove()
+  })
+}
+
 // (旧的 BottomMissionState 已删除 — submit 按钮现在挂在 article action
 // 行而不是 inline composer 旁,生命周期跟 article 一起,不需要单独 state)
 
@@ -138,6 +219,7 @@ function injectGlobalStyle() {
 
 let rafScheduled = false
 function scheduleScan() {
+  if (contextDead) return // 扩展已重载,继续扫只会刷屏 invalidated 错误
   if (rafScheduled) return
   rafScheduled = true
   requestAnimationFrame(async () => {
@@ -197,7 +279,13 @@ async function scanTimeline() {
         article.removeAttribute(ARTICLE_FLAG)
       }
     } catch (e) {
-      // RPC 抛异常 → 不能让 ARTICLE_FLAG 残留(否则永久 skip),清干净
+      // 扩展 reload 导致的 context invalidated → 全局停止,不再喷错误
+      if (handleContextError(e)) {
+        inFlight.delete(tweetId)
+        article.removeAttribute(ARTICLE_FLAG)
+        return // 跳出整个 scan 循环
+      }
+      // 其他 RPC 异常 → 不能让 ARTICLE_FLAG 残留(否则永久 skip),清干净
       console.warn('[lhdao] scan article failed', tweetId, e)
       article.removeAttribute(ARTICLE_FLAG)
     } finally {
