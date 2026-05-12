@@ -53,6 +53,10 @@ interface MountedArticle {
   hosts: HTMLElement[]
   roots: Root[]
   glowedButtons: Element[]
+  /** 挂载时这条 article 是否是焦点推文(URL 在 /status/<id> 上)。
+   *  用于 scanTimeline 在 SPA 导航后做 focal reconcile —— focal 状态
+   *  变了的 article 需要 unmount 重挂(添加/移除 SubmitButton)。 */
+  isFocal: boolean
 }
 
 const mounted = new Map<string, MountedArticle>() // key = tweetId
@@ -183,7 +187,12 @@ export default defineContentScript({
       // 通知 dwell tracker URL 变了 — 切走当前 tweet 则 flush 上报,
       // 切到新 tweet 则开始累积。
       onDwellUrlChange(getFocalTweetId())
-      unmountAll()
+      // 不再 unmountAll() — 那会让所有 article 闪一下再挂回来。
+      // 让 scanTimeline 里的 focal-reconcile 自己处理:
+      //   - 旧焦点 article 的 state.isFocal=true 但当前 URL 焦点变了
+      //     → reconcile 检测到不一致,unmount 它(去掉 SubmitButton)
+      //   - 新焦点 article 同理,unmount 然后下一帧 scan 重挂(加 button)
+      // 4 次延时 scan 留着,detail 页 article DOM 渲染晚需要重试。
       scheduleScan()
       setTimeout(scheduleScan, 100)
       setTimeout(scheduleScan, 400)
@@ -191,20 +200,22 @@ export default defineContentScript({
       setTimeout(scheduleScan, 2000)
     })
 
-    // 每 3 秒兜底 safety sweep — 防 MutationObserver 漏触发 / DOM 重渲染
-    // 导致的"识别不准 / 没高亮"边界情况。scan 内部有 mounted/inFlight 去重,
-    // 多扫无副作用。同时清理 stale ARTICLE_FLAG(article 在 DOM 但没挂)。
+    // 每 5 秒兜底 safety sweep —— 只做 stale flag 清理,**不再主动**
+    // scheduleScan。
+    //
+    // 原因:MutationObserver 监听 document.body 的 childList+subtree 已
+    // 经覆盖了 99% 的场景。主动 scheduleScan 在 timeline 静止时也强行
+    // 扫一遍,加大了"高亮闪动"的发生概率(任何 scan 都可能触发 focal
+    // reconcile / DOM 操作)。让 observer + URL 变化 / tasks-updated
+    // 广播来驱动扫描,sweep 只负责清残留属性。
     setInterval(() => {
-      // 清扫 stale ARTICLE_FLAG:有 flag 但 mounted Map 里没记录的 article
-      // 说明上次扫挂失败但 flag 残留,移除让下面 scan 重新尝试
       for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
         const tweetId = extractTweetIdFromArticle(a)
         if (tweetId && !mounted.has(tweetId) && !inFlight.has(tweetId)) {
           a.removeAttribute(ARTICLE_FLAG)
         }
       }
-      scheduleScan()
-    }, 3000)
+    }, 5000)
 
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'tasks-updated') {
@@ -240,13 +251,23 @@ function scheduleScan() {
 }
 
 async function scanTimeline() {
-  // —— 1. 清扫 stale 挂载 ———————————————————————————————————————
-  // Twitter SPA 导航时同一条 tweetId 可能换 article DOM 节点 (timeline
-  // 卡片 → 详情页 article)。旧的 article.isConnected === false,需要主动
-  // 从 mounted Map 移除,否则后续新 article 因为 mounted.has(tweetId) 命中
-  // 被跳过 → 用户进详情页插件不渲染,要刷新才出。
+  // —— 1. 清扫 stale 挂载 + focal 状态 reconcile ─────────────────
+  // 两种需要重新挂的情况:
+  //   a) Twitter SPA 把同 tweetId 的 article DOM 换了节点(timeline 卡
+  //      → 详情页 article)。旧的 article.isConnected === false。
+  //   b) URL 焦点切了(/status/<a> → /status/<b> 或退到 /home),
+  //      旧焦点 article 需要去掉 SubmitButton,新焦点需要补上
+  //      SubmitButton。用 state.isFocal !== 当前 isFocal 判定。
+  //
+  // 历史教训:不要在 watchUrlChanges 里 unmountAll() — 那样把所有
+  // article 一齐清掉、4 个延时 scheduleScan 把它们一个个挂回来,
+  // 视觉上就是"高亮在多条推文间陆续闪现"。改成只 unmount **focal
+  // 状态变了的那几条**,稳定不闪。
+  const currentFocal = getFocalTweetId()
   for (const [tweetId, state] of mounted.entries()) {
-    if (!state.article.isConnected) {
+    const stale = !state.article.isConnected
+    const focalChanged = state.isFocal !== (currentFocal === tweetId)
+    if (stale || focalChanged) {
       unmountArticle(state)
       mounted.delete(tweetId)
     }
@@ -317,11 +338,15 @@ function mountArticle(
   tasks: CampaignTaskCache[],
   currentTweetId: string,
 ): MountedArticle | null {
+  const focalTweetId = getFocalTweetId()
+  const isFocal = focalTweetId != null && focalTweetId === currentTweetId
+
   const state: MountedArticle = {
     article,
     hosts: [],
     roots: [],
     glowedButtons: [],
+    isFocal,
   }
 
   try {
@@ -367,8 +392,6 @@ function mountArticle(
     //   - action 行 (reply / RT / like / share) 是焦点推文的稳定子节点,
     //     用户点 reply 后这一行**仍然可见**(模态在上方覆盖,article 没卸)
     //   - 视觉上也紧挨用户要做的 like / RT / reply 按钮,做完动作不用挪眼
-    const focalTweetId = getFocalTweetId()
-    const isFocal = focalTweetId != null && focalTweetId === currentTweetId
     if (isFocal) {
       const actionRow = findActionRow(article)
       if (actionRow) {
