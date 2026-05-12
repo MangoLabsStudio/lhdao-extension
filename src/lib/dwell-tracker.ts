@@ -1,21 +1,27 @@
 import { sendMessage } from './messaging'
 
 /**
- * Dwell time tracker — 累积当前推文详情页"可见"时长,在用户离开时上报。
+ * Dwell time tracker — 累积当前推文详情页"可见"时长,在用户离开 / 关 tab
+ * 时上报,以及每 30 秒部分上报一次(heartbeat,防极端情况丢数据)。
  *
- * 设计:
- *  - 只有 document.visibilityState === 'visible' 时累积(切后台 / 最小化 /
- *    切 tab 都暂停)
- *  - 1 秒以下的会话不上报(过滤误触)
- *  - 切到新推文 / 关 tab / SPA 离开都触发 end → flush
- *  - 上报失败由 BG SW 静默吞掉(用户没绑 token / 网络问题都不打扰)
+ * 设计要点:
  *
- * 用户隐私边界(写在这里给 reviewer 看):
- *  - 仅对 /<user>/status/<id> URL 触发
- *  - 数据 (tweetId + durationMs) 仅发到 lhdao 后端,无第三方
- *  - 没有 opt-out — 默认开启(产品决策)
- *  - 未绑 token 的用户实际无法上报(BG SW 会丢弃),构成隐性 opt-in
+ *  - **只**用 `visibilitychange` 判定 pause/resume,不绑 blur/focus —
+ *    blur 会在用户切到 DevTools 或其他 OS 窗口时错误暂停,严重欠采集。
+ *    visibility 只在 tab 真后台 / 最小化时为 hidden,语义最合理。
+ *  - 500ms 起步过滤(之前 1s,后改成 500ms 多收集快速划过的会话)。
+ *  - 30s heartbeat:长 session 期间每 30 秒"部分 flush"一次(发出后
+ *    清零累积器,继续计时)。这样浏览器崩溃 / 强关 tab 也只丢最后 30s,
+ *    而不是整段 session。
+ *  - 多条 partial 记录在 backend 侧聚合(SUM durationMs by user+tweet)。
+ *
+ * 隐私边界:仅对 /<user>/status/<id> URL 触发,仅发到 lhdao 自家后端,
+ * 默认开启无 opt-out(产品决策)。未绑 token 的用户实际无法上报(BG
+ * SW 会丢弃),构成隐性 opt-in。
  */
+
+const MIN_DURATION_MS = 500
+const HEARTBEAT_MS = 30_000
 
 interface DwellState {
   tweetId: string
@@ -26,6 +32,7 @@ interface DwellState {
 }
 
 let state: DwellState | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
 function pause() {
   if (state?.lastVisibleAt) {
@@ -49,22 +56,61 @@ function startNew(tweetId: string) {
     accumulatedMs: 0,
     lastVisibleAt: document.visibilityState === 'visible' ? Date.now() : null,
   }
+  console.debug('[lhdao dwell] start', tweetId)
+  if (!heartbeatTimer) {
+    heartbeatTimer = setInterval(heartbeat, HEARTBEAT_MS)
+  }
 }
 
 /**
- * 结算当前 dwell,如果累积时长 ≥ 1s,通过 BG SW 上报后端。无论是否上报,
- * state 被清空。允许多次调用(幂等)。
+ * 30 秒一次部分 flush — 把当前累积时长发出去,然后**清零累积器继续计时**。
+ * 长 session 会变成多条记录(后端 SUM 聚合得到总时长)。
+ *
+ * 极端场景保护:用户读了 5 分钟 → 浏览器崩溃 / 强关 tab → pagehide 没
+ * 触发 → 整段会丢。有 heartbeat 后只丢最后 30s 内的,前面的都安全。
+ */
+function heartbeat() {
+  if (!state) {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+    return
+  }
+  pause() // 把当前未结束的 visible 段算入 accumulatedMs
+  const ms = state.accumulatedMs
+  if (ms >= MIN_DURATION_MS) {
+    console.debug('[lhdao dwell] heartbeat', state.tweetId, ms, 'ms (partial)')
+    try {
+      void sendMessage({
+        type: 'record-dwell',
+        tweetId: state.tweetId,
+        durationMs: Math.floor(ms),
+      })
+    } catch {
+      // ignore — 扩展已 reload 等,无能为力
+    }
+  }
+  // 清零继续计时(下个 30s 又是一个新 segment)
+  state.accumulatedMs = 0
+  resume()
+}
+
+/**
+ * 结算当前 dwell 并清空 state。≥ 500ms 才发后端。
  */
 function flush() {
   if (!state) return
-  pause() // 把当前未结束的 visible 段记入 accumulatedMs
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
+  pause()
   const { tweetId, accumulatedMs } = state
   state = null
 
-  if (accumulatedMs >= 1000) {
-    // 发完即弃 — BG SW 内自己处理 token 缺失 / 网络错。
-    // catch 兜住 "Extension context invalidated" (扩展被 reload),
-    // dwell tracker 不再上报但页面其他部分继续运作。
+  if (accumulatedMs >= MIN_DURATION_MS) {
+    console.debug('[lhdao dwell] flush', tweetId, accumulatedMs, 'ms (final)')
     try {
       void sendMessage({
         type: 'record-dwell',
@@ -72,27 +118,34 @@ function flush() {
         durationMs: Math.floor(accumulatedMs),
       })
     } catch {
-      // 扩展已 reload,无能为力。不喷错误。
+      // 扩展已 reload 等极端场景,无能为力
     }
+  } else {
+    console.debug(
+      '[lhdao dwell] skip',
+      tweetId,
+      accumulatedMs,
+      'ms (< 500ms threshold)',
+    )
   }
 }
 
 /**
- * 给 content script 入口调一次。绑定 visibilitychange / focus / blur /
- * pagehide / beforeunload。
+ * 给 content script 入口调一次。绑定 visibilitychange / pagehide /
+ * beforeunload。
  *
- * **不**自动启动 tracking — 启动靠 onFocalTweetChange()。
+ * **不绑 blur/focus** — 用户切到其他窗口但 tab 仍 visible 时,blur 会
+ * 错误暂停,严重欠采集。只用 visibilitychange 判定 tab 是否真后台/最小化。
+ *
+ * **不**自动启动 tracking — 启动靠 onDwellUrlChange()。
  */
 export function initDwellTracker() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') resume()
     else pause()
   })
-  // window blur/focus 比 visibilitychange 粒度更细 (visibilitychange 只
-  // 在 tab 真的隐藏时触发,blur 在窗口失焦时即触发)
-  window.addEventListener('blur', pause)
-  window.addEventListener('focus', resume)
-  // pagehide 比 beforeunload 更可靠(后者不一定触发,尤其 navigate 时)
+  // pagehide 比 beforeunload 更可靠(后者不一定触发,尤其 SPA navigate);
+  // 但两个都绑,多一道保险。
   window.addEventListener('pagehide', flush)
   window.addEventListener('beforeunload', flush)
 }
