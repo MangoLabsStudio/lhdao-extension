@@ -376,13 +376,51 @@ async function scanBottomMission() {
   }
 
   // 找 inline reply composer 的 reply 按钮 — Twitter 用
-  // [data-testid="tweetButtonInline"] 标识。其父容器通常是 flex 行,
-  // 包含 toolbar 各种 icon button + 最右边的 reply 按钮。
+  // [data-testid="tweetButtonInline"] 标识。直接 parent 通常是**垂直**
+  // 小容器(只包按钮自身),要往上走找到真正的横排 flex 容器才能让
+  // claim 跟 reply 在同一行 (用户反馈"claim 出现在 reply 按钮上方")。
   const anchor = document.querySelector(
     '[data-testid="tweetButtonInline"]',
   ) as HTMLElement | null
-  if (!anchor?.parentElement) {
-    // reply composer 还没渲染出来 — scheduleScan 的后续轮次会再来
+  if (!anchor) {
+    unmountBottomMission()
+    return
+  }
+
+  // 沿父链向上找横排 flex 容器,最多走 5 层(避免误升到 dialog / form
+  // 等大容器)。找到后:
+  //   - row    = 横排 flex 容器
+  //   - cell   = row 下面那个**直接包含** anchor 的子节点(可能是
+  //              anchor 自己,也可能是中间垂直容器)
+  // 然后 row.insertBefore(host, cell) 把 host 摆在 reply 按钮所在 cell
+  // **左边**,跟 reply 同排。
+  let cell: HTMLElement = anchor
+  let row: HTMLElement | null = null
+  for (let i = 0; i < 5; i++) {
+    const parent = cell.parentElement as HTMLElement | null
+    if (!parent) break
+    const cs = window.getComputedStyle(parent)
+    const dir = cs.flexDirection
+    if (
+      (cs.display === 'flex' || cs.display === 'inline-flex') &&
+      dir !== 'column' &&
+      dir !== 'column-reverse'
+    ) {
+      row = parent
+      break
+    }
+    cell = parent
+    if (parent.tagName === 'FORM' || parent === document.body) break
+  }
+
+  if (!row) {
+    // 没找到横排容器 (Twitter 改了 DOM),退化到原行为:塞在 anchor 同
+    // parent 里,可能堆叠但至少能看见
+    row = anchor.parentElement
+    cell = anchor
+  }
+
+  if (!row) {
     unmountBottomMission()
     return
   }
@@ -403,7 +441,7 @@ async function scanBottomMission() {
   const host = createShadowHost('lhdao-bottom', 'inline-flex')
   host.style.alignItems = 'center'
   host.style.marginRight = '8px'
-  anchor.parentElement.insertBefore(host, anchor)
+  row.insertBefore(host, cell)
   const root = renderInto(host, createElement(SubmitButton, { tasks }))
   bottomMission = { host, root, tweetId: focalTweetId, anchor }
 }
