@@ -430,6 +430,15 @@ function diagnoseSyncError(
       hint: '部署的后端 schema 缺少 availableEngagements 字段,可能 Railway 没部署到最新 dev。',
     }
   }
+  // jwt malformed = 存的 token 不以 lhdao_pk_ 开头,被后端当 JWT 解析失败。
+  // 大概率是早期版本残留 token / 粘贴时缺前缀 / 误粘了 cookie 里的 JWT。
+  if (/jwt malformed|invalid signature|jwt expired/i.test(err)) {
+    return {
+      title: 'Token 格式不对',
+      hint: '存的不是合法 plugin token(必须以 lhdao_pk_ 开头)。点 "去配置" 解绑后重新粘贴。',
+      action: 'reconfigure',
+    }
+  }
   if (/Network error|Failed to fetch/i.test(err)) {
     return {
       title: '网络 / CORS 错误',
