@@ -280,13 +280,18 @@ async function scanTimeline() {
         continue
       }
       const state = mountArticle(article, r.tasks, tweetId)
-      // hosts === 0 说明 caret 没找到 / 关键 anchor 缺失,等于啥都没挂。
-      // 放进 mounted Map 会永远 dedup,所以这种情况清掉 flag 等下次 scan
-      // 时 DOM 可能已经稳定,再重试。
-      if (state && state.hosts.length > 0) {
+      // 即使 hosts.length === 0(caret 没找到/广告卡/Spaces 等异形 article)
+      // 也要进 mounted Map + 保留 ARTICLE_FLAG。glow 属性已经贴在原生
+      // like/RT/reply 按钮上,部分挂载也算成功,放回 Map 让后续 stale
+      // cleanup 能清。
+      //
+      // 历史 bug:这里曾在 hosts.length===0 时 unmountArticle(清 glow)+
+      // 清 flag,导致 Twitter 在 article 子树里任何 DOM 变更(媒体懒加载/
+      // 计数刷新)触发 MutationObserver → 同条 article 又被扫到 → 又贴
+      // glow → 又清 → ......高亮在所有"异形 article"上肉眼可见的闪动。
+      if (state) {
         mounted.set(tweetId, state)
       } else {
-        if (state) unmountArticle(state) // 清理已经贴的 glow 属性
         article.removeAttribute(ARTICLE_FLAG)
       }
     } catch (e) {
