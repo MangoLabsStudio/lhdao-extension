@@ -49,6 +49,11 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       type
       mode
       targetUrl
+      tweetId
+      tweetText
+      tweetAuthorName
+      tweetAuthorHandle
+      tweetAuthorAvatar
       keywords
       expectedReward
       effectiveTier
@@ -68,6 +73,11 @@ export interface AvailableEngagement {
   type: string
   mode: string
   targetUrl: string | null
+  tweetId: string | null
+  tweetText: string | null
+  tweetAuthorName: string | null
+  tweetAuthorHandle: string | null
+  tweetAuthorAvatar: string | null
   keywords: string[]
   /** 用户级联后实际能拿到的总奖励 (LUX),后端 listAvailableCampaigns 计算 */
   expectedReward: number | null

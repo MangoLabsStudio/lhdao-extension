@@ -7,7 +7,7 @@
  *   - 单向广播(BG → CS)用 `tasks-updated`,响应永远是 `ack`
  */
 
-import type { CampaignTaskCache } from '@/lib/storage'
+import type { ActiveCampaignSummary, CampaignTaskCache } from '@/lib/storage'
 
 // ── Requests (CS → BG, 偶尔反向) ─────────────────────────────────────
 
@@ -27,6 +27,8 @@ export type MsgRequest =
   | { type: 'force-sync' }
   /** content script 上报推文详情页停留时长 (anti-cheat 信号) */
   | { type: 'record-dwell'; tweetId: string; durationMs: number }
+  /** sidebar 卡片询问当前可抢 ENGAGEMENT campaign 列表 */
+  | { type: 'get-active-campaigns' }
   /** BG → CS 广播:任务列表已更新,请重新查询 */
   | { type: 'tasks-updated' }
 
@@ -46,6 +48,7 @@ export type MsgResponse =
   | { type: 'submit-result'; ok: true; reward: number }
   | { type: 'submit-result'; ok: false; code: SubmitErrorCode; message: string }
   | { type: 'token-status'; configured: boolean }
+  | { type: 'active-campaigns'; campaigns: ActiveCampaignSummary[] }
   | {
       type: 'sync-result'
       ok: true

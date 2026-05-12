@@ -27,6 +27,31 @@ interface SessionSchema {
   lastSyncError: string | null
   /** 上次同步的错误对应 HTTP status (401/403/...);非 HTTP 错误为 null */
   lastSyncHttpStatus: number | null
+  /** 当前用户可抢的全部 ENGAGEMENT campaign 摘要,sidebar 卡片用 */
+  activeCampaigns: ActiveCampaignSummary[]
+}
+
+/** Sidebar 列表卡片单条数据 — 展示用,跟 chip 用的 task cache 解耦 */
+export interface ActiveCampaignSummary {
+  campaignId: string
+  /** 用户级联后实际能拿到的总奖励 */
+  rewardLux: number
+  /** 该 campaign 涉及的动作类型集合 (LIKE / RT / COMMENT / COMMENT_LIKE) */
+  actionTypes: CampaignTaskCache['actionType'][]
+  /** 目标推文 id (URL 抽出),供点击卡片跳转 */
+  tweetId: string
+  /** 目标推文完整 URL (https://x.com/<user>/status/<id>) */
+  targetUrl: string
+  /** 推文作者 display name,可能 null (尚未被 hourly cron 抓到) */
+  authorName: string | null
+  /** 推文作者 handle (无 @) */
+  authorHandle: string | null
+  /** 推文作者头像 URL */
+  authorAvatar: string | null
+  /** 推文正文摘要 (前 100 字符) */
+  tweetPreview: string | null
+  /** COMMENT 类任务的关键字提示 */
+  commentKeyword: string | null
 }
 
 /**

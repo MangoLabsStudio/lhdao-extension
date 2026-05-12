@@ -8,6 +8,8 @@ import chipCss from '@/components/chip/chip.css?inline'
 import highlightCss from '@/components/chip/highlight.css?inline'
 import { MetadataBadge } from '@/components/chip/MetadataBadge'
 import { SubmitButton } from '@/components/chip/SubmitButton'
+import { SidebarCard } from '@/components/sidebar/SidebarCard'
+import sidebarCss from '@/components/sidebar/sidebar.css?inline'
 import { initDwellTracker, onDwellUrlChange } from '@/lib/dwell-tracker'
 import { sendMessage } from '@/lib/messaging'
 import type { CampaignTaskCache } from '@/lib/storage'
@@ -56,6 +58,14 @@ interface MountedArticle {
 const mounted = new Map<string, MountedArticle>() // key = tweetId
 /** tweetId 的 get-tasks RPC await 期间的占位,防止 race 导致双挂载 */
 const inFlight = new Set<string>()
+
+/** Sidebar 卡片单例挂载状态 (Twitter 任何页面只有一个右侧 sidebar) */
+interface SidebarMountedState {
+  host: HTMLElement
+  root: Root
+  anchor: Element
+}
+let sidebarMounted: SidebarMountedState | null = null
 
 /**
  * 扩展被 reload 后, content script 跟 BG SW 的连接断了 — chrome.runtime
@@ -225,6 +235,7 @@ function scheduleScan() {
   requestAnimationFrame(async () => {
     rafScheduled = false
     await scanTimeline()
+    scanSidebar()
   })
 }
 
@@ -432,6 +443,7 @@ function unmountAll() {
   }
   mounted.clear()
   inFlight.clear()
+  unmountSidebar()
   // 兜底:清理 stale 标记(article 可能已离开 DOM)+ 拖延 host(若有)
   for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
     a.removeAttribute(ARTICLE_FLAG)
@@ -439,6 +451,111 @@ function unmountAll() {
   for (const h of document.querySelectorAll('[data-lhdao-host="1"]')) {
     h.remove()
   }
+}
+
+// ── Sidebar card injection ──────────────────────────────────────────
+
+/**
+ * 找 Twitter 右侧 sidebar 的"订阅 Premium"卡片(或 "Subscribe to
+ * Premium"英文版),作为 anchor 插我们卡片到它**上方**。
+ *
+ * 探测策略(任一命中即返回):
+ *   1. [data-testid="sidebarColumn"] 内含 "订阅 Premium"/"Premium"/
+ *      "Subscribe" 文本的最近 section/div
+ *   2. [aria-label*="Premium"] 元素 (升级 banner 自身)
+ *   3. 兜底:sidebarColumn 内第一个 section
+ */
+function findSidebarPremiumAnchor(): {
+  anchor: Element
+  parent: Element
+} | null {
+  const sidebar = document.querySelector('[data-testid="sidebarColumn"]')
+  if (!sidebar) return null
+
+  // 候选 1: aria-label
+  const premiumByAria = sidebar.querySelector(
+    'aside[aria-label*="Premium" i], section[aria-label*="Premium" i]',
+  )
+  if (premiumByAria?.parentElement) {
+    return { anchor: premiumByAria, parent: premiumByAria.parentElement }
+  }
+
+  // 候选 2: 找 sidebar 内含有"Premium"文本的最外层卡片块
+  // Twitter sidebar 内部结构通常是嵌套 div,卡片之间是 flex column sibling。
+  // 找文本节点再向上爬到 parent of "search box section"
+  const candidates = sidebar.querySelectorAll('section, aside, div')
+  for (const el of candidates) {
+    if (
+      el.children.length > 0 &&
+      el.parentElement &&
+      /订阅\s*Premium|Subscribe to Premium|Subscribe\s*$/i.test(
+        el.textContent?.slice(0, 100) ?? '',
+      )
+    ) {
+      // 向上找到 sidebar 下"卡片级"的容器 — 通常是 sidebar 的孙子级
+      let card: Element = el
+      while (
+        card.parentElement &&
+        card.parentElement !== sidebar &&
+        !card.parentElement.matches('[data-testid="sidebarColumn"] > div')
+      ) {
+        card = card.parentElement
+        // 不向上超过 5 层防越界
+        if (card.parentElement === sidebar) break
+      }
+      if (card.parentElement) {
+        return { anchor: card, parent: card.parentElement }
+      }
+    }
+  }
+
+  // 候选 3 (兜底):sidebar 内第一个 section
+  const firstSection = sidebar.querySelector('section')
+  if (firstSection?.parentElement) {
+    return { anchor: firstSection, parent: firstSection.parentElement }
+  }
+
+  return null
+}
+
+function scanSidebar() {
+  if (contextDead) return
+
+  // 已经挂好且 anchor 仍在 DOM → 不动
+  if (
+    sidebarMounted &&
+    sidebarMounted.host.isConnected &&
+    sidebarMounted.anchor.isConnected
+  ) {
+    return
+  }
+
+  // 老 host 失效 → 拆掉
+  if (sidebarMounted && !sidebarMounted.host.isConnected) {
+    unmountSidebar()
+  }
+
+  // 找新 anchor
+  const found = findSidebarPremiumAnchor()
+  if (!found) return // sidebar 还没渲染出来,下一轮 scan 再来
+
+  const host = createShadowHost('lhdao-sidebar', 'inline')
+  host.style.display = 'block'
+  host.style.width = '100%'
+  found.parent.insertBefore(host, found.anchor)
+  const root = renderInto(host, createElement(SidebarCard), sidebarCss)
+  sidebarMounted = { host, root, anchor: found.anchor }
+}
+
+function unmountSidebar() {
+  if (!sidebarMounted) return
+  try {
+    sidebarMounted.root.unmount()
+  } catch {
+    // ignore
+  }
+  sidebarMounted.host.remove()
+  sidebarMounted = null
 }
 
 // ── shadow DOM helpers ──────────────────────────────────────────────
@@ -485,10 +602,14 @@ function watchUrlChanges(cb: () => void) {
   }
 }
 
-function renderInto(host: HTMLElement, node: React.ReactNode): Root {
+function renderInto(
+  host: HTMLElement,
+  node: React.ReactNode,
+  css: string = chipCss,
+): Root {
   const shadow = host.attachShadow({ mode: 'open' })
   const style = document.createElement('style')
-  style.textContent = chipCss
+  style.textContent = css
   shadow.appendChild(style)
   const mountPoint = document.createElement('div')
   shadow.appendChild(mountPoint)

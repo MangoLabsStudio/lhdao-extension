@@ -11,7 +11,12 @@ import {
   VERIFY_ENGAGEMENT_MUTATION,
   type VerifyEngagementResult,
 } from '@/lib/queries'
-import { type CampaignTaskCache, localStore, sessionStore } from '@/lib/storage'
+import {
+  type ActiveCampaignSummary,
+  type CampaignTaskCache,
+  localStore,
+  sessionStore,
+} from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import type { MsgResponse, SubmitErrorCode } from '@/types/messages'
 
@@ -60,6 +65,10 @@ export default defineBackground(() => {
       // fire-and-forget: 失败不影响用户,只 console.warn
       void recordDwell(req.tweetId, req.durationMs)
       return { type: 'ack' }
+    }
+    if (req.type === 'get-active-campaigns') {
+      const campaigns = (await sessionStore.get('activeCampaigns')) ?? []
+      return { type: 'active-campaigns', campaigns }
     }
     if (req.type === 'has-token') {
       const token = await localStore.get('apiToken')
@@ -115,6 +124,7 @@ async function syncTasks(): Promise<void> {
   if (!token) {
     // 没 token 就清空缓存,避免遗留旧任务被点击
     await sessionStore.set('tasksByTweetId', {})
+    await sessionStore.set('activeCampaigns', [])
     await sessionStore.set('lastSyncError', 'No API token configured')
     await sessionStore.set('lastSyncHttpStatus', null)
     return
@@ -125,7 +135,11 @@ async function syncTasks(): Promise<void> {
       AVAILABLE_ENGAGEMENTS_QUERY,
     )
     const map = flattenTasks(data.availableEngagements)
+    const activeCampaigns = buildActiveCampaignSummaries(
+      data.availableEngagements,
+    )
     await sessionStore.set('tasksByTweetId', map)
+    await sessionStore.set('activeCampaigns', activeCampaigns)
     await sessionStore.set('lastSyncAt', Date.now())
     await sessionStore.set('lastSyncError', null)
     await sessionStore.set('lastSyncHttpStatus', null)
@@ -138,6 +152,67 @@ async function syncTasks(): Promise<void> {
     console.warn('[lhdao] sync failed', e)
     // 不清空缓存 — 网络抖动时旧数据比空数据更可用
   }
+}
+
+/**
+ * 把后端 engagement 列表整理成 sidebar 卡片用的精简 summary。
+ *
+ * 跟 flattenTasks 平行:flattenTasks 给推文页 chip 用 (per-tweetId),
+ * 这个给 sidebar 列表用 (per-campaign)。两者**字段不同但来源相同**,
+ * 一次 sync 同时算好。
+ *
+ * 过滤:
+ *  - 非 ENGAGEMENT 类型
+ *  - 没有 targetUrl / tweetId
+ *  - actions 全是 unsupported 类型
+ */
+function buildActiveCampaignSummaries(
+  engagements: AvailableEngagementsResult['availableEngagements'],
+): ActiveCampaignSummary[] {
+  const result: ActiveCampaignSummary[] = []
+  for (const c of engagements) {
+    if (c.type !== 'ENGAGEMENT') continue
+    const tweetId =
+      c.tweetId ?? (c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null)
+    if (!tweetId || !c.targetUrl) continue
+
+    const supportedActions = c.actions.filter((a) =>
+      SUPPORTED_ACTIONS.has(a.actionType),
+    )
+    if (supportedActions.length === 0) continue
+
+    // dedupe action types
+    const actionTypes = Array.from(
+      new Set(supportedActions.map((a) => a.actionType)),
+    )
+
+    // COMMENT 关键字提示
+    const isCommentish = actionTypes.some(
+      (t) => t === 'COMMENT' || t === 'COMMENT_LIKE',
+    )
+    const commentKeyword = isCommentish ? (c.keywords?.[0] ?? null) : null
+
+    // 文本预览 (前 100 字符)
+    const tweetPreview = c.tweetText ? c.tweetText.slice(0, 100) : null
+
+    result.push({
+      campaignId: c.id,
+      rewardLux:
+        c.expectedReward ??
+        supportedActions.reduce((acc, a) => acc + a.baseReward, 0),
+      actionTypes,
+      tweetId,
+      targetUrl: c.targetUrl,
+      authorName: c.tweetAuthorName ?? null,
+      authorHandle: c.tweetAuthorHandle ?? null,
+      authorAvatar: c.tweetAuthorAvatar ?? null,
+      tweetPreview,
+      commentKeyword,
+    })
+  }
+  // 按奖励降序排,高价值任务靠前
+  result.sort((a, b) => b.rewardLux - a.rewardLux)
+  return result
 }
 
 /**

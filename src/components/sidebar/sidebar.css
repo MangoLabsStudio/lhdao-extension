@@ -1,0 +1,283 @@
+@import 'tailwindcss';
+
+/*
+ * Sidebar 卡片 Shadow DOM 内部样式表。
+ * 跟 chip.css 一样,通过 ?inline 导入让 Vite 编译 Tailwind 输出后注入。
+ *
+ * 设计目标:**贴近 Twitter sidebar 卡片视觉风格**,但用品牌色 accent。
+ *  - 圆角 16px,跟 X 自家 sidebar 卡片一致
+ *  - 浅色模式白底 + 1px 微 border;深色模式 #15202b / #1e2732
+ *  - 跟 Twitter 自家卡片同 padding 16px
+ *  - 标题用 17px 大字 (跟 X 的 trending 标题对齐)
+ */
+
+:host {
+  all: initial;
+  display: block;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'PingFang SC',
+    'Hiragino Sans',
+    sans-serif;
+  color-scheme: light dark;
+  margin-bottom: 16px;
+}
+
+:host *,
+:host *::before,
+:host *::after {
+  box-sizing: border-box;
+}
+
+:host svg {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* ── card ────────────────────────────────────────────────────────── */
+
+.lhdao-sidebar-card {
+  background: white;
+  border: 1px solid rgb(239 243 244);
+  border-radius: 16px;
+  padding: 12px 16px 8px;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-card {
+    background: rgb(22 24 28);
+    border-color: rgb(47 51 54);
+  }
+}
+
+/* ── header ──────────────────────────────────────────────────────── */
+
+.lhdao-sidebar-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid rgb(239 243 244);
+  margin-bottom: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-card-header {
+    border-color: rgb(47 51 54);
+  }
+}
+
+.lhdao-sidebar-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 19px;
+  font-weight: 800;
+  color: rgb(15 23 42);
+  letter-spacing: -0.01em;
+}
+.lhdao-sidebar-card-title svg {
+  color: rgb(20 184 166);
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-card-title {
+    color: rgb(231 233 234);
+  }
+  .lhdao-sidebar-card-title svg {
+    color: rgb(45 212 191);
+  }
+}
+
+.lhdao-sidebar-card-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgb(13 148 136);
+  background: oklch(0.97 0.04 195);
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-card-pill {
+    color: rgb(45 212 191);
+    background: oklch(0.28 0.06 195 / 0.35);
+  }
+}
+
+/* ── list ────────────────────────────────────────────────────────── */
+
+.lhdao-sidebar-card-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lhdao-sidebar-row {
+  margin: 0;
+  padding: 0;
+}
+
+.lhdao-sidebar-row-link {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.lhdao-sidebar-row-link:hover {
+  background: oklch(0.97 0.025 195);
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-row-link:hover {
+    background: rgb(30 39 50);
+  }
+}
+
+.lhdao-sidebar-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.lhdao-sidebar-row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lhdao-sidebar-row-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: rgb(15 23 42);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-row-name {
+    color: rgb(231 233 234);
+  }
+}
+
+.lhdao-sidebar-row-handle {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: rgb(83 100 113);
+  margin-left: 4px;
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-row-handle {
+    color: rgb(113 118 123);
+  }
+}
+
+.lhdao-sidebar-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.lhdao-sidebar-action-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgb(239 243 244);
+  color: rgb(15 23 42);
+  font-weight: 700;
+  white-space: nowrap;
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-action-chip {
+    background: rgb(39 51 64);
+    color: rgb(231 233 234);
+  }
+}
+
+.lhdao-sidebar-row-keyword {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: oklch(0.96 0.025 25);
+  color: rgb(225 29 72);
+  font-weight: 700;
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-row-keyword {
+    background: oklch(0.3 0.08 25 / 0.5);
+    color: rgb(251 113 133);
+  }
+}
+
+.lhdao-sidebar-row-reward {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: rgb(13 148 136);
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-row-reward {
+    color: rgb(45 212 191);
+  }
+}
+.lhdao-sidebar-row-reward-num {
+  font-size: 14.5px;
+  font-weight: 800;
+}
+.lhdao-sidebar-row-reward-unit {
+  font-size: 9.5px;
+  font-weight: 500;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+
+/* ── "查看全部" footer ────────────────────────────────────────────── */
+
+.lhdao-sidebar-card-more {
+  display: block;
+  padding: 8px 10px;
+  margin-top: 4px;
+  text-align: center;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: rgb(13 148 136);
+  text-decoration: none;
+  border-radius: 10px;
+  transition: background-color 120ms ease;
+}
+.lhdao-sidebar-card-more:hover {
+  background: oklch(0.97 0.025 195);
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-sidebar-card-more {
+    color: rgb(45 212 191);
+  }
+  .lhdao-sidebar-card-more:hover {
+    background: rgb(30 39 50);
+  }
+}
