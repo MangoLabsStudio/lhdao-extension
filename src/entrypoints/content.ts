@@ -522,11 +522,7 @@ function scanSidebar() {
   if (contextDead) return
 
   // 已经挂好且 anchor 仍在 DOM → 不动
-  if (
-    sidebarMounted &&
-    sidebarMounted.host.isConnected &&
-    sidebarMounted.anchor.isConnected
-  ) {
+  if (sidebarMounted?.host.isConnected && sidebarMounted?.anchor.isConnected) {
     return
   }
 
