@@ -111,6 +111,21 @@ export default defineContentScript({
       setTimeout(scheduleScan, 2000)
     })
 
+    // 每 3 秒兜底 safety sweep — 防 MutationObserver 漏触发 / DOM 重渲染
+    // 导致的"识别不准 / 没高亮"边界情况。scan 内部有 mounted/inFlight 去重,
+    // 多扫无副作用。同时清理 stale ARTICLE_FLAG(article 在 DOM 但没挂)。
+    setInterval(() => {
+      // 清扫 stale ARTICLE_FLAG:有 flag 但 mounted Map 里没记录的 article
+      // 说明上次扫挂失败但 flag 残留,移除让下面 scan 重新尝试
+      for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
+        const tweetId = extractTweetIdFromArticle(a)
+        if (tweetId && !mounted.has(tweetId) && !inFlight.has(tweetId)) {
+          a.removeAttribute(ARTICLE_FLAG)
+        }
+      }
+      scheduleScan()
+    }, 3000)
+
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'tasks-updated') {
         unmountAll()
@@ -177,12 +192,26 @@ async function scanTimeline() {
         article.removeAttribute(ARTICLE_FLAG)
         continue
       }
+      // await 期间 article 可能被 Twitter 虚拟化卸下,挂到 detached 节点
+      // 看似成功实则用户看不到。这里再确认下还活着才挂。
+      if (!article.isConnected) {
+        article.removeAttribute(ARTICLE_FLAG)
+        continue
+      }
       const state = mountArticle(article, r.tasks, tweetId)
-      if (state) {
+      // hosts === 0 说明 caret 没找到 / 关键 anchor 缺失,等于啥都没挂。
+      // 放进 mounted Map 会永远 dedup,所以这种情况清掉 flag 等下次 scan
+      // 时 DOM 可能已经稳定,再重试。
+      if (state && state.hosts.length > 0) {
         mounted.set(tweetId, state)
       } else {
+        if (state) unmountArticle(state) // 清理已经贴的 glow 属性
         article.removeAttribute(ARTICLE_FLAG)
       }
+    } catch (e) {
+      // RPC 抛异常 → 不能让 ARTICLE_FLAG 残留(否则永久 skip),清干净
+      console.warn('[lhdao] scan article failed', tweetId, e)
+      article.removeAttribute(ARTICLE_FLAG)
     } finally {
       inFlight.delete(tweetId)
     }
