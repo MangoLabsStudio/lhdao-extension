@@ -21,7 +21,18 @@ import { sendMessage } from './messaging'
  */
 
 const MIN_DURATION_MS = 500
-const HEARTBEAT_MS = 30_000
+/**
+ * 长 session 期间部分上报间隔。
+ *
+ * 设过 30s 显得 DB 行数过多 (9 分钟一条推文产生 20 行 partial),
+ * 改成 5 分钟:
+ *  - 短 session (< 5 min) → 单行 final flush
+ *  - 长 session → 每 5 min 一行 + 最后 final flush
+ *  - 浏览器崩溃最多丢 5 分钟
+ *
+ * 加权 vs 干净的折中。anti-cheat 用 SUM(durationMs) 聚合任意分片都 OK。
+ */
+const HEARTBEAT_MS = 5 * 60 * 1_000
 
 interface DwellState {
   tweetId: string
