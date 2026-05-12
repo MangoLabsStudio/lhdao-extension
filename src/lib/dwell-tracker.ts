@@ -56,7 +56,7 @@ function startNew(tweetId: string) {
     accumulatedMs: 0,
     lastVisibleAt: document.visibilityState === 'visible' ? Date.now() : null,
   }
-  console.debug('[lhdao dwell] start', tweetId)
+  console.log('[lhdao dwell] start', tweetId)
   if (!heartbeatTimer) {
     heartbeatTimer = setInterval(heartbeat, HEARTBEAT_MS)
   }
@@ -80,7 +80,7 @@ function heartbeat() {
   pause() // 把当前未结束的 visible 段算入 accumulatedMs
   const ms = state.accumulatedMs
   if (ms >= MIN_DURATION_MS) {
-    console.debug('[lhdao dwell] heartbeat', state.tweetId, ms, 'ms (partial)')
+    console.log('[lhdao dwell] heartbeat', state.tweetId, ms, 'ms (partial)')
     try {
       void sendMessage({
         type: 'record-dwell',
@@ -110,7 +110,7 @@ function flush() {
   state = null
 
   if (accumulatedMs >= MIN_DURATION_MS) {
-    console.debug('[lhdao dwell] flush', tweetId, accumulatedMs, 'ms (final)')
+    console.log('[lhdao dwell] flush', tweetId, accumulatedMs, 'ms (final)')
     try {
       void sendMessage({
         type: 'record-dwell',
@@ -121,7 +121,7 @@ function flush() {
       // 扩展已 reload 等极端场景,无能为力
     }
   } else {
-    console.debug(
+    console.log(
       '[lhdao dwell] skip',
       tweetId,
       accumulatedMs,
