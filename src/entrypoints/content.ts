@@ -41,16 +41,6 @@ const ACTION_TYPE_TO_SELECTOR: Record<
   ],
 }
 
-const ACTION_TYPE_TO_GLOW_KEY: Record<
-  CampaignTaskCache['actionType'],
-  string[]
-> = {
-  LIKE: ['like'],
-  RT: ['retweet'],
-  COMMENT: ['reply'],
-  COMMENT_LIKE: ['reply', 'like'],
-}
-
 // ── per-article state ──────────────────────────────────────────────
 
 const ARTICLE_FLAG = 'data-lhdao-active'
@@ -66,20 +56,8 @@ const mounted = new Map<string, MountedArticle>() // key = tweetId
 /** tweetId 的 get-tasks RPC await 期间的占位,防止 race 导致双挂载 */
 const inFlight = new Set<string>()
 
-/**
- * 页面级 submit/claim 按钮的挂载状态 — 锚在底部 inline reply composer
- * 的 [data-testid="tweetButtonInline"] 旁边。仅详情页存在(timeline 没
- * inline composer)。生命周期跟 URL 焦点 tweetId 绑定,SPA 切换时随之
- * 重挂。
- */
-interface BottomMissionState {
-  host: HTMLElement
-  root: Root
-  tweetId: string
-  anchor: Element
-}
-let bottomMission: BottomMissionState | null = null
-let bottomInFlight = false
+// (旧的 BottomMissionState 已删除 — submit 按钮现在挂在 article action
+// 行而不是 inline composer 旁,生命周期跟 article 一起,不需要单独 state)
 
 // ── entrypoint ──────────────────────────────────────────────────────
 
@@ -154,7 +132,6 @@ function scheduleScan() {
   requestAnimationFrame(async () => {
     rafScheduled = false
     await scanTimeline()
-    await scanBottomMission()
   })
 }
 
@@ -266,11 +243,28 @@ function mountArticle(
       }
     }
 
-    // 注意:focal 焦点推文的 ④ submit/claim 按钮不在这里挂,而是
-    // scanBottomMission() 单独负责 — 它锚在 inline reply composer 的
-    // [data-testid="tweetButtonInline"] 旁边,这是页面级 (非 per-article)
-    // 元素,生命周期跟 URL 焦点 tweet 绑定。
-    void currentTweetId // suppress unused, 旧代码留下的参数
+    // ④ Submit button — **仅在焦点推文** (URL 匹配 /status/<id>) 的
+    // action button 行末尾挂。
+    //
+    // 为什么是 action 行而不是 reply composer 旁:
+    //   - composer 在用户点 "回复" 时会被 Twitter 卸成模态对话框,
+    //     React unmount → 状态丢失 → 倒计时 / reserved 全清零
+    //   - action 行 (reply / RT / like / share) 是焦点推文的稳定子节点,
+    //     用户点 reply 后这一行**仍然可见**(模态在上方覆盖,article 没卸)
+    //   - 视觉上也紧挨用户要做的 like / RT / reply 按钮,做完动作不用挪眼
+    const focalTweetId = getFocalTweetId()
+    const isFocal = focalTweetId != null && focalTweetId === currentTweetId
+    if (isFocal) {
+      const actionRow = findActionRow(article)
+      if (actionRow) {
+        const host = createShadowHost('lhdao-submit', 'inline-flex')
+        host.style.alignItems = 'center'
+        actionRow.appendChild(host)
+        const root = renderInto(host, createElement(SubmitButton, { tasks }))
+        state.hosts.push(host)
+        state.roots.push(root)
+      }
+    }
 
     return state
   } catch (e) {
@@ -294,9 +288,12 @@ function findTopRightAnchor(article: Element): Element | null {
   return caret as Element | null
 }
 
-// (legacy 兼容兜底:有些 article 没 caret 我们目前直接 skip 顶部注入;
-// 未来如需 fallback 到 action row,在这里加 findActionRow 实现。)
-function _legacyFindActionRow(article: Element): Element | null {
+/**
+ * 找推文底部的 action button 行(包含 reply / RT / like / bookmark / share
+ * 的横排 role="group" 容器)。submit/claim 按钮塞到这一行最后,跟原生
+ * action 同排。
+ */
+function findActionRow(article: Element): Element | null {
   const groups = article.querySelectorAll('[role="group"]')
   for (const g of groups) {
     if (
@@ -336,7 +333,6 @@ function unmountAll() {
   }
   mounted.clear()
   inFlight.clear()
-  unmountBottomMission()
   // 兜底:清理 stale 标记(article 可能已离开 DOM)+ 拖延 host(若有)
   for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
     a.removeAttribute(ARTICLE_FLAG)
@@ -344,117 +340,6 @@ function unmountAll() {
   for (const h of document.querySelectorAll('[data-lhdao-host="1"]')) {
     h.remove()
   }
-}
-
-// ── Bottom mission — 锚在 inline reply composer 的 reply 按钮旁 ─────
-
-async function scanBottomMission() {
-  if (bottomInFlight) return
-
-  const focalTweetId = getFocalTweetId()
-  if (!focalTweetId) {
-    unmountBottomMission()
-    return
-  }
-
-  // 当前焦点 tweet 在 sessionStore 里有任务吗?
-  let tasks: CampaignTaskCache[] = []
-  bottomInFlight = true
-  try {
-    const r = await sendMessage({
-      type: 'get-tasks-for-tweet',
-      tweetId: focalTweetId,
-    })
-    if (r.type === 'tasks') tasks = r.tasks
-  } finally {
-    bottomInFlight = false
-  }
-
-  if (tasks.length === 0) {
-    unmountBottomMission()
-    return
-  }
-
-  // 找 inline reply composer 的 reply 按钮 — Twitter 用
-  // [data-testid="tweetButtonInline"] 标识。直接 parent 通常是**垂直**
-  // 小容器(只包按钮自身),要往上走找到真正的横排 flex 容器才能让
-  // claim 跟 reply 在同一行 (用户反馈"claim 出现在 reply 按钮上方")。
-  const anchor = document.querySelector(
-    '[data-testid="tweetButtonInline"]',
-  ) as HTMLElement | null
-  if (!anchor) {
-    unmountBottomMission()
-    return
-  }
-
-  // 沿父链向上找横排 flex 容器,最多走 5 层(避免误升到 dialog / form
-  // 等大容器)。找到后:
-  //   - row    = 横排 flex 容器
-  //   - cell   = row 下面那个**直接包含** anchor 的子节点(可能是
-  //              anchor 自己,也可能是中间垂直容器)
-  // 然后 row.insertBefore(host, cell) 把 host 摆在 reply 按钮所在 cell
-  // **左边**,跟 reply 同排。
-  let cell: HTMLElement = anchor
-  let row: HTMLElement | null = null
-  for (let i = 0; i < 5; i++) {
-    const parent = cell.parentElement as HTMLElement | null
-    if (!parent) break
-    const cs = window.getComputedStyle(parent)
-    const dir = cs.flexDirection
-    if (
-      (cs.display === 'flex' || cs.display === 'inline-flex') &&
-      dir !== 'column' &&
-      dir !== 'column-reverse'
-    ) {
-      row = parent
-      break
-    }
-    cell = parent
-    if (parent.tagName === 'FORM' || parent === document.body) break
-  }
-
-  if (!row) {
-    // 没找到横排容器 (Twitter 改了 DOM),退化到原行为:塞在 anchor 同
-    // parent 里,可能堆叠但至少能看见
-    row = anchor.parentElement
-    cell = anchor
-  }
-
-  if (!row) {
-    unmountBottomMission()
-    return
-  }
-
-  // 已经挂在正确位置 + 正确 tweetId → 跳过(避免重复挂)
-  if (
-    bottomMission &&
-    bottomMission.tweetId === focalTweetId &&
-    bottomMission.anchor === anchor &&
-    bottomMission.host.isConnected
-  ) {
-    return
-  }
-
-  // 不一致 — 拆掉重挂
-  unmountBottomMission()
-
-  const host = createShadowHost('lhdao-bottom', 'inline-flex')
-  host.style.alignItems = 'center'
-  host.style.marginRight = '8px'
-  row.insertBefore(host, cell)
-  const root = renderInto(host, createElement(SubmitButton, { tasks }))
-  bottomMission = { host, root, tweetId: focalTweetId, anchor }
-}
-
-function unmountBottomMission() {
-  if (!bottomMission) return
-  try {
-    bottomMission.root.unmount()
-  } catch {
-    // ignore
-  }
-  bottomMission.host.remove()
-  bottomMission = null
 }
 
 // ── shadow DOM helpers ──────────────────────────────────────────────
