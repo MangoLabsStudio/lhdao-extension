@@ -55,25 +55,34 @@
 
 ### 5. 隐私政策
 
-最简单:在 GitHub Pages 或 Notion 公开页面写一段。模板:
+最简单:在 GitHub Pages 或 Notion 公开页面写一段。模板(**重要:已含 dwell
+tracking 披露**,删了会过不了 Chrome Web Store 审核):
 
 ```
 Lighthouse Extension Privacy Policy
 
-1. 我们存什么
-   - Plugin API token (在 chrome.storage.local 本地存储)
-   - 用户在 X 浏览的推文 ID 临时缓存 (chrome.storage.session, 浏览器关掉就清)
+1. 我们存什么(本地)
+   - Plugin API token (chrome.storage.local 本地存储)
+   - 当前可参与的 Lighthouse 任务列表缓存 (chrome.storage.session,关浏览器
+     即清)
 
-2. 我们传什么
-   - Bearer 鉴权访问 lhdao 自家 GraphQL API (service.lhdao.top)
-   - 没有任何数据发到第三方 (无埋点 / Google Analytics / Sentry)
+2. 我们传什么(到 lhdao 自家后端,无第三方)
+   - Bearer 鉴权访问 service.lhdao.top GraphQL API
+   - **推文详情页停留时长** (recordTweetDwell mutation):
+     · 触发:用户在 x.com / twitter.com 打开任何 /<user>/status/<id>
+       页面,并在该页面有"可见"停留 (后台 tab / 最小化不计)
+     · 数据:tweet 数字 id + 累积可见毫秒数
+     · 用途:作为反作弊信号喂给 lhdao 内部 AntibotV2 评分模型
+     · 不影响奖励发放
+     · 仅在用户已绑定 plugin token 时发送
 
 3. 不收集的
-   - 不读取推文正文 / X 账户信息 (DOM 仅取 tweet ID)
-   - 不上报浏览记录
+   - 不读推文正文 / X 账户信息 / 关注列表
+   - 不上报普通浏览历史 (非 /status/ 的页面不跟踪)
    - 不访问 cookie / 密码 / 其他扩展数据
+   - 无 Google Analytics / Sentry / 任何第三方 SDK
 
-4. 联系方式
+4. 联系 / 数据删除请求
    support@lhdao.top
 ```
 
@@ -115,7 +124,14 @@ Chrome 会让你逐条勾选 / 解释:
   - personal communications → No
   - location → No
   - web history → No (we read tweet IDs from current page, not browsing history)
-  - user activity → No
+  - **user activity → Yes** ⚠️
+    解释:"For every tweet detail page (URL matches /<user>/status/<id>) the
+    user opens on x.com / twitter.com, the extension records the visible
+    dwell time in milliseconds and sends it to the lhdao backend
+    (service.lhdao.top) along with the tweet id. This is used as an
+    anti-cheat signal feeding lhdao's internal fraud detection model and
+    does not affect reward calculation. Background-tab and minimized-window
+    time is excluded. No third parties receive this data."
   - website content → No (we read DOM but only `<time>` / link href for tweet ID)
 
 ---

@@ -116,6 +116,35 @@ extension ID from `web_accessible_resources` keying).
 - `host_permissions` is the minimum: x.com / twitter.com /
   service.lhdao.top / service.lhdaobeta.top. No `<all_urls>`.
 
+## Data collection (USER ACTIVITY — must declare to Chrome Web Store)
+
+The extension records **dwell time on every tweet detail page** the user
+opens (any URL matching `/<user>/status/<id>` on x.com or twitter.com).
+
+What's collected:
+- The numeric tweet id
+- Accumulated time the page was **visible** (background tabs / minimized
+  windows don't count)
+
+Sent to:
+- `service.lhdao.top/graphql` only — `recordTweetDwell` mutation,
+  authenticated with the user's plugin token
+
+Purpose:
+- Anti-cheat signal for the AntibotV2 score. **Does not affect reward
+  amounts.**
+
+Why ALL tweets and not only Lighthouse-tagged ones:
+- Restricting to tagged tweets would let attackers easily detect and
+  bypass the signal. Full baseline lets anomaly detection do its job.
+
+Privacy mitigations:
+- Sessions shorter than 1 second are filtered (not sent)
+- Tweets opened before the user binds a plugin token are silently
+  dropped (BG SW returns early without a token)
+- Data is keyed to the user's lhdao account, fully purgeable on deletion
+- No third-party analytics, no Sentry, no error reporting outside lhdao
+
 ## Related repos
 
 - **lhdaov3** (private, monorepo) — backend (`kol-dao-service`) + web app

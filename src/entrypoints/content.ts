@@ -8,6 +8,7 @@ import chipCss from '@/components/chip/chip.css?inline'
 import highlightCss from '@/components/chip/highlight.css?inline'
 import { MetadataBadge } from '@/components/chip/MetadataBadge'
 import { SubmitButton } from '@/components/chip/SubmitButton'
+import { initDwellTracker, onDwellUrlChange } from '@/lib/dwell-tracker'
 import { sendMessage } from '@/lib/messaging'
 import type { CampaignTaskCache } from '@/lib/storage'
 import { extractTweetIdFromArticle } from '@/lib/twitter-dom'
@@ -69,6 +70,13 @@ export default defineContentScript({
   async main() {
     injectGlobalStyle()
 
+    // 反作弊 dwell tracker:对所有 /<user>/status/<id> 推文详情页累积可见
+    // 时长,URL 离开 / tab 关 时通过 BG 上报后端。绑 visibility / focus /
+    // blur / pagehide / beforeunload。
+    initDwellTracker()
+    // 初始进入页面:如果 URL 就在 status,立即开始计时
+    onDwellUrlChange(getFocalTweetId())
+
     const observer = new MutationObserver(scheduleScan)
     observer.observe(document.body, { childList: true, subtree: true })
     scheduleScan()
@@ -81,6 +89,9 @@ export default defineContentScript({
     // 后续插入,但实测 timeline → detail 切换偶尔遗漏。叠加多次 setTimeout
     // 重扫做兜底,scan 内部有 mounted Map 去重,多扫不会重复挂。
     watchUrlChanges(() => {
+      // 通知 dwell tracker URL 变了 — 切走当前 tweet 则 flush 上报,
+      // 切到新 tweet 则开始累积。
+      onDwellUrlChange(getFocalTweetId())
       unmountAll()
       scheduleScan()
       setTimeout(scheduleScan, 100)

@@ -133,3 +133,15 @@ export const VERIFY_ENGAGEMENT_MUTATION = `
 export interface VerifyEngagementResult {
   verifyEngagement: { actualReward: number }
 }
+
+// ── 推文停留时长上报 (anti-cheat 信号) ────────────────────────────────
+
+export const RECORD_TWEET_DWELL_MUTATION = `
+  mutation RecordTweetDwell($tweetId: String!, $durationMs: Int!) {
+    recordTweetDwell(tweetId: $tweetId, durationMs: $durationMs)
+  }
+`
+
+export interface RecordTweetDwellResult {
+  recordTweetDwell: boolean
+}

@@ -5,6 +5,7 @@ import {
   AVAILABLE_ENGAGEMENTS_QUERY,
   type AvailableEngagementsResult,
   type EngagementActionType,
+  RECORD_TWEET_DWELL_MUTATION,
   RESERVE_SLOT_MUTATION,
   type ReserveSlotResult,
   VERIFY_ENGAGEMENT_MUTATION,
@@ -54,6 +55,11 @@ export default defineBackground(() => {
     }
     if (req.type === 'verify-task') {
       return verifyOnly(req.campaignId)
+    }
+    if (req.type === 'record-dwell') {
+      // fire-and-forget: 失败不影响用户,只 console.warn
+      void recordDwell(req.tweetId, req.durationMs)
+      return { type: 'ack' }
     }
     if (req.type === 'has-token') {
       const token = await localStore.get('apiToken')
@@ -280,6 +286,23 @@ function verifyError(msg: string, httpStatus?: number): MsgResponse {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+// ── dwell time recording (anti-cheat) ───────────────────────────────
+
+/**
+ * 上报推文详情页停留时长。不抛异常(失败仅 warn),不返回结果给 content
+ * script — content 是 fire-and-forget。
+ *
+ * 未绑 token 的用户:gql 内部会抛 'No API token configured',这里 catch
+ * 静默 — 等用户绑了 token 之后的 dwell 自然能上报。
+ */
+async function recordDwell(tweetId: string, durationMs: number): Promise<void> {
+  try {
+    await gql(RECORD_TWEET_DWELL_MUTATION, { tweetId, durationMs })
+  } catch (e) {
+    console.warn('[lhdao] record dwell failed', e)
+  }
 }
 
 // ── reserve / verify split (两步抢单) ───────────────────────────────

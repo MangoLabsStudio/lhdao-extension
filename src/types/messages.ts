@@ -25,6 +25,8 @@ export type MsgRequest =
   | { type: 'has-token' }
   /** popup 触发立即同步 — 不等 60s alarm,等 sync 跑完再返回结果 */
   | { type: 'force-sync' }
+  /** content script 上报推文详情页停留时长 (anti-cheat 信号) */
+  | { type: 'record-dwell'; tweetId: string; durationMs: number }
   /** BG → CS 广播:任务列表已更新,请重新查询 */
   | { type: 'tasks-updated' }
 
