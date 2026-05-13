@@ -1,0 +1,995 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Lighthouse · Sidebar Card Mockup</title>
+    <style>
+      /* ── Page chrome (mocked Twitter sidebar context) ────────────── */
+
+      :root {
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Roboto,
+          'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+        color-scheme: light dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 40px;
+        background: oklch(0.96 0.005 250);
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 40px;
+        align-items: start;
+      }
+
+      .scene {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .scene-label {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: oklch(0.5 0.01 250);
+      }
+      .scene-frame {
+        width: 330px;
+        padding: 20px;
+        border-radius: 18px;
+        background: white;
+        box-shadow: 0 1px 2px oklch(0.5 0.01 250 / 0.05);
+      }
+      .scene-frame.dark {
+        background: rgb(15, 20, 25);
+      }
+
+      .mock-search,
+      .mock-card {
+        width: 100%;
+      }
+
+      /* mock Twitter search bar (above Lighthouse card) */
+      .mock-search {
+        background: oklch(0.96 0.003 250);
+        border-radius: 999px;
+        padding: 10px 16px;
+        color: oklch(0.55 0.01 250);
+        font-size: 14px;
+        margin-bottom: 16px;
+      }
+      .scene-frame.dark .mock-search {
+        background: rgb(32, 35, 39);
+        color: rgb(113, 118, 123);
+      }
+
+      /* mock "Subscribe to Premium" card (below Lighthouse card) */
+      .mock-premium {
+        margin-top: 16px;
+        background: oklch(0.97 0.005 250);
+        border: 1px solid oklch(0.92 0.005 250);
+        border-radius: 16px;
+        padding: 14px 16px;
+      }
+      .scene-frame.dark .mock-premium {
+        background: rgb(22, 24, 28);
+        border-color: rgb(47, 51, 54);
+      }
+      .mock-premium-title {
+        font-size: 17px;
+        font-weight: 800;
+        color: rgb(15, 23, 42);
+        margin: 0 0 4px;
+      }
+      .scene-frame.dark .mock-premium-title {
+        color: rgb(231, 233, 234);
+      }
+      .mock-premium-body {
+        font-size: 13px;
+        color: rgb(83, 100, 113);
+        margin: 0;
+      }
+      .scene-frame.dark .mock-premium-body {
+        color: rgb(113, 118, 123);
+      }
+
+      /* ── Lighthouse Sidebar Card ─────────────────────────────────── */
+
+      .lh-card {
+        background: oklch(0.99 0.003 195);
+        border: 1px solid oklch(0.93 0.005 195);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+      .scene-frame.dark .lh-card {
+        background: oklch(0.18 0.008 240);
+        border-color: oklch(0.28 0.01 240);
+      }
+
+      /* Header */
+      .lh-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 16px 12px;
+      }
+      .lh-logo {
+        flex-shrink: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 9px;
+        background: linear-gradient(
+          135deg,
+          oklch(0.62 0.13 195) 0%,
+          oklch(0.7 0.12 215) 100%
+        );
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+      }
+      .lh-logo svg {
+        width: 18px;
+        height: 18px;
+      }
+      .lh-title-wrap {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .lh-title {
+        font-size: 16px;
+        font-weight: 800;
+        color: oklch(0.2 0.02 250);
+        line-height: 1.2;
+        letter-spacing: -0.01em;
+        margin: 0;
+      }
+      .scene-frame.dark .lh-title {
+        color: oklch(0.95 0.005 240);
+      }
+      .lh-subtitle {
+        font-size: 12px;
+        font-weight: 500;
+        color: oklch(0.55 0.01 250);
+        line-height: 1.3;
+        font-variant-numeric: tabular-nums;
+        margin: 0;
+      }
+      .scene-frame.dark .lh-subtitle {
+        color: oklch(0.65 0.008 240);
+      }
+
+      /* List */
+      .lh-list {
+        margin: 0;
+        padding: 0 8px 4px;
+        list-style: none;
+      }
+
+      .lh-row {
+        display: grid;
+        grid-template-columns: 32px 1fr auto;
+        gap: 12px;
+        align-items: start;
+        padding: 10px 12px;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: background-color 120ms ease;
+        text-decoration: none;
+        color: inherit;
+      }
+      .lh-row:hover {
+        background: oklch(0.97 0.025 195);
+      }
+      .scene-frame.dark .lh-row:hover {
+        background: oklch(0.27 0.04 195 / 0.5);
+      }
+      .lh-row:hover .lh-avatar {
+        transform: scale(1.04);
+      }
+
+      .lh-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        object-fit: cover;
+        background: linear-gradient(
+          135deg,
+          oklch(0.78 0.11 195),
+          oklch(0.83 0.1 215)
+        );
+        transition: transform 160ms ease;
+      }
+      .lh-avatar-img {
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        object-fit: cover;
+      }
+
+      .lh-body {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        overflow: hidden;
+      }
+      .lh-name-line {
+        font-size: 13.5px;
+        font-weight: 700;
+        color: oklch(0.2 0.02 250);
+        line-height: 1.3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .scene-frame.dark .lh-name-line {
+        color: oklch(0.95 0.005 240);
+      }
+      .lh-handle {
+        font-size: 12.5px;
+        font-weight: 400;
+        color: oklch(0.55 0.01 250);
+        margin-left: 5px;
+      }
+      .scene-frame.dark .lh-handle {
+        color: oklch(0.65 0.008 240);
+      }
+
+      .lh-preview {
+        font-size: 12px;
+        color: oklch(0.55 0.01 250);
+        line-height: 1.4;
+        margin: 0;
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .scene-frame.dark .lh-preview {
+        color: oklch(0.65 0.008 240);
+      }
+
+      .lh-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 3px;
+      }
+      .lh-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: oklch(0.96 0.025 195);
+        color: oklch(0.45 0.12 195);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.3;
+        white-space: nowrap;
+      }
+      .scene-frame.dark .lh-chip {
+        background: oklch(0.28 0.06 195 / 0.4);
+        color: oklch(0.8 0.13 195);
+      }
+      .lh-chip svg {
+        width: 10px;
+        height: 10px;
+      }
+      .lh-keyword {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: oklch(0.96 0.04 25);
+        color: oklch(0.55 0.17 25);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.3;
+        white-space: nowrap;
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .scene-frame.dark .lh-keyword {
+        background: oklch(0.3 0.08 25 / 0.5);
+        color: oklch(0.78 0.16 25);
+      }
+
+      /* Reward column (P0 — the visual anchor) */
+      .lh-reward {
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        align-self: center;
+        color: oklch(0.62 0.13 195);
+        line-height: 1;
+        padding-left: 4px;
+      }
+      .scene-frame.dark .lh-reward {
+        color: oklch(0.78 0.13 195);
+      }
+      .lh-reward-num {
+        font-size: 20px;
+        font-weight: 900;
+        letter-spacing: -0.025em;
+        display: block;
+      }
+      .lh-reward-unit {
+        font-size: 10px;
+        font-weight: 700;
+        opacity: 0.7;
+        display: block;
+        margin-top: 2px;
+        letter-spacing: 0.05em;
+      }
+
+      /* Footer */
+      .lh-footer {
+        display: block;
+        padding: 10px 16px 12px;
+        text-align: center;
+        font-size: 12.5px;
+        font-weight: 700;
+        color: oklch(0.62 0.13 195);
+        text-decoration: none;
+        border-top: 1px solid oklch(0.93 0.005 195);
+      }
+      .scene-frame.dark .lh-footer {
+        color: oklch(0.78 0.13 195);
+        border-top-color: oklch(0.28 0.01 240);
+      }
+      .lh-footer:hover {
+        background: oklch(0.97 0.025 195);
+      }
+      .scene-frame.dark .lh-footer:hover {
+        background: oklch(0.27 0.04 195 / 0.5);
+      }
+
+      /* ── Skeleton state ──────────────────────────────────────────── */
+
+      .sk-row {
+        display: grid;
+        grid-template-columns: 32px 1fr auto;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 12px;
+      }
+      .sk-pulse {
+        animation: skp 1.4s ease-in-out infinite;
+        background: oklch(0.94 0.005 195);
+      }
+      .scene-frame.dark .sk-pulse {
+        background: oklch(0.25 0.01 240);
+      }
+      .sk-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+      }
+      .sk-body {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        overflow: hidden;
+      }
+      .sk-line-1 {
+        height: 11px;
+        width: 60%;
+        border-radius: 6px;
+      }
+      .sk-line-2 {
+        height: 10px;
+        width: 85%;
+        border-radius: 6px;
+      }
+      .sk-reward {
+        width: 36px;
+        height: 28px;
+        border-radius: 6px;
+      }
+      @keyframes skp {
+        0%,
+        100% {
+          opacity: 0.5;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+
+      /* ── Entrance animation demo ─────────────────────────────────── */
+
+      .demo-anim .lh-card {
+        animation: cardIn 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+      }
+      .demo-anim .lh-row {
+        animation: rowIn 380ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+      }
+      .demo-anim .lh-row:nth-child(1) {
+        animation-delay: 80ms;
+      }
+      .demo-anim .lh-row:nth-child(2) {
+        animation-delay: 140ms;
+      }
+      .demo-anim .lh-row:nth-child(3) {
+        animation-delay: 200ms;
+      }
+      .demo-anim .lh-row:nth-child(4) {
+        animation-delay: 260ms;
+      }
+      .demo-anim .lh-row:nth-child(5) {
+        animation-delay: 320ms;
+      }
+      @keyframes cardIn {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes rowIn {
+        from {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .demo-anim .lh-card,
+        .demo-anim .lh-row {
+          animation: none;
+        }
+        .lh-row,
+        .lh-avatar {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ═══════ Scene 1 — Light · 正常态(3 条任务) ═══════ -->
+    <div class="scene demo-anim">
+      <div class="scene-label">scene 1 · light · 3 tasks</div>
+      <div class="scene-frame">
+        <div class="mock-search">搜索</div>
+
+        <section class="lh-card mock-card">
+          <header class="lh-header">
+            <span class="lh-logo">
+              <svg viewBox="0 0 40 40" aria-hidden="true">
+                <path d="M20 8 L13 16 H16 V30 H24 V16 H27 Z" fill="white" />
+                <circle cx="20" cy="33" r="1.8" fill="white" opacity="0.85" />
+              </svg>
+            </span>
+            <div class="lh-title-wrap">
+              <h2 class="lh-title">灯塔任务</h2>
+              <p class="lh-subtitle">3 个可抢 · 平均 +8 LUX</p>
+            </div>
+          </header>
+
+          <ul class="lh-list">
+            <!-- row 1 — like + RT, highest reward -->
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Elon Musk<span class="lh-handle">@elonmusk</span>
+                  </div>
+                  <p class="lh-preview">
+                    Stuff is happening — really big things are coming next
+                    quarter, stay tuned
+                  </p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                          d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"
+                        />
+                      </svg>
+                      点赞
+                    </span>
+                    <span class="lh-chip">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.4"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path
+                          d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"
+                        />
+                      </svg>
+                      转发
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+12</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+
+            <!-- row 2 — comment + keyword -->
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Vitalik Buterin<span class="lh-handle">@VitalikButerin</span>
+                  </div>
+                  <p class="lh-preview">
+                    Re-decentralizing the internet via state-light protocols
+                  </p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.4"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path
+                          d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+                        />
+                      </svg>
+                      评论
+                    </span>
+                    <span class="lh-keyword" title="评论需包含 #defi">
+                      #defi
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+8</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+
+            <!-- row 3 — like only -->
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Naval<span class="lh-handle">@naval</span>
+                  </div>
+                  <p class="lh-preview">
+                    When in doubt, optimize for letting go
+                  </p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                          d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"
+                        />
+                      </svg>
+                      点赞
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+5</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </section>
+
+        <div class="mock-premium">
+          <h3 class="mock-premium-title">订阅 Premium</h3>
+          <p class="mock-premium-body">
+            订阅以解锁新功能,如果符合条件,还可获得创作者收入分成。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Scene 2 — Dark · 正常态(3 条任务) ═══════ -->
+    <div class="scene">
+      <div class="scene-label">scene 2 · dark · 3 tasks</div>
+      <div class="scene-frame dark">
+        <div class="mock-search">搜索</div>
+
+        <section class="lh-card mock-card">
+          <header class="lh-header">
+            <span class="lh-logo">
+              <svg viewBox="0 0 40 40" aria-hidden="true">
+                <path d="M20 8 L13 16 H16 V30 H24 V16 H27 Z" fill="white" />
+                <circle cx="20" cy="33" r="1.8" fill="white" opacity="0.85" />
+              </svg>
+            </span>
+            <div class="lh-title-wrap">
+              <h2 class="lh-title">灯塔任务</h2>
+              <p class="lh-subtitle">3 个可抢 · 平均 +8 LUX</p>
+            </div>
+          </header>
+
+          <ul class="lh-list">
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Elon Musk<span class="lh-handle">@elonmusk</span>
+                  </div>
+                  <p class="lh-preview">
+                    Stuff is happening — really big things are coming
+                  </p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                          d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"
+                        />
+                      </svg>
+                      点赞
+                    </span>
+                    <span class="lh-chip">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.4"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path
+                          d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"
+                        />
+                      </svg>
+                      转发
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+12</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Vitalik Buterin<span class="lh-handle">@VitalikButerin</span>
+                  </div>
+                  <p class="lh-preview">
+                    Re-decentralizing the internet via state-light protocols
+                  </p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.4"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path
+                          d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+                        />
+                      </svg>
+                      评论
+                    </span>
+                    <span class="lh-keyword">#defi</span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+8</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Naval<span class="lh-handle">@naval</span>
+                  </div>
+                  <p class="lh-preview">
+                    When in doubt, optimize for letting go
+                  </p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                          d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"
+                        />
+                      </svg>
+                      点赞
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+5</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </section>
+
+        <div class="mock-premium">
+          <h3 class="mock-premium-title">订阅 Premium</h3>
+          <p class="mock-premium-body">
+            订阅以解锁新功能,如果符合条件,还可获得创作者收入分成。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Scene 3 — Loading skeleton ═══════ -->
+    <div class="scene">
+      <div class="scene-label">scene 3 · light · loading skeleton</div>
+      <div class="scene-frame">
+        <div class="mock-search">搜索</div>
+
+        <section class="lh-card mock-card">
+          <header class="lh-header">
+            <span class="lh-logo">
+              <svg viewBox="0 0 40 40" aria-hidden="true">
+                <path d="M20 8 L13 16 H16 V30 H24 V16 H27 Z" fill="white" />
+                <circle cx="20" cy="33" r="1.8" fill="white" opacity="0.85" />
+              </svg>
+            </span>
+            <div class="lh-title-wrap">
+              <h2 class="lh-title">灯塔任务</h2>
+              <p class="lh-subtitle">同步中…</p>
+            </div>
+          </header>
+
+          <ul class="lh-list">
+            <li class="sk-row">
+              <span class="sk-pulse sk-avatar"></span>
+              <div class="sk-body">
+                <span class="sk-pulse sk-line-1"></span>
+                <span class="sk-pulse sk-line-2"></span>
+              </div>
+              <span class="sk-pulse sk-reward"></span>
+            </li>
+            <li class="sk-row">
+              <span class="sk-pulse sk-avatar"></span>
+              <div class="sk-body">
+                <span class="sk-pulse sk-line-1" style="width: 70%"></span>
+                <span class="sk-pulse sk-line-2" style="width: 60%"></span>
+              </div>
+              <span class="sk-pulse sk-reward"></span>
+            </li>
+            <li class="sk-row">
+              <span class="sk-pulse sk-avatar"></span>
+              <div class="sk-body">
+                <span class="sk-pulse sk-line-1" style="width: 50%"></span>
+                <span class="sk-pulse sk-line-2" style="width: 80%"></span>
+              </div>
+              <span class="sk-pulse sk-reward"></span>
+            </li>
+          </ul>
+        </section>
+
+        <div class="mock-premium">
+          <h3 class="mock-premium-title">订阅 Premium</h3>
+          <p class="mock-premium-body">订阅以解锁新功能。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Scene 4 — 5+ tasks, with footer link ═══════ -->
+    <div class="scene">
+      <div class="scene-label">scene 4 · light · 5+ tasks (with footer)</div>
+      <div class="scene-frame">
+        <div class="mock-search">搜索</div>
+
+        <section class="lh-card mock-card">
+          <header class="lh-header">
+            <span class="lh-logo">
+              <svg viewBox="0 0 40 40" aria-hidden="true">
+                <path d="M20 8 L13 16 H16 V30 H24 V16 H27 Z" fill="white" />
+                <circle cx="20" cy="33" r="1.8" fill="white" opacity="0.85" />
+              </svg>
+            </span>
+            <div class="lh-title-wrap">
+              <h2 class="lh-title">灯塔任务</h2>
+              <p class="lh-subtitle">12 个可抢 · 平均 +7 LUX</p>
+            </div>
+          </header>
+
+          <ul class="lh-list">
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Elon Musk<span class="lh-handle">@elonmusk</span>
+                  </div>
+                  <p class="lh-preview">Big things coming next quarter</p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                          d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"
+                        />
+                      </svg>
+                      点赞
+                    </span>
+                    <span class="lh-chip">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.4"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path
+                          d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"
+                        />
+                      </svg>
+                      转发
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+15</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Balaji Srinivasan<span class="lh-handle">@balajis</span>
+                  </div>
+                  <p class="lh-preview">
+                    The network state thesis revisited — sovereignty…
+                  </p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.4"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path
+                          d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+                        />
+                      </svg>
+                      评论
+                    </span>
+                    <span class="lh-keyword">#sovereignty</span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+10</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Naval<span class="lh-handle">@naval</span>
+                  </div>
+                  <p class="lh-preview">Optimize for letting go</p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                          d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"
+                        />
+                      </svg>
+                      点赞
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+6</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Paul Graham<span class="lh-handle">@paulg</span>
+                  </div>
+                  <p class="lh-preview">Read history before politics</p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.4"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path
+                          d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"
+                        />
+                      </svg>
+                      转发
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+5</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a class="lh-row" href="#">
+                <span class="lh-avatar"></span>
+                <div class="lh-body">
+                  <div class="lh-name-line">
+                    Patrick Collison<span class="lh-handle">@patrickc</span>
+                  </div>
+                  <p class="lh-preview">Stripe Press just shipped 3 new titles</p>
+                  <div class="lh-actions">
+                    <span class="lh-chip">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                          d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"
+                        />
+                      </svg>
+                      点赞
+                    </span>
+                  </div>
+                </div>
+                <div class="lh-reward">
+                  <span class="lh-reward-num">+4</span>
+                  <span class="lh-reward-unit">LUX</span>
+                </div>
+              </a>
+            </li>
+          </ul>
+
+          <a class="lh-footer" href="#">查看全部 12 个 →</a>
+        </section>
+
+        <div class="mock-premium">
+          <h3 class="mock-premium-title">订阅 Premium</h3>
+          <p class="mock-premium-body">订阅以解锁新功能。</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
