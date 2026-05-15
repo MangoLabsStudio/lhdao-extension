@@ -38,6 +38,16 @@ type State =
 export function SubmitButton({ tasks }: Props) {
   const [state, setState] = React.useState<State>({ kind: 'idle' })
 
+  // FOLLOW 任务的特殊 idle 文案 — 让用户知道点这个按钮要去关注谁。
+  // 仅当所有 task 都是 FOLLOW 时显示 "关注 @handle";混合任务保持 "claim"。
+  const followOnlyHandle = React.useMemo(() => {
+    if (tasks.length === 0) return null
+    const allFollow = tasks.every((t) => t.actionType === 'FOLLOW')
+    if (!allFollow) return null
+    const handle = tasks[0]?.targetUsername
+    return handle ?? null
+  }, [tasks])
+
   // 倒计时 tick — 仅 reserved + cooldown 有时启用
   const [now, setNow] = React.useState(Date.now())
   React.useEffect(() => {
@@ -190,7 +200,9 @@ export function SubmitButton({ tasks }: Props) {
       }}
     >
       <IconForState state={state} />
-      <span className="tabular-nums">{labelForState(state, cooldownLeft)}</span>
+      <span className="tabular-nums">
+        {labelForState(state, cooldownLeft, followOnlyHandle)}
+      </span>
     </button>
   )
 }
@@ -215,9 +227,22 @@ function btnClasses(state: State): string {
   }
 }
 
-function labelForState(state: State, cooldownLeft: number | null): string {
+function labelForState(
+  state: State,
+  cooldownLeft: number | null,
+  followOnlyHandle: string | null,
+): string {
   switch (state.kind) {
     case 'idle':
+      // FOLLOW-only 任务在 idle 显示 "关注 @handle",区分跟 LIKE/RT 的 generic
+      // claim。handle 太长时(>14 char)截尾省略避免按钮被撑爆。
+      if (followOnlyHandle) {
+        const display =
+          followOnlyHandle.length > 14
+            ? `${followOnlyHandle.slice(0, 13)}…`
+            : followOnlyHandle
+        return `关注 @${display}`
+      }
       return 'claim'
     case 'reserving':
       return '抢单中'

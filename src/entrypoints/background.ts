@@ -33,6 +33,7 @@ const SUPPORTED_ACTIONS = new Set<EngagementActionType>([
   'RT',
   'COMMENT',
   'COMMENT_LIKE',
+  'FOLLOW',
 ])
 
 /**
@@ -58,6 +59,11 @@ export default defineBackground(() => {
     if (req.type === 'get-tasks-for-tweet') {
       const map = (await sessionStore.get('tasksByTweetId')) ?? {}
       return { type: 'tasks', tasks: map[req.tweetId] ?? [] }
+    }
+    if (req.type === 'get-tasks-for-author') {
+      const map = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
+      const handle = req.authorHandle.toLowerCase()
+      return { type: 'tasks', tasks: map[handle] ?? [] }
     }
     if (req.type === 'submit-task') {
       return submitTask(req.campaignId)
@@ -143,6 +149,7 @@ async function syncTasks(): Promise<void> {
   if (!token) {
     // 没 token 就清空所有缓存,避免遗留旧任务/旧余额误导
     await sessionStore.set('tasksByTweetId', {})
+    await sessionStore.set('tasksByAuthorHandle', {})
     await sessionStore.set('activeCampaigns', [])
     await sessionStore.set('tweetCampaigns', [])
     await sessionStore.set('userProfile', null)
@@ -162,11 +169,12 @@ async function syncTasks(): Promise<void> {
   // —— engagement → chip / activeCampaigns ——
   if (engRes.status === 'fulfilled') {
     const data = engRes.value
-    const map = flattenTasks(data.availableEngagements)
+    const { byTweet, byAuthor } = flattenTasks(data.availableEngagements)
     const activeCampaigns = buildActiveCampaignSummaries(
       data.availableEngagements,
     )
-    await sessionStore.set('tasksByTweetId', map)
+    await sessionStore.set('tasksByTweetId', byTweet)
+    await sessionStore.set('tasksByAuthorHandle', byAuthor)
     await sessionStore.set('activeCampaigns', activeCampaigns)
   } else {
     console.warn('[lhdao] availableEngagements failed', engRes.reason)
@@ -328,49 +336,82 @@ function buildActiveCampaignSummaries(
 }
 
 /**
- * 把后端返的 engagement 列表扁平化成 {tweetId → CampaignTaskCache[]} 索引,
- * content script 拿到 tweet id 时 O(1) 查询。
+ * 把后端返的 engagement 列表扁平化成两个索引:
+ *
+ *   byTweet  : tweetId   → tasks[] (LIKE / RT / COMMENT / COMMENT_LIKE)
+ *   byAuthor : handle    → tasks[] (FOLLOW)
+ *
+ * **为什么拆两个索引**:LIKE/RT/COMMENT 绑定到具体推文(tweetId),FOLLOW
+ * 绑定到账户(handle)。同一作者的不同推文 article 都需要看到 follow 任务,
+ * 用 author handle 索引让 content script O(1) 查询。
+ *
+ * 同一个 FOLLOW 任务仍然在 byTweet 里存一份(挂在 targetUrl 对应的"代表推文"
+ * 上),让用户在 campaign 来源推文上看到合并 chip(Q3:复合任务合并显示)。
  */
 function flattenTasks(
   engagements: AvailableEngagementsResult['availableEngagements'],
-): Record<string, CampaignTaskCache[]> {
-  const map: Record<string, CampaignTaskCache[]> = {}
+): {
+  byTweet: Record<string, CampaignTaskCache[]>
+  byAuthor: Record<string, CampaignTaskCache[]>
+} {
+  const byTweet: Record<string, CampaignTaskCache[]> = {}
+  const byAuthor: Record<string, CampaignTaskCache[]> = {}
+
   for (const c of engagements) {
     if (c.type !== 'ENGAGEMENT') continue
     const tweetId = c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null
-    if (!tweetId) continue
-
-    // COMMENT 类任务必须含 campaign-level 第一个 keyword(后端验证规则)。
-    // LIKE / RT 不需要 keyword,即便 campaign 上挂了也无所谓。
+    // 注意:FOLLOW-only campaign 也可能没有 targetUrl(纯粹是关注账户,
+    // 没有"代表推文")。所以 tweetId null 不能直接 skip 整条 campaign,
+    // 要看 FOLLOW action 能否落到 author 索引上。
     const firstKeyword = c.keywords?.[0] ?? null
-
-    // 优先使用后端按用户 tier 级联算好的 expectedReward(campaign 级总额),
-    // 单 action campaign 用整额;多 action 把总额平均分给每个 supported action。
-    // fallback 到 a.baseReward(老 backend 没暴露 expectedReward 的兜底)。
     const supportedActions = c.actions.filter((a) =>
       SUPPORTED_ACTIONS.has(a.actionType),
     )
+    if (supportedActions.length === 0) continue
+
     const effectiveTotal = c.expectedReward
     const perAction =
-      effectiveTotal != null && supportedActions.length > 0
-        ? effectiveTotal / supportedActions.length
-        : null
+      effectiveTotal != null ? effectiveTotal / supportedActions.length : null
+
+    const targetUsername = c.targetUsername?.toLowerCase() ?? null
 
     for (const a of supportedActions) {
       const isCommentish =
         a.actionType === 'COMMENT' || a.actionType === 'COMMENT_LIKE'
-      const bucket = map[tweetId] ?? []
-      bucket.push({
+      const isFollow = a.actionType === 'FOLLOW'
+
+      const task: CampaignTaskCache = {
         campaignId: c.id,
-        tweetId,
+        // tweetId 可能 null(纯 FOLLOW campaign);byTweet 索引时跳过没 tweetId
+        // 的,byAuthor 索引照常落入
+        tweetId: tweetId ?? '',
         actionType: a.actionType,
         expectedReward: perAction ?? a.baseReward,
         commentKeyword: isCommentish ? firstKeyword : null,
-      })
-      map[tweetId] = bucket
+        targetUsername: isFollow ? targetUsername : null,
+      }
+
+      // —— byTweet 索引 ——
+      // 所有 supported action(包括 FOLLOW)只要有 tweetId 就挂在那条推文上,
+      // 让"来源推文" article 显示完整的复合任务奖励(Q3=a 语义)。
+      if (tweetId) {
+        const bucket = byTweet[tweetId] ?? []
+        bucket.push(task)
+        byTweet[tweetId] = bucket
+      }
+
+      // —— byAuthor 索引(仅 FOLLOW)——
+      // FOLLOW 任务**还要**挂在该作者的所有其他推文上(timeline 上同一作者
+      // 的多条推文都要看到 ring + 第一条挂 claim)。LIKE/RT/COMMENT 不进
+      // author 索引,因为它们绑定具体推文不能跨推文展示。
+      if (isFollow && targetUsername) {
+        const bucket = byAuthor[targetUsername] ?? []
+        bucket.push(task)
+        byAuthor[targetUsername] = bucket
+      }
     }
   }
-  return map
+  return { byTweet, byAuthor }
 }
 
 // ── submit (reserve + verify) ────────────────────────────────────────

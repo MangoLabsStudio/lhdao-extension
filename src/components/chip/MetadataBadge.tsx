@@ -57,5 +57,7 @@ function actionLabel(type: CampaignTaskCache['actionType']): string {
       return '评论'
     case 'COMMENT_LIKE':
       return '评论+赞'
+    case 'FOLLOW':
+      return '关注'
   }
 }

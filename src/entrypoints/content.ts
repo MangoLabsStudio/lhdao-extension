@@ -13,7 +13,11 @@ import sidebarCss from '@/components/sidebar/sidebar.css?inline'
 import { initDwellTracker, onDwellUrlChange } from '@/lib/dwell-tracker'
 import { sendMessage } from '@/lib/messaging'
 import type { CampaignTaskCache } from '@/lib/storage'
-import { extractTweetIdFromArticle } from '@/lib/twitter-dom'
+import {
+  extractAuthorHandleFromArticle,
+  extractTweetIdFromArticle,
+  findAuthorAvatarLink,
+} from '@/lib/twitter-dom'
 
 /**
  * Content script — 在 X (Twitter) timeline / 详情页"织入"灯塔任务的视觉信号。
@@ -42,6 +46,10 @@ const ACTION_TYPE_TO_SELECTOR: Record<
     '[data-testid="like"]',
     '[data-testid="unlike"]',
   ],
+  // FOLLOW 的 glow 不挂在 article 内任何 Twitter 原生按钮上 —— timeline 上
+  // 没有 follow button(只有进 profile 页才有)。FOLLOW 的视觉是头像 ring,
+  // 在 mountArticle 单独处理(findAuthorAvatarLink),不走 glow selector 路径。
+  FOLLOW: [],
 }
 
 // ── per-article state ──────────────────────────────────────────────
@@ -57,11 +65,27 @@ interface MountedArticle {
    *  用于 scanTimeline 在 SPA 导航后做 focal reconcile —— focal 状态
    *  变了的 article 需要 unmount 重挂(添加/移除 SubmitButton)。 */
   isFocal: boolean
+  /** 头像 ring 视觉的目标 <a>(已贴 data-lhdao-follow-ring)。unmount 时清属性 */
+  ringedAvatars: Element[]
+  /** 这条 article 是否承担"该 FOLLOW campaign 的 claim 入口"角色 */
+  followClaimCampaignIds: string[]
 }
 
-const mounted = new Map<string, MountedArticle>() // key = tweetId
+const mounted = new Map<string, MountedArticle>() // key = tweetId or `follow:<handle>`
 /** tweetId 的 get-tasks RPC await 期间的占位,防止 race 导致双挂载 */
 const inFlight = new Set<string>()
+
+/**
+ * 跨 article 的 FOLLOW campaign 去重:某条 follow campaign 的 claim 按钮
+ * 仅挂在 timeline 上**第一次扫到**(`mounted` 里第一次出现)的 article。
+ * 后续同作者的 article 只挂头像 ring,不再挂 claim,避免视觉刷屏。
+ *
+ * 注意 trade-off:如果该首条 article 因虚拟化滚动被 Twitter 回收,我们
+ * 通过 scanTimeline 的 stale cleanup 把它从 mounted Map 移除并 release
+ * 这里对应的 campaignId,下一帧扫到下一条同作者 article 时会重新成为
+ * "首条",claim 按钮顺势挪过去。
+ */
+const followClaimMountedFor = new Map<string, Element>() // campaignId → article element
 
 /** Sidebar 卡片单例挂载状态 (Twitter 任何页面只有一个右侧 sidebar) */
 interface SidebarMountedState {
@@ -259,15 +283,15 @@ async function scanTimeline() {
   //      旧焦点 article 需要去掉 SubmitButton,新焦点需要补上
   //      SubmitButton。用 state.isFocal !== 当前 isFocal 判定。
   //
-  // 历史教训:不要在 watchUrlChanges 里 unmountAll() — 那样把所有
-  // article 一齐清掉、4 个延时 scheduleScan 把它们一个个挂回来,
-  // 视觉上就是"高亮在多条推文间陆续闪现"。改成只 unmount **focal
-  // 状态变了的那几条**,稳定不闪。
+  // FOLLOW 额外清理:从 mounted 移除时,顺带释放 followClaimMountedFor
+  // 里属于这条 article 的 campaignId,让下次 scan 时下一个还活着的同
+  // 作者 article 接过 claim 角色。
   const currentFocal = getFocalTweetId()
   for (const [tweetId, state] of mounted.entries()) {
     const stale = !state.article.isConnected
     const focalChanged = state.isFocal !== (currentFocal === tweetId)
     if (stale || focalChanged) {
+      releaseFollowClaim(state)
       unmountArticle(state)
       mounted.delete(tweetId)
     }
@@ -288,9 +312,36 @@ async function scanTimeline() {
     article.setAttribute(ARTICLE_FLAG, '1')
 
     try {
-      const r = await sendMessage({ type: 'get-tasks-for-tweet', tweetId })
-      if (r.type !== 'tasks' || r.tasks.length === 0) {
-        // 没任务 — 撤销占位,article 可能后续会有任务被 sync 进来
+      // 双查:tweet-level tasks (LIKE/RT/COMMENT/COMMENT_LIKE + 来源推文上
+      // 的 FOLLOW) + author-level tasks (跨该作者所有推文的 FOLLOW)。
+      const authorHandle = extractAuthorHandleFromArticle(article)
+      const [tweetTasksRes, followTasksRes] = await Promise.all([
+        sendMessage({ type: 'get-tasks-for-tweet', tweetId }),
+        authorHandle
+          ? sendMessage({
+              type: 'get-tasks-for-author',
+              authorHandle,
+            })
+          : Promise.resolve({ type: 'tasks' as const, tasks: [] }),
+      ])
+
+      const tweetTasks =
+        tweetTasksRes.type === 'tasks' ? tweetTasksRes.tasks : []
+      const authorTasks =
+        followTasksRes.type === 'tasks' ? followTasksRes.tasks : []
+
+      // 合并 by campaignId(同一 follow campaign 可能既在 byTweet 又在
+      // byAuthor 里出现,跟来源推文重合的情况)
+      const seen = new Set<string>()
+      const allTasks: CampaignTaskCache[] = []
+      for (const t of [...tweetTasks, ...authorTasks]) {
+        const key = `${t.campaignId}:${t.actionType}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        allTasks.push(t)
+      }
+
+      if (allTasks.length === 0) {
         article.removeAttribute(ARTICLE_FLAG)
         continue
       }
@@ -300,7 +351,7 @@ async function scanTimeline() {
         article.removeAttribute(ARTICLE_FLAG)
         continue
       }
-      const state = mountArticle(article, r.tasks, tweetId)
+      const state = mountArticle(article, allTasks, tweetId, authorHandle)
       // 即使 hosts.length === 0(caret 没找到/广告卡/Spaces 等异形 article)
       // 也要进 mounted Map + 保留 ARTICLE_FLAG。glow 属性已经贴在原生
       // like/RT/reply 按钮上,部分挂载也算成功,放回 Map 让后续 stale
@@ -337,6 +388,7 @@ function mountArticle(
   article: Element,
   tasks: CampaignTaskCache[],
   currentTweetId: string,
+  authorHandle: string | null,
 ): MountedArticle | null {
   const focalTweetId = getFocalTweetId()
   const isFocal = focalTweetId != null && focalTweetId === currentTweetId
@@ -346,15 +398,42 @@ function mountArticle(
     hosts: [],
     roots: [],
     glowedButtons: [],
+    ringedAvatars: [],
+    followClaimCampaignIds: [],
     isFocal,
   }
 
+  // —— 拆分任务来源 ——
+  // followTasks 全部都贴 ring(Q2=c:每条同作者 article 都加 ring 视觉)。
+  // 但 claim 按钮 dedup:某 follow campaign 的 claim 已经被别的 article
+  // 占了 → 这条 article 不挂 claim。本 article 是首次承担 claim 的
+  // followCampaigns 进入 ownedFollowTasks。
+  const followTasks = tasks.filter((t) => t.actionType === 'FOLLOW')
+  const ownedFollowTasks: CampaignTaskCache[] = []
+  for (const t of followTasks) {
+    const owner = followClaimMountedFor.get(t.campaignId)
+    if (owner && owner !== article && owner.isConnected) {
+      // 已被别人占,跳过 claim(ring 还会挂)
+      continue
+    }
+    // 占下 claim 角色
+    followClaimMountedFor.set(t.campaignId, article)
+    state.followClaimCampaignIds.push(t.campaignId)
+    ownedFollowTasks.push(t)
+  }
+
+  const nonFollowTasks = tasks.filter((t) => t.actionType !== 'FOLLOW')
+
+  // claim 按钮的 tasks 集合:
+  //   - 来源推文上的 LIKE/RT/COMMENT/COMMENT_LIKE:仅在 isFocal (detail 页) 显示
+  //   - FOLLOW 的 ownedFollowTasks:无论 isFocal 都显示(timeline 上头像旁可点)
+  const claimTasks: CampaignTaskCache[] = [
+    ...(isFocal ? nonFollowTasks : []),
+    ...ownedFollowTasks,
+  ]
+
   try {
-    // ② Metadata badge — 顶部右上角 (3-dot caret 菜单的左侧),展示
-    // "+N LUX" 奖励信息。Article-level 挂载,timeline 卡片和详情页都有。
-    // 注意:submit/claim 按钮**不在这里**,在底部 reply composer 旁
-    // (见下方 scanBottomMission),原因:用户做评论类任务时本来就要去
-    // 那个 textarea 打字,把 verify 按钮放在那里语境最自然。
+    // ② Metadata badge — 顶部 caret 旁。展示**总奖励**,所有 tasks 都纳入计算。
     const caretAnchor = findTopRightAnchor(article)
     if (caretAnchor?.parentElement) {
       const host = createShadowHost('lhdao-top', 'inline-flex')
@@ -366,9 +445,9 @@ function mountArticle(
       state.roots.push(root)
     }
 
-    // ③ Action button glow — 高亮 Twitter 原生 like/retweet/reply 按钮,
-    // 引导用户先去做动作再回来 verify。
-    for (const t of tasks) {
+    // ③ Action button glow — 高亮 Twitter 原生 like/retweet/reply 按钮。
+    // FOLLOW 在 ACTION_TYPE_TO_SELECTOR 是空数组,不参与 glow。
+    for (const t of nonFollowTasks) {
       for (const sel of ACTION_TYPE_TO_SELECTOR[t.actionType] ?? []) {
         const btn = article.querySelector(sel)
         if (btn && !btn.hasAttribute('data-lhdao-glow')) {
@@ -383,22 +462,34 @@ function mountArticle(
       }
     }
 
-    // ④ Submit button — **仅在焦点推文** (URL 匹配 /status/<id>) 的
-    // action button 行末尾挂。
+    // ③.5 Avatar ring — FOLLOW 任务的视觉信号,贴 data-lhdao-follow-ring
+    // 到该作者头像 link。所有同作者 article 都贴(Q2=c)。
+    if (authorHandle && followTasks.length > 0) {
+      const avatarLink = findAuthorAvatarLink(article, authorHandle)
+      if (avatarLink && !avatarLink.hasAttribute('data-lhdao-follow-ring')) {
+        avatarLink.setAttribute('data-lhdao-follow-ring', '1')
+        state.ringedAvatars.push(avatarLink)
+      }
+    }
+
+    // ④ Submit button — 决定逻辑:
+    //   - isFocal (detail 页): 含所有 LIKE/RT/COMMENT + 本 article 拥有的 FOLLOW
+    //   - timeline (非 isFocal): 仅当本 article 拥有 FOLLOW claim 才挂
     //
-    // 为什么是 action 行而不是 reply composer 旁:
-    //   - composer 在用户点 "回复" 时会被 Twitter 卸成模态对话框,
-    //     React unmount → 状态丢失 → 倒计时 / reserved 全清零
-    //   - action 行 (reply / RT / like / share) 是焦点推文的稳定子节点,
-    //     用户点 reply 后这一行**仍然可见**(模态在上方覆盖,article 没卸)
-    //   - 视觉上也紧挨用户要做的 like / RT / reply 按钮,做完动作不用挪眼
-    if (isFocal) {
+    // 挂载位置:
+    //   - isFocal 走 action row(reply / RT / like 按钮同行,稳定不会被
+    //     compose 模态卸载,原 LIKE/RT 任务的语境)
+    //   - timeline-FOLLOW 走 action row 同样位置,跟 detail 页保持一致
+    if (claimTasks.length > 0) {
       const actionRow = findActionRow(article)
       if (actionRow) {
         const host = createShadowHost('lhdao-submit', 'inline-flex')
         host.style.alignItems = 'center'
         actionRow.appendChild(host)
-        const root = renderInto(host, createElement(SubmitButton, { tasks }))
+        const root = renderInto(
+          host,
+          createElement(SubmitButton, { tasks: claimTasks }),
+        )
         state.hosts.push(host)
         state.roots.push(root)
       }
@@ -409,6 +500,20 @@ function mountArticle(
     console.warn('[lhdao] mountArticle failed', e)
     // 部分挂载成功也算,后续 unmount 会清干净
     return state.hosts.length > 0 ? state : null
+  }
+}
+
+/**
+ * 该 article 被 unmount / 离开 DOM 之前,从全局 follow claim 注册表里
+ * 释放它认领过的 campaignId,让下一次 scan 时下一个还活着的同作者 article
+ * 接过 claim 角色。
+ */
+function releaseFollowClaim(state: MountedArticle) {
+  for (const campaignId of state.followClaimCampaignIds) {
+    const current = followClaimMountedFor.get(campaignId)
+    if (current === state.article) {
+      followClaimMountedFor.delete(campaignId)
+    }
   }
 }
 
@@ -462,19 +567,27 @@ function unmountArticle(state: MountedArticle) {
   for (const btn of state.glowedButtons) {
     btn.removeAttribute('data-lhdao-glow')
   }
+  for (const avatar of state.ringedAvatars) {
+    avatar.removeAttribute('data-lhdao-follow-ring')
+  }
   state.article.removeAttribute(ARTICLE_FLAG)
 }
 
 function unmountAll() {
   for (const state of mounted.values()) {
+    releaseFollowClaim(state)
     unmountArticle(state)
   }
   mounted.clear()
   inFlight.clear()
+  followClaimMountedFor.clear()
   unmountSidebar()
   // 兜底:清理 stale 标记(article 可能已离开 DOM)+ 拖延 host(若有)
   for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
     a.removeAttribute(ARTICLE_FLAG)
+  }
+  for (const a of document.querySelectorAll('[data-lhdao-follow-ring]')) {
+    a.removeAttribute('data-lhdao-follow-ring')
   }
   for (const h of document.querySelectorAll('[data-lhdao-host="1"]')) {
     h.remove()

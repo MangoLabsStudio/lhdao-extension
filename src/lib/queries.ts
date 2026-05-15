@@ -81,6 +81,7 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       tweetAuthorName
       tweetAuthorHandle
       tweetAuthorAvatar
+      targetUsername
       keywords
       expectedReward
       effectiveTier
@@ -93,7 +94,12 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
   }
 `
 
-export type EngagementActionType = 'LIKE' | 'RT' | 'COMMENT' | 'COMMENT_LIKE'
+export type EngagementActionType =
+  | 'LIKE'
+  | 'RT'
+  | 'COMMENT'
+  | 'COMMENT_LIKE'
+  | 'FOLLOW'
 
 export interface AvailableEngagement {
   id: string
@@ -105,6 +111,12 @@ export interface AvailableEngagement {
   tweetAuthorName: string | null
   tweetAuthorHandle: string | null
   tweetAuthorAvatar: string | null
+  /**
+   * FOLLOW action 的目标账户 handle(后端小写化储存)。
+   * LIKE/RT/COMMENT 类 campaign 也可能有此字段(指推文作者),但 follow
+   * 任务**必须**有此字段才能在 timeline 做作者匹配。
+   */
+  targetUsername: string | null
   keywords: string[]
   /** 用户级联后实际能拿到的总奖励 (LUX),后端 listAvailableCampaigns 计算 */
   expectedReward: number | null

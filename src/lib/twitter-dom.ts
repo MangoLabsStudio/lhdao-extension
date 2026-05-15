@@ -67,3 +67,104 @@ export function extractTweetIdFromArticle(article: Element): string | null {
   }
   return null
 }
+
+/**
+ * Twitter handle 路径正则:`/<handle>` 后面允许 query / hash / 子路径,但
+ * 排除一些保留路径(home/explore/notifications/messages/search/i)。Twitter
+ * 用 / + handle 作为用户主页 URL,而且头像 link 永远是 `/elonmusk` 这种纯
+ * 形式(无 /status/...)。
+ */
+const HANDLE_PATH_REGEX =
+  /^\/([A-Za-z0-9_]{1,15})(?:\/(?:photo|header_photo|with_replies|media|likes)?)?(?:[?#]|$)/
+
+// 跳过的 Twitter 系统路径(避免把 /home 当成 username)
+const RESERVED_HANDLES = new Set([
+  'home',
+  'explore',
+  'notifications',
+  'messages',
+  'search',
+  'i',
+  'compose',
+  'settings',
+  'login',
+  'logout',
+  'signup',
+])
+
+/**
+ * 从一条 <article> 提取**推文作者的 Twitter handle**(无 @,小写)。
+ *
+ * 策略:Twitter timeline 上每条 article 的作者信息区有
+ *   `<div data-testid="User-Name">`
+ * 里头第一个指向 `/handle` 形式 URL 的 <a>(不是 /status/ 链接)就是作者
+ * 主页链接,handle 在 href 里。
+ *
+ * 嵌套引用推文有自己的 User-Name 区,我们用 closest('article') 校验归属。
+ *
+ * @returns lowercase handle, or null when the structure is unrecognized
+ */
+export function extractAuthorHandleFromArticle(
+  article: Element,
+): string | null {
+  // 策略 1:data-testid="User-Name" 容器内的第一个 user-link
+  const nameBlock = article.querySelector('[data-testid="User-Name"]')
+  if (nameBlock) {
+    const handle = scanUserLinkIn(nameBlock, article)
+    if (handle) return handle
+  }
+
+  // 策略 2:整篇 article 内任意 user-link (兜底,某些视图 User-Name 不存在)
+  const handle = scanUserLinkIn(article, article)
+  return handle
+}
+
+function scanUserLinkIn(scope: Element, owningArticle: Element): string | null {
+  const links = scope.querySelectorAll('a[role="link"]')
+  for (const a of Array.from(links)) {
+    if (a.closest('article') !== owningArticle) continue // 引用推文的 link,跳过
+    const href = a.getAttribute('href') ?? ''
+    const m = href.match(HANDLE_PATH_REGEX)
+    if (!m) continue
+    const handle = m[1].toLowerCase()
+    if (RESERVED_HANDLES.has(handle)) continue
+    return handle
+  }
+  return null
+}
+
+/**
+ * 找 article 内的作者头像链接(`<a href="/handle">` 包着头像 img)。
+ * 给它打 data-attribute 让 CSS 加 ring 视觉。
+ *
+ * Twitter timeline article DOM 结构(简化):
+ *   <article>
+ *     <div>
+ *       <a href="/elonmusk" role="link">    ← 头像链接
+ *         <div>
+ *           <img src="..." />               ← 头像
+ *         </div>
+ *       </a>
+ *       <a href="/elonmusk" role="link">Elon Musk</a>    ← 名字链接
+ *       <a href="/elonmusk" role="link">@elonmusk</a>    ← handle 链接
+ *     </div>
+ *     ...
+ *   </article>
+ *
+ * 头像链接的特征是**里面有 <img>**,其他几个 user-link 是纯文字。用这个区分。
+ */
+export function findAuthorAvatarLink(
+  article: Element,
+  authorHandle: string,
+): HTMLAnchorElement | null {
+  const targetHref = `/${authorHandle}`
+  const links = article.querySelectorAll<HTMLAnchorElement>('a[role="link"]')
+  for (const a of Array.from(links)) {
+    if (a.closest('article') !== article) continue
+    const href = a.getAttribute('href')?.toLowerCase() ?? ''
+    if (href !== targetHref) continue
+    // 头像链接的判定:link 内有 <img>
+    if (a.querySelector('img')) return a
+  }
+  return null
+}

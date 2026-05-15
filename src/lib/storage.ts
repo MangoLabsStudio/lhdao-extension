@@ -19,8 +19,19 @@ interface LocalSchema {
 }
 
 interface SessionSchema {
-  /** key = tweetId, value = 这条推文上挂着的所有可参与任务 */
+  /**
+   * key = tweetId, value = 这条推文上挂着的"推文级"任务(LIKE/RT/COMMENT)。
+   * content script 拿到 tweetId 时 O(1) 查询。
+   */
   tasksByTweetId: Record<string, CampaignTaskCache[]>
+  /**
+   * key = author handle(全小写),value = 该作者作为目标的 FOLLOW 任务列表。
+   *
+   * Twitter timeline 里同一作者可能出现多条推文,所有 article 共享同一组
+   * follow tasks。content script 提取 article 作者 handle 后 O(1) 查询,
+   * 跟 tasksByTweetId 合并起来挂 chip。
+   */
+  tasksByAuthorHandle: Record<string, CampaignTaskCache[]>
   /** 上次 background SW 拉取任务的时间戳 (ms since epoch) */
   lastSyncAt: number
   /** 上次同步的错误信息;成功时为 null */
@@ -99,13 +110,22 @@ export interface ActiveCampaignSummary {
  */
 export interface CampaignTaskCache {
   campaignId: string
-  /** 目标推文 id (从 targetUrl 抽出) */
+  /**
+   * 目标推文 id (从 targetUrl 抽出)。
+   *
+   * 注意:FOLLOW 任务**没有具体推文目标**,这种情况下 tweetId 仍然取 campaign
+   * 的 targetUrl 推文 id(作为"挂在哪条推文的 article 上"的 reference),但
+   * **匹配逻辑用 targetUsername 而非 tweetId**。flattenTasks 同时把 FOLLOW
+   * 任务索引进 tasksByAuthorHandle,跨该作者的所有 article 都能命中。
+   */
   tweetId: string
-  actionType: 'LIKE' | 'RT' | 'COMMENT' | 'COMMENT_LIKE'
+  actionType: 'LIKE' | 'RT' | 'COMMENT' | 'COMMENT_LIKE' | 'FOLLOW'
   /** 当前用户 effectiveTier 下应得的 LUX 奖励 */
   expectedReward: number
   /** COMMENT 类任务的关键词提示,non-comment 类型为 null */
   commentKeyword?: string | null
+  /** FOLLOW 任务的目标账户 handle(小写)。non-FOLLOW 为 null */
+  targetUsername?: string | null
 }
 
 // ── Stores ────────────────────────────────────────────────────────────

@@ -17,8 +17,13 @@ import type {
 // ── Requests (CS → BG, 偶尔反向) ─────────────────────────────────────
 
 export type MsgRequest =
-  /** content script 询问某条推文上挂着哪些任务 */
+  /** content script 询问某条推文上挂着哪些任务(LIKE/RT/COMMENT 等 tweet-level)*/
   | { type: 'get-tasks-for-tweet'; tweetId: string }
+  /**
+   * content script 询问某作者作为目标的 FOLLOW 任务列表。authorHandle 应
+   * 已小写化(后端 targetUsername 字段就是小写存的)。
+   */
+  | { type: 'get-tasks-for-author'; authorHandle: string }
   /** 抢单第一步:仅占席位 (reserveEngagementSlot)。confirmCascade 让用户
    *  在收到 cascadeWarning 后点重抢时确认降档接受 */
   | { type: 'reserve-task'; campaignId: string; confirmCascade?: boolean }
