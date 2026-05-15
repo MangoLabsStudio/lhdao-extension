@@ -41,9 +41,15 @@ export interface MeResult {
     username: string
     nickname: string | null
     tier: string | null
-    /** 劳动收入 LUX 余额(KOL 抢任务赚的,可用于提现 / 显示) */
-    newLux: number | null
-    /** 当日新增 newLux 之和;后端 ResolveField 计算,仅本人可见 */
+    /**
+     * 劳动收入 LUX 余额。
+     *
+     * 注意:Prisma Decimal 在 prisma-nestjs-graphql 端注册为 `GraphQLDecimal`
+     * scalar,**实际传输为 string**(避免 JS float 精度损失)。前端必须
+     * `Number(value)` 转一下才能用,否则 `Number.isFinite` 校验失败。
+     */
+    newLux: number | string | null
+    /** 当日新增 newLux 之和;后端 ResolveField 用 .toNumber() 返回 — 是 number */
     todayEarnings: number | null
   } | null
 }

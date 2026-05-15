@@ -190,7 +190,11 @@ async function syncTasks(): Promise<void> {
       id: m.id,
       displayName: m.nickname ?? m.username ?? null,
       tier: m.tier ?? null,
-      newLux: m.newLux ?? null,
+      // newLux 是 GraphQLDecimal scalar,后端传 string;显式转 number,
+      // 不可解析(空串 / null / NaN)统一归一为 null,前端 formatBalance
+      // 才能正确识别"无数据"显示横杠,而不是把 string "520" 当成 NaN
+      newLux: parseNumber(m.newLux),
+      // todayEarnings 后端 ResolveField 已 .toNumber(),是 number,直接用
       todayEarnings: m.todayEarnings ?? null,
     }
     await sessionStore.set('userProfile', profile)
@@ -214,6 +218,19 @@ async function syncTasks(): Promise<void> {
     await sessionStore.set('lastSyncError', msg)
     await sessionStore.set('lastSyncHttpStatus', httpStatus)
   }
+}
+
+/**
+ * 把 GraphQL response 里可能是 string(GraphQLDecimal)/ number(Float)/
+ * null / undefined 的字段统一转 number。无法解析 → null。
+ *
+ * 用途:`me.newLux` 用 prisma-nestjs-graphql 的 GraphQLDecimal scalar,
+ * 实际 wire 上是 string;别的地方有些字段是 Float。前端只想要 number。
+ */
+function parseNumber(v: unknown): number | null {
+  if (v == null) return null
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : null
 }
 
 /**
