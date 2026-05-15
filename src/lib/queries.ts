@@ -11,7 +11,16 @@
  *   - kol-dao-service/src/modules/plugin-token/           (auth via Bearer)
  */
 
-// ── me — 取当前用户(用 Bearer token 鉴权时验证 token 有效) ────────
+// ── me — 取当前用户(token 验证 + sidebar 个人面板数据) ────────────
+//
+// options 页只用最小 set (id / username / tier) 来验证 token。
+// sidebar 卡片用扩展 set 来渲染:
+//   - newLux       → "可用余额 +N LUX"(KOL 抢任务获得的劳动收入)
+//   - tier         → "TIER A" chip
+//   - todayEarnings → "今日 +N LUX"(后端 ResolveField 实时算)
+//
+// 注意:newLux / lux 是 Prisma Decimal,GraphQL 序列化为 number。
+// 大额时精度有损但 sidebar 显示一位小数足够,不放大问题。
 
 export const ME_QUERY = `
   query Me {
@@ -20,6 +29,8 @@ export const ME_QUERY = `
       username
       nickname
       tier
+      newLux
+      todayEarnings
     }
   }
 `
@@ -30,6 +41,10 @@ export interface MeResult {
     username: string
     nickname: string | null
     tier: string | null
+    /** 劳动收入 LUX 余额(KOL 抢任务赚的,可用于提现 / 显示) */
+    newLux: number | null
+    /** 当日新增 newLux 之和;后端 ResolveField 计算,仅本人可见 */
+    todayEarnings: number | null
   } | null
 }
 
@@ -92,6 +107,53 @@ export interface AvailableEngagement {
 
 export interface AvailableEngagementsResult {
   availableEngagements: AvailableEngagement[]
+}
+
+// ── 拉可参与的 TWEET 类型任务(创作类:原创推文 / 引用转推) ────────
+//
+// Sidebar v2 卡片专用 — 跟 availableEngagements 是平行 query,
+// 后端 `availableTweets` 已贴 @AllowPluginToken()。
+//
+// 字段对应 UnifiedCampaignModel:
+//   projectName        - 项目方名(可能 null,fallback 到 title)
+//   description        - 任务 brief 描述(KOL 该写什么)
+//   submitClose        - 截止时间(KOL 必须在此前完成提交)
+//   myExpectedReward   - 我自己 tier 下的奖励数额(优先用,精确)
+//   expectedReward     - 通用 tier 下的奖励(myExpectedReward 缺失时 fallback)
+//   targetUrl          - 创建页 / 详情页 URL(点击 row 跳过去)
+
+export const AVAILABLE_TWEETS_QUERY = `
+  query AvailableTweets {
+    availableTweets {
+      id
+      type
+      title
+      description
+      projectName
+      submitClose
+      expectedReward
+      myExpectedReward
+      targetUrl
+    }
+  }
+`
+
+export interface AvailableTweet {
+  id: string
+  type: string
+  title: string | null
+  description: string | null
+  projectName: string | null
+  /** ISO date string */
+  submitClose: string | null
+  expectedReward: number | null
+  /** 我 tier 下的精确奖励;null 时 fallback 到 expectedReward */
+  myExpectedReward: number | null
+  targetUrl: string | null
+}
+
+export interface AvailableTweetsResult {
+  availableTweets: AvailableTweet[]
 }
 
 // ── 预约 / 验证 ──────────────────────────────────────────────────────

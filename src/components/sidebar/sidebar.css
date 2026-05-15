@@ -1,25 +1,37 @@
 @import 'tailwindcss';
 
 /*
- * Sidebar 卡片 Shadow DOM 内部样式。
+ * Sidebar 卡片 v2 Shadow DOM 样式 — 完全重写。
  *
- * 设计原则:
- *  - 视觉**贴近 Twitter sidebar 卡片**(同圆角 / 同 border / 同 padding)
- *    避免出现"明显是塞进来的外挂"
- *  - 信息层级:奖励 > 作者 > 推文预览 > 动作
- *  - 用品牌 teal-cyan accent (logo / 奖励数额 / 链接 footer)
- *  - hover 整行变 subtle teal tint,跟 Twitter 自家 sidebar 卡片 hover 风格统一
- *  - 暗色模式深度跟随 Twitter (#15202b 系)
+ * 设计 spec:docs/sidebar-card-design.md
+ *
+ * 5 段节奏:14 → 16 → 10 → 12 → 10(舒-紧-动-紧-舒)
+ *   ① 身份 strip       14/16 padding
+ *   ② 指标 row         16/16 padding
+ *   ③ CTA 按钮         10/16 padding
+ *   ─ hairline ─
+ *   ④ section header  12/16 padding
+ *   ⑤ 任务行          10/12 padding
+ *   ⑥ footer link    10/16 padding
+ *
+ * 颜色 token 全用 OKLCH(感知均匀),neutral 微偏 brand teal。
+ * 字体:system stack — 跟 Twitter / 用户 OS 一致,长期共存不违和。
+ * 60-30-10:60% neutral surface / 30% ink+border / 10% brand teal。
  */
 
 :host {
   all: initial;
   display: block;
   font-family:
+    ui-sans-serif,
+    system-ui,
     -apple-system,
     BlinkMacSystemFont,
+    'SF Pro Text',
+    'Segoe UI Variable Text',
     'Segoe UI',
     Roboto,
+    'Helvetica Neue',
     'PingFang SC',
     'Hiragino Sans GB',
     sans-serif;
@@ -40,135 +52,243 @@
 
 /* ── Card container ──────────────────────────────────────────────── */
 
-.lhdao-card {
-  background: rgb(247 249 249);
-  border: 1px solid rgb(239 243 244);
+.lh-card {
+  background: oklch(0.99 0.003 195);
+  border: 1px solid oklch(0.93 0.005 195);
   border-radius: 16px;
   overflow: hidden;
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card {
-    background: rgb(22 24 28);
-    border-color: rgb(47 51 54);
+  .lh-card {
+    background: oklch(0.18 0.008 240);
+    border-color: oklch(0.28 0.01 240);
   }
 }
 
-/* ── Header ──────────────────────────────────────────────────────── */
+/* ── ① Identity strip ────────────────────────────────────────────── */
 
-.lhdao-card-header {
+.lh-strip {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 14px 16px 12px;
 }
 
-.lhdao-card-logo {
+.lh-logo {
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  object-fit: cover;
-  flex-shrink: 0;
-}
-.lhdao-card-logo-fallback {
+  background: linear-gradient(
+    135deg,
+    oklch(0.62 0.13 195) 0%,
+    oklch(0.7 0.12 215) 100%
+  );
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: white;
+  overflow: hidden;
+}
+.lh-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
 }
 
-.lhdao-card-title-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.lhdao-card-title {
-  font-size: 17px;
+.lh-brand {
+  flex: 1;
+  font-size: 15px;
   font-weight: 800;
   letter-spacing: -0.01em;
-  color: rgb(15 23 42);
-  margin: 0;
-  line-height: 1.2;
+  color: oklch(0.2 0.02 250);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-title {
-    color: rgb(231 233 234);
+  .lh-brand {
+    color: oklch(0.95 0.005 240);
   }
 }
 
-.lhdao-card-subtitle {
-  font-size: 11.5px;
-  color: rgb(83 100 113);
-  margin: 0;
-  line-height: 1.3;
-  font-weight: 500;
+.lh-tier {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: oklch(0.96 0.025 195);
+  color: oklch(0.5 0.13 195);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-subtitle {
-    color: rgb(113 118 123);
+  .lh-tier {
+    background: oklch(0.28 0.06 195 / 0.4);
+    color: oklch(0.82 0.13 195);
   }
 }
 
-/* ── List ────────────────────────────────────────────────────────── */
+/* ── ② Metric row (balance + today) ──────────────────────────────── */
 
-.lhdao-card-list {
+.lh-metric {
+  padding: 4px 16px 14px;
+}
+
+.lh-metric-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: oklch(0.55 0.01 250);
+  margin-bottom: 4px;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-metric-label {
+    color: oklch(0.65 0.008 240);
+  }
+}
+
+.lh-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  color: oklch(0.55 0.13 195);
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-balance {
+    color: oklch(0.8 0.13 195);
+  }
+}
+.lh-balance-num {
+  font-size: 24px;
+  font-weight: 900;
+}
+.lh-balance-unit {
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.lh-today {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: oklch(0.65 0.1 195);
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-today {
+    color: oklch(0.75 0.1 195);
+  }
+}
+
+/* ── ③ Main CTA ──────────────────────────────────────────────────── */
+
+.lh-cta-wrap {
+  padding: 0 16px 14px;
+}
+
+.lh-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: oklch(0.62 0.13 195);
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.lh-cta:hover {
+  background: oklch(0.55 0.14 195);
+}
+.lh-cta:active {
+  transform: scale(0.98);
+}
+@media (prefers-color-scheme: dark) {
+  .lh-cta {
+    background: oklch(0.7 0.13 195);
+    color: oklch(0.16 0.008 240);
+  }
+  .lh-cta:hover {
+    background: oklch(0.62 0.13 195);
+  }
+}
+.lh-cta-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* ── ④ Section header ────────────────────────────────────────────── */
+
+.lh-section-header {
+  padding: 12px 16px 8px;
+  border-top: 1px solid oklch(0.93 0.005 195);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: oklch(0.55 0.01 250);
+}
+@media (prefers-color-scheme: dark) {
+  .lh-section-header {
+    border-top-color: oklch(0.28 0.01 240);
+    color: oklch(0.65 0.008 240);
+  }
+}
+.lh-section-count {
+  opacity: 0.7;
+  margin-left: 3px;
+}
+
+/* ── ⑤ Task list ─────────────────────────────────────────────────── */
+
+.lh-list {
   margin: 0;
   padding: 0 8px 4px;
   list-style: none;
 }
-
-.lhdao-card-row {
+.lh-list li {
   margin: 0;
   padding: 0;
 }
 
-.lhdao-card-row-link {
+.lh-row {
   display: grid;
-  grid-template-columns: 40px 1fr auto;
-  gap: 12px;
-  align-items: start;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
   padding: 10px 12px;
   border-radius: 12px;
-  text-decoration: none;
-  color: inherit;
   cursor: pointer;
   transition: background-color 120ms ease;
+  text-decoration: none;
+  color: inherit;
 }
-.lhdao-card-row-link:hover {
+.lh-row:hover {
   background: oklch(0.97 0.025 195);
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-row-link:hover {
-    background: rgb(30 39 50);
+  .lh-row:hover {
+    background: oklch(0.27 0.04 195 / 0.5);
   }
 }
 
-/* ── Avatar ──────────────────────────────────────────────────────── */
-
-.lhdao-card-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
-  object-fit: cover;
-  flex-shrink: 0;
-  background: rgb(239 243 244);
-}
-@media (prefers-color-scheme: dark) {
-  .lhdao-card-avatar {
-    background: rgb(47 51 54);
-  }
-}
-.lhdao-card-avatar-placeholder {
-  background: linear-gradient(
-    135deg,
-    oklch(0.78 0.11 195) 0%,
-    oklch(0.83 0.1 215) 100%
-  );
-}
-
-/* ── Body (middle column) ────────────────────────────────────────── */
-
-.lhdao-card-row-body {
+.lh-row-body {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -176,157 +296,335 @@
   overflow: hidden;
 }
 
-.lhdao-card-row-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: rgb(15 23 42);
+.lh-project {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: oklch(0.55 0.01 250);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.3;
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-row-name {
-    color: rgb(231 233 234);
+  .lh-project {
+    color: oklch(0.65 0.008 240);
   }
 }
 
-.lhdao-card-row-handle {
-  font-size: 12.5px;
-  font-weight: 400;
-  color: rgb(83 100 113);
-  margin-left: 5px;
-}
-@media (prefers-color-scheme: dark) {
-  .lhdao-card-row-handle {
-    color: rgb(113 118 123);
-  }
-}
-
-.lhdao-card-row-preview {
-  font-size: 12px;
-  color: rgb(83 100 113);
+.lh-brief {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: oklch(0.2 0.02 250);
+  line-height: 1.35;
   margin: 0;
-  line-height: 1.4;
   display: -webkit-box;
-  -webkit-line-clamp: 1;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-row-preview {
-    color: rgb(139 152 165);
+  .lh-brief {
+    color: oklch(0.95 0.005 240);
   }
 }
 
-.lhdao-card-row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 2px;
-}
-
-.lhdao-card-action-chip {
+.lh-deadline {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: oklch(0.97 0.025 195);
-  color: rgb(13 148 136);
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: 1.3;
-  white-space: nowrap;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: oklch(0.55 0.01 250);
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-action-chip {
-    background: oklch(0.28 0.06 195 / 0.35);
-    color: rgb(45 212 191);
+  .lh-deadline {
+    color: oklch(0.65 0.008 240);
   }
 }
-.lhdao-card-action-icon {
+.lh-deadline svg {
   width: 10px;
   height: 10px;
+  flex-shrink: 0;
 }
-
-.lhdao-card-keyword {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: oklch(0.96 0.025 25);
-  color: rgb(225 29 72);
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: 1.3;
-  white-space: nowrap;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.lh-deadline-urgent {
+  color: oklch(0.6 0.14 30);
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-keyword {
-    background: oklch(0.3 0.08 25 / 0.5);
-    color: rgb(251 113 133);
+  .lh-deadline-urgent {
+    color: oklch(0.78 0.14 30);
   }
 }
 
-/* ── Reward (right column) ───────────────────────────────────────── */
-
-.lhdao-card-row-reward {
+.lh-reward {
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
-  color: rgb(13 148 136);
-  line-height: 1.1;
+  color: oklch(0.55 0.13 195);
+  line-height: 1;
   align-self: center;
-  padding-left: 4px;
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-row-reward {
-    color: rgb(45 212 191);
+  .lh-reward {
+    color: oklch(0.8 0.13 195);
   }
 }
-.lhdao-card-row-reward-num {
-  font-size: 17px;
-  font-weight: 800;
+.lh-reward-num {
+  font-size: 18px;
+  font-weight: 900;
   letter-spacing: -0.02em;
   display: block;
 }
-.lhdao-card-row-reward-unit {
+.lh-reward-unit {
   font-size: 10px;
-  font-weight: 600;
-  opacity: 0.75;
+  font-weight: 700;
+  opacity: 0.7;
   display: block;
-  margin-top: 1px;
+  margin-top: 3px;
+  letter-spacing: 0.05em;
 }
 
-/* ── Footer link ─────────────────────────────────────────────────── */
+/* ── ⑥ Footer link ───────────────────────────────────────────────── */
 
-.lhdao-card-footer-link {
+.lh-footer {
   display: block;
-  padding: 10px 16px 14px;
+  padding: 10px 16px 12px;
   text-align: center;
   font-size: 12.5px;
   font-weight: 700;
-  color: rgb(13 148 136);
+  color: oklch(0.55 0.13 195);
   text-decoration: none;
-  border-top: 1px solid rgb(239 243 244);
+  border-top: 1px solid oklch(0.93 0.005 195);
   transition: background-color 120ms ease;
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-footer-link {
-    color: rgb(45 212 191);
-    border-top-color: rgb(47 51 54);
+  .lh-footer {
+    color: oklch(0.8 0.13 195);
+    border-top-color: oklch(0.28 0.01 240);
   }
 }
-.lhdao-card-footer-link:hover {
+.lh-footer:hover {
   background: oklch(0.97 0.025 195);
 }
 @media (prefers-color-scheme: dark) {
-  .lhdao-card-footer-link:hover {
-    background: rgb(30 39 50);
+  .lh-footer:hover {
+    background: oklch(0.27 0.04 195 / 0.5);
+  }
+}
+
+/* ── Empty state ─────────────────────────────────────────────────── */
+
+.lh-empty {
+  padding: 28px 16px 24px;
+  border-top: 1px solid oklch(0.93 0.005 195);
+  text-align: center;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-empty {
+    border-top-color: oklch(0.28 0.01 240);
+  }
+}
+
+.lh-empty-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: oklch(0.62 0.13 195);
+  opacity: 0.65;
+  margin-bottom: 12px;
+  animation: lh-dot-pulse 2s ease-in-out infinite;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-empty-dot {
+    background: oklch(0.78 0.13 195);
+  }
+}
+@keyframes lh-dot-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.2);
+  }
+}
+
+.lh-empty-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: oklch(0.2 0.02 250);
+  margin: 0 0 4px;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-empty-title {
+    color: oklch(0.95 0.005 240);
+  }
+}
+.lh-empty-hint {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: oklch(0.55 0.01 250);
+  margin: 0;
+  line-height: 1.5;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-empty-hint {
+    color: oklch(0.65 0.008 240);
+  }
+}
+
+/* ── Unauth state ────────────────────────────────────────────────── */
+
+.lh-unauth {
+  padding: 14px 16px 18px;
+  text-align: center;
+}
+.lh-unauth-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: oklch(0.2 0.02 250);
+  margin: 10px 0 6px;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-unauth-title {
+    color: oklch(0.95 0.005 240);
+  }
+}
+.lh-unauth-hint {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: oklch(0.55 0.01 250);
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-unauth-hint {
+    color: oklch(0.65 0.008 240);
+  }
+}
+.lh-unauth-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid oklch(0.55 0.13 195);
+  color: oklch(0.55 0.13 195);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background-color 120ms ease;
+}
+.lh-unauth-btn:hover {
+  background: oklch(0.97 0.025 195);
+}
+@media (prefers-color-scheme: dark) {
+  .lh-unauth-btn {
+    border-color: oklch(0.78 0.13 195);
+    color: oklch(0.78 0.13 195);
+  }
+  .lh-unauth-btn:hover {
+    background: oklch(0.27 0.04 195 / 0.5);
+  }
+}
+
+/* ── Loading skeleton ────────────────────────────────────────────── */
+
+.lh-sk-block {
+  display: inline-block;
+  background: oklch(0.94 0.005 195);
+  border-radius: 6px;
+  animation: lh-sk-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-sk-block {
+    background: oklch(0.25 0.01 240);
+  }
+}
+@keyframes lh-sk-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.lh-sk-tier {
+  width: 44px;
+  height: 18px;
+  border-radius: 999px;
+}
+.lh-sk-label {
+  width: 60px;
+  height: 10px;
+  margin-bottom: 8px;
+}
+.lh-sk-balance {
+  width: 130px;
+  height: 24px;
+  margin-bottom: 8px;
+}
+.lh-sk-today {
+  width: 80px;
+  height: 12px;
+}
+.lh-sk-cta {
+  width: 100%;
+  height: 38px;
+  border-radius: 10px;
+}
+.lh-sk-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 10px 12px;
+  align-items: center;
+}
+.lh-sk-rowbody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lh-sk-project {
+  width: 50%;
+  height: 10px;
+}
+.lh-sk-brief1 {
+  width: 90%;
+  height: 12px;
+}
+.lh-sk-brief2 {
+  width: 70%;
+  height: 12px;
+}
+.lh-sk-deadline {
+  width: 40%;
+  height: 9px;
+}
+.lh-sk-reward {
+  width: 36px;
+  height: 28px;
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-empty-dot,
+  .lh-sk-block {
+    animation: none;
+  }
+  .lh-row,
+  .lh-cta,
+  .lh-footer,
+  .lh-unauth-btn {
+    transition: none;
   }
 }

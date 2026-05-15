@@ -3,8 +3,13 @@ import { GqlError, gql } from '@/lib/gql'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
   AVAILABLE_ENGAGEMENTS_QUERY,
+  AVAILABLE_TWEETS_QUERY,
   type AvailableEngagementsResult,
+  type AvailableTweet,
+  type AvailableTweetsResult,
   type EngagementActionType,
+  ME_QUERY,
+  type MeResult,
   RECORD_TWEET_DWELL_MUTATION,
   RESERVE_SLOT_MUTATION,
   type ReserveSlotResult,
@@ -16,6 +21,8 @@ import {
   type CampaignTaskCache,
   localStore,
   sessionStore,
+  type TweetCampaignSummary,
+  type UserProfile,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import type { MsgResponse, SubmitErrorCode } from '@/types/messages'
@@ -70,6 +77,18 @@ export default defineBackground(() => {
       const campaigns = (await sessionStore.get('activeCampaigns')) ?? []
       return { type: 'active-campaigns', campaigns }
     }
+    if (req.type === 'get-sidebar-data') {
+      const token = await localStore.get('apiToken')
+      const tokenConfigured = !!token
+      const profile = (await sessionStore.get('userProfile')) ?? null
+      const tweetCampaigns = (await sessionStore.get('tweetCampaigns')) ?? null
+      return {
+        type: 'sidebar-data',
+        profile,
+        tweetCampaigns,
+        tokenConfigured,
+      }
+    }
     if (req.type === 'has-token') {
       const token = await localStore.get('apiToken')
       return { type: 'token-status', configured: !!token }
@@ -122,36 +141,107 @@ export default defineBackground(() => {
 async function syncTasks(): Promise<void> {
   const token = await localStore.get('apiToken')
   if (!token) {
-    // 没 token 就清空缓存,避免遗留旧任务被点击
+    // 没 token 就清空所有缓存,避免遗留旧任务/旧余额误导
     await sessionStore.set('tasksByTweetId', {})
     await sessionStore.set('activeCampaigns', [])
+    await sessionStore.set('tweetCampaigns', [])
+    await sessionStore.set('userProfile', null)
     await sessionStore.set('lastSyncError', 'No API token configured')
     await sessionStore.set('lastSyncHttpStatus', null)
     return
   }
 
-  try {
-    const data = await gql<AvailableEngagementsResult>(
-      AVAILABLE_ENGAGEMENTS_QUERY,
-    )
+  // 三个 query 并行拉,allSettled 让部分失败不阻塞其他成功的结果。
+  // engagements → chip 高亮用;tweets → sidebar 列表用;me → sidebar 个人面板用。
+  const [engRes, tweetsRes, meRes] = await Promise.allSettled([
+    gql<AvailableEngagementsResult>(AVAILABLE_ENGAGEMENTS_QUERY),
+    gql<AvailableTweetsResult>(AVAILABLE_TWEETS_QUERY),
+    gql<MeResult>(ME_QUERY),
+  ])
+
+  // —— engagement → chip / activeCampaigns ——
+  if (engRes.status === 'fulfilled') {
+    const data = engRes.value
     const map = flattenTasks(data.availableEngagements)
     const activeCampaigns = buildActiveCampaignSummaries(
       data.availableEngagements,
     )
     await sessionStore.set('tasksByTweetId', map)
     await sessionStore.set('activeCampaigns', activeCampaigns)
+  } else {
+    console.warn('[lhdao] availableEngagements failed', engRes.reason)
+  }
+
+  // —— tweets → sidebar 任务列表 ——
+  if (tweetsRes.status === 'fulfilled') {
+    const summaries = buildTweetCampaignSummaries(
+      tweetsRes.value.availableTweets,
+    )
+    await sessionStore.set('tweetCampaigns', summaries)
+  } else {
+    console.warn('[lhdao] availableTweets failed', tweetsRes.reason)
+    // 保留旧缓存 — 网络抖动时旧数据比空数据更可用
+  }
+
+  // —— me → sidebar 个人面板 ——
+  if (meRes.status === 'fulfilled' && meRes.value.me) {
+    const m = meRes.value.me
+    const profile: UserProfile = {
+      id: m.id,
+      displayName: m.nickname ?? m.username ?? null,
+      tier: m.tier ?? null,
+      newLux: m.newLux ?? null,
+      todayEarnings: m.todayEarnings ?? null,
+    }
+    await sessionStore.set('userProfile', profile)
+  } else if (meRes.status === 'rejected') {
+    console.warn('[lhdao] me failed', meRes.reason)
+  }
+
+  // —— 全局 sync 状态:任一关键 query 成功就算"同步过" ——
+  // engagement 是 chip 的核心,优先用它的成功/失败做主判断;
+  // 单 me 或 tweets 失败不算整体失败(部分降级展示)。
+  if (engRes.status === 'fulfilled') {
     await sessionStore.set('lastSyncAt', Date.now())
     await sessionStore.set('lastSyncError', null)
     await sessionStore.set('lastSyncHttpStatus', null)
     broadcastToContent({ type: 'tasks-updated' })
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    const httpStatus = e instanceof GqlError ? (e.httpStatus ?? null) : null
+  } else {
+    const reason = engRes.reason
+    const msg = reason instanceof Error ? reason.message : String(reason)
+    const httpStatus =
+      reason instanceof GqlError ? (reason.httpStatus ?? null) : null
     await sessionStore.set('lastSyncError', msg)
     await sessionStore.set('lastSyncHttpStatus', httpStatus)
-    console.warn('[lhdao] sync failed', e)
-    // 不清空缓存 — 网络抖动时旧数据比空数据更可用
   }
+}
+
+/**
+ * 把后端 availableTweets 整理成 sidebar 列表行数据。
+ *
+ * - 类型必须是 TWEET(防御性,后端 query 本来就只返 TWEET)
+ * - 奖励优先 myExpectedReward(我 tier 下的精确值),fallback expectedReward
+ * - brief 优先 description,fallback title,都没就 null
+ * - 按 myExpectedReward / expectedReward 降序排,值钱的靠前
+ */
+function buildTweetCampaignSummaries(
+  tweets: AvailableTweet[],
+): TweetCampaignSummary[] {
+  const result: TweetCampaignSummary[] = []
+  for (const t of tweets) {
+    if (t.type !== 'TWEET') continue
+    const reward = t.myExpectedReward ?? t.expectedReward ?? 0
+    result.push({
+      campaignId: t.id,
+      projectName: t.projectName ?? null,
+      brief: t.description ?? t.title ?? null,
+      rewardLux: reward,
+      submitClose: t.submitClose ?? null,
+      targetUrl: t.targetUrl ?? null,
+    })
+  }
+  result.sort((a, b) => b.rewardLux - a.rewardLux)
+  return result
 }
 
 /**

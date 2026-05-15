@@ -7,7 +7,12 @@
  *   - 单向广播(BG → CS)用 `tasks-updated`,响应永远是 `ack`
  */
 
-import type { ActiveCampaignSummary, CampaignTaskCache } from '@/lib/storage'
+import type {
+  ActiveCampaignSummary,
+  CampaignTaskCache,
+  TweetCampaignSummary,
+  UserProfile,
+} from '@/lib/storage'
 
 // ── Requests (CS → BG, 偶尔反向) ─────────────────────────────────────
 
@@ -27,8 +32,10 @@ export type MsgRequest =
   | { type: 'force-sync' }
   /** content script 上报推文详情页停留时长 (anti-cheat 信号) */
   | { type: 'record-dwell'; tweetId: string; durationMs: number }
-  /** sidebar 卡片询问当前可抢 ENGAGEMENT campaign 列表 */
+  /** [legacy] sidebar 卡片询问当前可抢 ENGAGEMENT campaign 列表 */
   | { type: 'get-active-campaigns' }
+  /** [v2] sidebar 卡片询问个人面板数据 + TWEET 任务列表(一次拿全) */
+  | { type: 'get-sidebar-data' }
   /** BG → CS 广播:任务列表已更新,请重新查询 */
   | { type: 'tasks-updated' }
 
@@ -49,6 +56,15 @@ export type MsgResponse =
   | { type: 'submit-result'; ok: false; code: SubmitErrorCode; message: string }
   | { type: 'token-status'; configured: boolean }
   | { type: 'active-campaigns'; campaigns: ActiveCampaignSummary[] }
+  | {
+      type: 'sidebar-data'
+      /** 个人面板;未配置 token 或同步失败时 null */
+      profile: UserProfile | null
+      /** TWEET 类任务列表;空数组 = 暂无任务,null = 同步失败 */
+      tweetCampaigns: TweetCampaignSummary[] | null
+      /** 是否已配置 plugin token — sidebar 据此渲染 unauth 态 */
+      tokenConfigured: boolean
+    }
   | {
       type: 'sync-result'
       ok: true
