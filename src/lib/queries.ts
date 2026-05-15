@@ -28,9 +28,11 @@ export const ME_QUERY = `
       id
       username
       nickname
+      avatar
       tier
       newLux
       todayEarnings
+      twitterUsername
     }
   }
 `
@@ -40,6 +42,8 @@ export interface MeResult {
     id: string
     username: string
     nickname: string | null
+    /** 用户头像 URL — 主项目自家头像,可能 null(未上传)*/
+    avatar: string | null
     tier: string | null
     /**
      * 劳动收入 LUX 余额。
@@ -51,6 +55,8 @@ export interface MeResult {
     newLux: number | string | null
     /** 当日新增 newLux 之和;后端 ResolveField 用 .toNumber() 返回 — 是 number */
     todayEarnings: number | null
+    /** 用户绑定的 Twitter handle(无 @ 前缀);后端 ResolveField 从 OAuthAccount 拿 */
+    twitterUsername: string | null
   } | null
 }
 

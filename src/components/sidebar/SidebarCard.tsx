@@ -108,12 +108,55 @@ export function SidebarCard() {
 // ── ① Identity strip ────────────────────────────────────────────────
 
 function IdentityStrip({ profile }: { profile: UserProfile | null }) {
+  // displayName 兜底:nickname > username > twitterHandle > "灯塔任务"
+  // (后端字段都缺时回到 brand 名,而不是让头部空着)
+  const name = profile?.displayName ?? '灯塔任务'
+  const handle = profile?.twitterHandle ?? null
+
   return (
     <div className="lh-strip">
-      <Logo />
-      <span className="lh-brand">灯塔任务</span>
+      <UserAvatar src={profile?.avatar ?? null} alt={name} />
+      <div className="lh-strip-meta">
+        <div className="lh-strip-name">{name}</div>
+        {handle && <div className="lh-strip-handle">@{handle}</div>}
+      </div>
       {profile?.tier && <span className="lh-tier">TIER {profile.tier}</span>}
     </div>
+  )
+}
+
+/**
+ * 用户头像 — 头像 URL 加载失败 / 缺失时回到 brand-gradient 占位 + Lighthouse
+ * inline glyph(让 KOL 知道这是灯塔卡片而不是空 placeholder)。
+ */
+function UserAvatar({ src, alt }: { src: string | null; alt: string }) {
+  const [errored, setErrored] = React.useState(false)
+  if (!src || errored) {
+    return (
+      <span
+        className="lh-strip-avatar lh-strip-avatar-fallback"
+        role="img"
+        aria-label={alt}
+      >
+        <svg viewBox="0 0 40 40" width={20} height={20} aria-hidden="true">
+          <title>Lighthouse</title>
+          <path d="M20 8 L13 16 H16 V30 H24 V16 H27 Z" fill="white" />
+          <circle cx="20" cy="33" r="1.8" fill="white" opacity="0.85" />
+        </svg>
+      </span>
+    )
+  }
+  return (
+    <img
+      className="lh-strip-avatar"
+      src={src}
+      alt={alt}
+      width={36}
+      height={36}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setErrored(true)}
+    />
   )
 }
 
@@ -225,8 +268,11 @@ function LoadingCard() {
   return (
     <section className="lh-card">
       <div className="lh-strip">
-        <Logo />
-        <span className="lh-brand">灯塔任务</span>
+        <span className="lh-sk-block lh-sk-avatar" />
+        <div className="lh-strip-meta">
+          <span className="lh-sk-block lh-sk-name" />
+          <span className="lh-sk-block lh-sk-handle" />
+        </div>
         <span className="lh-sk-block lh-sk-tier" />
       </div>
       <div className="lh-metric">
@@ -271,8 +317,10 @@ function UnauthCard() {
   return (
     <section className="lh-card">
       <div className="lh-strip">
-        <Logo />
-        <span className="lh-brand">灯塔任务</span>
+        <UserAvatar src={null} alt="Lighthouse" />
+        <div className="lh-strip-meta">
+          <div className="lh-strip-name">灯塔任务</div>
+        </div>
       </div>
       <div className="lh-unauth">
         <p className="lh-unauth-title">尚未连接 Lighthouse 账号</p>
@@ -307,45 +355,6 @@ function UnauthCard() {
   )
 }
 
-// ── Logo (PNG fallback to inline SVG) ───────────────────────────────
-
-function Logo() {
-  const [src, setSrc] = React.useState<string | null>(() => {
-    try {
-      return chrome.runtime.getURL('icon/48.png')
-    } catch {
-      return null
-    }
-  })
-  if (!src) {
-    return <LogoFallback />
-  }
-  return (
-    <span className="lh-logo">
-      <img
-        src={src}
-        alt="Lighthouse"
-        className="lh-logo-img"
-        width={20}
-        height={20}
-        onError={() => setSrc(null)}
-      />
-    </span>
-  )
-}
-
-function LogoFallback() {
-  return (
-    <span className="lh-logo">
-      <svg viewBox="0 0 40 40" width={20} height={20} aria-hidden="true">
-        <title>Lighthouse</title>
-        <path d="M20 8 L13 16 H16 V30 H24 V16 H27 Z" fill="white" />
-        <circle cx="20" cy="33" r="1.8" fill="white" opacity="0.85" />
-      </svg>
-    </span>
-  )
-}
-
 // ── Icons ───────────────────────────────────────────────────────────
 
 function ClockIcon() {
@@ -367,11 +376,16 @@ function ClockIcon() {
 
 // ── Formatters ──────────────────────────────────────────────────────
 
-/** 余额数字格式化:整数千分位,小数最多一位 */
+/**
+ * 余额数字格式化:整数千分位,小数最多一位。
+ *
+ * 不加前缀加号 — 余额是绝对值(账户里有多少),不是变化量。
+ * "+1,234 LUX" 暗示"刚刚收到 1234",会误导用户。今日收益是变化量,加号保留。
+ */
 function formatBalance(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—'
   const display = Number.isInteger(n) ? n : Number(n.toFixed(1))
-  return `+${display.toLocaleString('en-US')}`
+  return display.toLocaleString('en-US')
 }
 
 /** 今日收益格式化:可以是 0(显示 +0)或小数 */

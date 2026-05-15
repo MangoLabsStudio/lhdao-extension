@@ -39,8 +39,12 @@ interface SessionSchema {
 export interface UserProfile {
   /** 用户 ID,fallback 用 */
   id: string
-  /** 显示名,优先 nickname,后 username */
+  /** 显示名:优先 nickname,fallback username,再 fallback twitterHandle */
   displayName: string | null
+  /** 头像 URL,可能 null(未上传 + 没绑 Twitter)*/
+  avatar: string | null
+  /** Twitter handle(无 @ 前缀)— sidebar 第二行小字 */
+  twitterHandle: string | null
   /** 用户 tier — S / A / B / C / D / E */
   tier: string | null
   /** 劳动收入 LUX 余额(可用余额)— sidebar 大字显示 */

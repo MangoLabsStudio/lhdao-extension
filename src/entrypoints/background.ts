@@ -186,9 +186,14 @@ async function syncTasks(): Promise<void> {
   // —— me → sidebar 个人面板 ——
   if (meRes.status === 'fulfilled' && meRes.value.me) {
     const m = meRes.value.me
+    // displayName 优先级: nickname > username > twitterUsername > null
+    // (nickname 是用户主动设的;username 是登录名;twitter handle 兜底)
+    const displayName = m.nickname ?? m.username ?? m.twitterUsername ?? null
     const profile: UserProfile = {
       id: m.id,
-      displayName: m.nickname ?? m.username ?? null,
+      displayName,
+      avatar: m.avatar ?? null,
+      twitterHandle: m.twitterUsername ?? null,
       tier: m.tier ?? null,
       // newLux 是 GraphQLDecimal scalar,后端传 string;显式转 number,
       // 不可解析(空串 / null / NaN)统一归一为 null,前端 formatBalance
