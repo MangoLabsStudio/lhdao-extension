@@ -53,7 +53,7 @@ pnpm run test         # vitest run
 
 | Env  | __API_ENDPOINT__                       | __WEB_ENDPOINT__         |
 |------|----------------------------------------|--------------------------|
-| prod | https://service.lhdao.top/graphql      | https://lhdao.top        |
+| prod | https://service.lhdao.top/graphql      | https://app.lhdao.top    |
 | beta | https://service.lhdaobeta.top/graphql  | https://lhdaobeta.top    |
 
 `pnpm run *:beta` 已经把这两个 env var 一起设好,只用一个 npm script。
@@ -98,7 +98,7 @@ GraphQL endpoint:
 - override compile-time via `WXT_API_ENDPOINT` env var
 
 Auth: `Authorization: Bearer lhdao_pk_<32-byte-base64url>` — user creates a
-token at `https://lhdao.top/settings/plugin-tokens` and pastes it into the
+token at `https://app.lhdao.top/settings/plugin-tokens` and pastes it into the
 extension's options page.
 
 CORS: backend whitelists `chrome-extension://[a-z]{32}` (the deterministic

@@ -44,7 +44,7 @@ unzip lhdao-extension-0.1.0-chrome.zip -d ~/Downloads/lighthouse
 
 1. 点工具栏的灯塔图标 → 弹出 popup
 2. 看到 "未配置 token" → 点 **"去配置"** → 打开 options 页
-3. options 页指引你去 `https://lhdao.top/settings/plugin-tokens` 创建一个
+3. options 页指引你去 `https://app.lhdao.top/settings/plugin-tokens` 创建一个
    新 token
 4. 在 lhdao 网站点 "创建 token" → 起个名(随便,比如 "我的 Mac · Chrome")→
    弹窗显示完整 token,**只显示一次**,立刻复制
@@ -80,7 +80,7 @@ unzip lhdao-extension-0.1.0-chrome.zip -d ~/Downloads/lighthouse
 ### 网址 / token 不匹配?
 
 token 是 **per-environment** 的:
-- `lhdao.top` 创建的 token → 只能用于 prod 扩展(上线后)
+- `app.lhdao.top` 创建的 token → 只能用于 prod 扩展(上线后)
 - `lhdaobeta.top` 创建的 token → 只能用于 beta 扩展(开发用)
 
 这个 zip 是 **prod 版本**(指向 `service.lhdao.top`)。如果你的 token 是 beta
