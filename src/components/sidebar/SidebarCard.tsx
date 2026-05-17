@@ -138,10 +138,71 @@ function UserAvatar({ src, alt }: { src: string | null; alt: string }) {
         role="img"
         aria-label={alt}
       >
-        <svg viewBox="0 0 40 40" width={20} height={20} aria-hidden="true">
+        {/*
+         * Brand-mark fallback — 跟 kol-dao-app/public/logo-icon-128-transparent.svg
+         * 同一份设计(放射状灯塔节点)。viewBox 128 是源 SVG 的天然坐标系,
+         * width/height 20 缩到 strip 尺寸。
+         * 当 chrome.runtime.getURL('icon/48.png') 拿到真 PNG 时不会用这个,
+         * 这是网络失败 / 资源未加载的兜底视觉。
+         */}
+        <svg viewBox="0 0 128 128" width={20} height={20} aria-hidden="true">
           <title>Lighthouse</title>
-          <path d="M20 8 L13 16 H16 V30 H24 V16 H27 Z" fill="white" />
-          <circle cx="20" cy="33" r="1.8" fill="white" opacity="0.85" />
+          <g transform="translate(64, 64)">
+            <line
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="-40"
+              stroke="white"
+              strokeWidth="6.8"
+              strokeLinecap="round"
+            />
+            <line
+              x1="0"
+              y1="0"
+              x2="24.4"
+              y2="-14"
+              stroke="white"
+              strokeWidth="6.8"
+              strokeLinecap="round"
+            />
+            <line
+              x1="0"
+              y1="0"
+              x2="40.8"
+              y2="11.7"
+              stroke="white"
+              strokeWidth="6.8"
+              strokeLinecap="round"
+            />
+            <line
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="23.3"
+              stroke="white"
+              strokeWidth="6.8"
+              strokeLinecap="round"
+            />
+            <line
+              x1="0"
+              y1="0"
+              x2="-27.2"
+              y2="15.7"
+              stroke="white"
+              strokeWidth="6.8"
+              strokeLinecap="round"
+            />
+            <line
+              x1="0"
+              y1="0"
+              x2="-20.4"
+              y2="-5.8"
+              stroke="white"
+              strokeWidth="6.8"
+              strokeLinecap="round"
+            />
+          </g>
         </svg>
       </span>
     )
