@@ -298,15 +298,6 @@ function Footer({ onOpenOptions }: { onOpenOptions: () => void }) {
           设置
         </button>
         <span className="mx-1.5">·</span>
-        <a
-          href="https://github.com/MangoLabsStudio/lhdao-extension"
-          target="_blank"
-          rel="noreferrer"
-          className="hover:text-teal-600 hover:underline dark:hover:text-teal-400"
-        >
-          GitHub
-        </a>
-        <span className="mx-1.5">·</span>
         <span>v0.1.0</span>
       </span>
       {isBeta && (

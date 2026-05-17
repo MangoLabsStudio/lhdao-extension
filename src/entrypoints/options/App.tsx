@@ -112,17 +112,7 @@ export function App() {
         <p>
           token 仅存于 chrome.storage.local,不会出现在 localStorage 或 cookie。
         </p>
-        <p className="mt-1">
-          GitHub:{' '}
-          <a
-            href="https://github.com/MangoLabsStudio/lhdao-extension"
-            target="_blank"
-            rel="noreferrer"
-            className="text-teal-600 hover:underline dark:text-teal-400"
-          >
-            MangoLabsStudio/lhdao-extension
-          </a>
-        </p>
+        <p className="mt-1">Lighthouse Extension · v0.1.0</p>
       </footer>
     </div>
   )
