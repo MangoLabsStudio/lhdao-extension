@@ -357,16 +357,23 @@ function isArticleRenderable(article: Element): boolean {
   return true
 }
 
-// 节流过的"诊断 log",scanTimeline 每 5 秒最多输出一次,告诉开发者:
-//   - tasksSnapshot 是否到位
-//   - 当前页面有几条 article,几条命中任务
-// 便于用户 F12 一眼定位"为什么 chip 不显示":没 snapshot / 后端无任务 /
-// 都正常但 article 不匹配 — 三种情况一目了然。
-let lastScanDiagLogAt = 0
+// 诊断 log 策略:**只在数量变化时**输出,避免静止页面刷屏 + 同时让用户
+// 看到完整时间线(0 → 7 → 12...)。两个数字之一变化都打。
+// 便于一眼定位"为什么 chip 不显示":
+//   - 持续 0 articles → DOM selector 错了 / Twitter 改 DOM 了
+//   - 7 articles, 0 matched → 后端 tweetId 跟页面对不上
+//   - N articles, M>0 matched → 匹配上了,如果还没 chip 就是 mount 失败
+let lastScanArticleCount = -1
+let lastScanMatchedCount = -1
 function logScanDiag(articleCount: number, matchedCount: number) {
-  const now = Date.now()
-  if (now - lastScanDiagLogAt < 5000) return
-  lastScanDiagLogAt = now
+  if (
+    articleCount === lastScanArticleCount &&
+    matchedCount === lastScanMatchedCount
+  ) {
+    return
+  }
+  lastScanArticleCount = articleCount
+  lastScanMatchedCount = matchedCount
   console.log(
     `[lhdao] scan: ${articleCount} articles on page, ${matchedCount} matched tasks`,
   )
@@ -375,8 +382,9 @@ function logScanDiag(articleCount: number, matchedCount: number) {
 function scanTimeline() {
   // 没拿到任务快照前不扫(refreshTasksSnapshot 拉完会自动 scheduleScan)
   if (!tasksSnapshot) {
-    if (Date.now() - lastScanDiagLogAt > 5000) {
-      lastScanDiagLogAt = Date.now()
+    // 第一次没 snapshot 时 log 一次,后续重复跳过(只在状态转变到非空时再 log)
+    if (lastScanArticleCount !== -2) {
+      lastScanArticleCount = -2
       console.log('[lhdao] scan skipped: snapshot not ready yet')
     }
     return
