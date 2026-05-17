@@ -74,9 +74,7 @@ export function App() {
   return (
     <div className="mx-auto min-h-screen max-w-xl px-6 py-12">
       <header className="flex items-center gap-2">
-        <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-cyan-500 text-white shadow-md">
-          <LighthouseGlyph />
-        </span>
+        <BrandLogo size={36} className="rounded-xl shadow-md" />
         <div className="min-w-0 flex-1">
           <h1 className="text-[20px] font-black tracking-tight text-slate-900 dark:text-slate-50">
             Lighthouse Extension
@@ -326,16 +324,76 @@ function StepBadge({ n }: { n: number }) {
   )
 }
 
-function LighthouseGlyph() {
+/**
+ * Brand 标识 — 跟 popup/App.tsx 同样的"PNG 优先 + inline SVG fallback"
+ * 策略。任何地方需要 logo 都用 <BrandLogo size={N} /> — 跟 store icon
+ * 100% 一致(因为本质就是 icon/128.png)。
+ */
+function BrandLogo({
+  size = 36,
+  className,
+}: {
+  size?: number
+  className?: string
+}) {
+  const [src, setSrc] = React.useState<string | null>(() => {
+    try {
+      return chrome.runtime.getURL('icon/128.png')
+    } catch {
+      return null
+    }
+  })
+  const style = { width: size, height: size }
+  if (!src) return <BrandLogoFallback style={style} className={className} />
   return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
+    <img
+      src={src}
+      alt="Lighthouse"
+      width={size}
+      height={size}
+      className={className}
+      onError={() => setSrc(null)}
+    />
+  )
+}
+
+function BrandLogoFallback({
+  style,
+  className,
+}: {
+  style?: React.CSSProperties
+  className?: string
+}) {
+  return (
+    <svg
+      viewBox="0 0 64 64"
+      style={style}
+      className={className}
+      aria-hidden="true"
+    >
       <title>Lighthouse</title>
+      <circle cx="32" cy="32" r="32" fill="#2D24C4" />
+      <g
+        stroke="#2EE742"
+        strokeWidth="6"
+        strokeLinecap="round"
+        transform="translate(32 32)"
+      >
+        <line x1="0" y1="0" x2="0" y2="-18" />
+        <line x1="0" y1="0" x2="11" y2="-6" />
+        <line x1="0" y1="0" x2="18" y2="5" />
+        <line x1="0" y1="0" x2="-11" y2="-6" />
+        <line x1="0" y1="0" x2="-18" y2="5" />
+        <line x1="0" y1="0" x2="0" y2="13" />
+      </g>
       <path
-        d="M8 1 L4 5 H6 V13 H10 V5 H12 Z"
-        fill="currentColor"
-        opacity="0.95"
+        d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
+        stroke="#FFFFFF"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
       />
-      <circle cx="8" cy="14.5" r="1.2" fill="currentColor" opacity="0.7" />
     </svg>
   )
 }

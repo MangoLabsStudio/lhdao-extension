@@ -139,70 +139,35 @@ function UserAvatar({ src, alt }: { src: string | null; alt: string }) {
         aria-label={alt}
       >
         {/*
-         * Brand-mark fallback — 跟 kol-dao-app/public/logo-icon-128-transparent.svg
-         * 同一份设计(放射状灯塔节点)。viewBox 128 是源 SVG 的天然坐标系,
-         * width/height 20 缩到 strip 尺寸。
-         * 当 chrome.runtime.getURL('icon/48.png') 拿到真 PNG 时不会用这个,
-         * 这是网络失败 / 资源未加载的兜底视觉。
+         * Brand-mark fallback — 跟 popup / options / store icon 同一份设计
+         * (紫底 + 绿色放射 spoke + 白色弯钩),viewBox 64 标准化。只在
+         * chrome.runtime.getURL('icon/48.png') 加载失败时用,正常 KOL 看到的
+         * 是真 PNG。
          */}
-        <svg viewBox="0 0 128 128" width={20} height={20} aria-hidden="true">
+        <svg viewBox="0 0 64 64" width={20} height={20} aria-hidden="true">
           <title>Lighthouse</title>
-          <g transform="translate(64, 64)">
-            <line
-              x1="0"
-              y1="0"
-              x2="0"
-              y2="-40"
-              stroke="white"
-              strokeWidth="6.8"
-              strokeLinecap="round"
-            />
-            <line
-              x1="0"
-              y1="0"
-              x2="24.4"
-              y2="-14"
-              stroke="white"
-              strokeWidth="6.8"
-              strokeLinecap="round"
-            />
-            <line
-              x1="0"
-              y1="0"
-              x2="40.8"
-              y2="11.7"
-              stroke="white"
-              strokeWidth="6.8"
-              strokeLinecap="round"
-            />
-            <line
-              x1="0"
-              y1="0"
-              x2="0"
-              y2="23.3"
-              stroke="white"
-              strokeWidth="6.8"
-              strokeLinecap="round"
-            />
-            <line
-              x1="0"
-              y1="0"
-              x2="-27.2"
-              y2="15.7"
-              stroke="white"
-              strokeWidth="6.8"
-              strokeLinecap="round"
-            />
-            <line
-              x1="0"
-              y1="0"
-              x2="-20.4"
-              y2="-5.8"
-              stroke="white"
-              strokeWidth="6.8"
-              strokeLinecap="round"
-            />
+          <circle cx="32" cy="32" r="32" fill="#2D24C4" />
+          <g
+            stroke="#2EE742"
+            strokeWidth="6"
+            strokeLinecap="round"
+            transform="translate(32 32)"
+          >
+            <line x1="0" y1="0" x2="0" y2="-18" />
+            <line x1="0" y1="0" x2="11" y2="-6" />
+            <line x1="0" y1="0" x2="18" y2="5" />
+            <line x1="0" y1="0" x2="-11" y2="-6" />
+            <line x1="0" y1="0" x2="-18" y2="5" />
+            <line x1="0" y1="0" x2="0" y2="13" />
           </g>
+          <path
+            d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
+            stroke="#FFFFFF"
+            strokeWidth="5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+          />
         </svg>
       </span>
     )

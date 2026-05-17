@@ -97,9 +97,8 @@ export function App() {
 function Header() {
   return (
     <header className="flex items-center gap-2">
-      <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500 to-cyan-500 text-white shadow-sm">
-        <LighthouseGlyph />
-      </span>
+      <BrandLogo size={28} className="rounded-lg shadow-sm" />
+
       <div className="min-w-0 flex-1">
         <h1 className="text-[13.5px] font-black tracking-tight text-slate-900 dark:text-slate-50">
           Lighthouse
@@ -333,16 +332,82 @@ function SkeletonRow() {
   )
 }
 
-function LighthouseGlyph() {
+/**
+ * Brand 标识 — 优先用 chrome.runtime.getURL('icon/128.png')(跟 store icon
+ * 100% 一致),网络/资源加载失败 fallback 到 inline SVG 复刻(紫底圆 + 绿色
+ * 放射 spoke + 白色弯钩,跟 ICO 源同款设计)。
+ *
+ * 任何尺寸调用 <BrandLogo size={28} /> 都按 size 渲染 — PNG 走 width/height,
+ * SVG viewBox 64 内部按比例自适应。
+ */
+function BrandLogo({
+  size = 28,
+  className,
+}: {
+  size?: number
+  className?: string
+}) {
+  const [src, setSrc] = React.useState<string | null>(() => {
+    try {
+      return chrome.runtime.getURL('icon/128.png')
+    } catch {
+      return null
+    }
+  })
+  const style = { width: size, height: size }
+  if (!src) return <BrandLogoFallback style={style} className={className} />
   return (
-    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+    <img
+      src={src}
+      alt="Lighthouse"
+      width={size}
+      height={size}
+      className={className}
+      onError={() => setSrc(null)}
+    />
+  )
+}
+
+function BrandLogoFallback({
+  style,
+  className,
+}: {
+  style?: React.CSSProperties
+  className?: string
+}) {
+  return (
+    <svg
+      viewBox="0 0 64 64"
+      style={style}
+      className={className}
+      aria-hidden="true"
+    >
       <title>Lighthouse</title>
+      {/* indigo disc background */}
+      <circle cx="32" cy="32" r="32" fill="#2D24C4" />
+      {/* 6-spoke radial in bright green */}
+      <g
+        stroke="#2EE742"
+        strokeWidth="6"
+        strokeLinecap="round"
+        transform="translate(32 32)"
+      >
+        <line x1="0" y1="0" x2="0" y2="-18" />
+        <line x1="0" y1="0" x2="11" y2="-6" />
+        <line x1="0" y1="0" x2="18" y2="5" />
+        <line x1="0" y1="0" x2="-11" y2="-6" />
+        <line x1="0" y1="0" x2="-18" y2="5" />
+        <line x1="0" y1="0" x2="0" y2="13" />
+      </g>
+      {/* white hook in lower-right (simplified K-stem) */}
       <path
-        d="M8 1 L4 5 H6 V13 H10 V5 H12 Z"
-        fill="currentColor"
-        opacity="0.95"
+        d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
+        stroke="#FFFFFF"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
       />
-      <circle cx="8" cy="14.5" r="1.2" fill="currentColor" opacity="0.7" />
     </svg>
   )
 }
