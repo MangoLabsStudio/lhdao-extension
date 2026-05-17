@@ -107,12 +107,39 @@ async function refreshTasksSnapshot(): Promise<void> {
   try {
     const r = await sendMessage({ type: 'get-tasks-snapshot' })
     if (r.type === 'tasks-snapshot') {
+      const tweetCount = Object.keys(r.byTweet).length
+      const authorCount = Object.keys(r.byAuthor).length
+      console.log(
+        `[lhdao] snapshot loaded: ${tweetCount} tweets, ${authorCount} authors`,
+      )
       tasksSnapshot = { byTweet: r.byTweet, byAuthor: r.byAuthor }
       // 拿到新数据立刻重扫 — Twitter 滚动可能已经有 article 等着挂
       scheduleScan()
+    } else {
+      console.warn('[lhdao] snapshot unexpected response shape', r)
     }
   } catch (e) {
-    handleContextError(e)
+    if (!handleContextError(e)) {
+      console.warn('[lhdao] snapshot fetch failed', e)
+    }
+  }
+}
+
+/**
+ * MV3 service worker 启动后可能需要 100-500ms 才能响应第一次 sendMessage,
+ * 偶尔甚至完全错过(SW 还在初始化 alarm/listener)。content script
+ * 启动时单次调用容易踩这个坑 → tasksSnapshot 永远是 null → scan 永远
+ * silent return → 用户看不到任何 chip 也看不到任何 error。
+ *
+ * 防御:启动后多次延时重试,任一拿到就停。已拿到则后续 retry no-op。
+ */
+function bootstrapSnapshot() {
+  void refreshTasksSnapshot()
+  for (const delay of [200, 800, 2500]) {
+    setTimeout(() => {
+      if (tasksSnapshot) return
+      void refreshTasksSnapshot()
+    }, delay)
   }
 }
 
@@ -228,9 +255,8 @@ export default defineContentScript({
     const observer = new MutationObserver(scheduleScan)
     observer.observe(document.body, { childList: true, subtree: true })
 
-    // 启动时立刻拉一次 snapshot;不等 sync,UX 上 KOL 刷新页面后插件应该
-    // 在<100ms内显示已知任务,而不是等下一次 BG sync(60s alarm)。
-    void refreshTasksSnapshot()
+    // 启动时立刻拉一次 snapshot + 多次重试兜底 SW 冷启动失败。
+    bootstrapSnapshot()
     scheduleScan()
 
     // SPA 导航监听:Twitter 用 pushState 切换路由,焦点 tweet id 会变,
@@ -331,9 +357,30 @@ function isArticleRenderable(article: Element): boolean {
   return true
 }
 
+// 节流过的"诊断 log",scanTimeline 每 5 秒最多输出一次,告诉开发者:
+//   - tasksSnapshot 是否到位
+//   - 当前页面有几条 article,几条命中任务
+// 便于用户 F12 一眼定位"为什么 chip 不显示":没 snapshot / 后端无任务 /
+// 都正常但 article 不匹配 — 三种情况一目了然。
+let lastScanDiagLogAt = 0
+function logScanDiag(articleCount: number, matchedCount: number) {
+  const now = Date.now()
+  if (now - lastScanDiagLogAt < 5000) return
+  lastScanDiagLogAt = now
+  console.log(
+    `[lhdao] scan: ${articleCount} articles on page, ${matchedCount} matched tasks`,
+  )
+}
+
 function scanTimeline() {
   // 没拿到任务快照前不扫(refreshTasksSnapshot 拉完会自动 scheduleScan)
-  if (!tasksSnapshot) return
+  if (!tasksSnapshot) {
+    if (Date.now() - lastScanDiagLogAt > 5000) {
+      lastScanDiagLogAt = Date.now()
+      console.log('[lhdao] scan skipped: snapshot not ready yet')
+    }
+    return
+  }
 
   const { byTweet, byAuthor } = tasksSnapshot
 
@@ -396,6 +443,7 @@ function scanTimeline() {
   }
 
   // —— 3. 同步挂载每条 article(查 local cache,无 RPC,无 await)——
+  let matchedCount = 0
   for (const [tweetId, article] of articleByTweetId.entries()) {
     const authorHandle = extractAuthorHandleFromArticle(article)
 
@@ -420,6 +468,7 @@ function scanTimeline() {
     }
 
     if (allTasks.length === 0) continue
+    matchedCount += 1
 
     article.setAttribute(ARTICLE_FLAG, '1')
     const state = mountArticle(article, allTasks, tweetId, authorHandle)
@@ -429,6 +478,8 @@ function scanTimeline() {
       article.removeAttribute(ARTICLE_FLAG)
     }
   }
+
+  logScanDiag(articleByTweetId.size, matchedCount)
 }
 
 // ── mount / unmount ─────────────────────────────────────────────────
