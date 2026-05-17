@@ -286,7 +286,6 @@ function KpiCard({
 // ── Footer ───────────────────────────────────────────────────────────
 
 function Footer({ onOpenOptions }: { onOpenOptions: () => void }) {
-  const isBeta = WEB_ENDPOINT.includes('lhdaobeta')
   return (
     <footer className="mt-4 flex items-center justify-between gap-2 border-t border-slate-200 pt-2 text-[10px] text-slate-400 dark:border-slate-800 dark:text-slate-500">
       <span>
@@ -300,14 +299,6 @@ function Footer({ onOpenOptions }: { onOpenOptions: () => void }) {
         <span className="mx-1.5">·</span>
         <span>v0.1.0</span>
       </span>
-      {isBeta && (
-        <span
-          className="rounded bg-amber-100 px-1.5 py-px font-bold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
-          title={`build targets ${WEB_ENDPOINT}`}
-        >
-          BETA
-        </span>
-      )}
     </footer>
   )
 }
@@ -452,7 +443,7 @@ function diagnoseSyncError(
   if (httpStatus === 401) {
     return {
       title: 'Token 无效',
-      hint: 'token 已被吊销 / 在错的环境创建。BETA 构建必须配 lhdaobeta.top 上创建的 token,反之亦然。',
+      hint: 'token 已被吊销或者拼写不对。去 app.lhdao.top/settings/plugin-tokens 重建一个再粘贴。',
       action: 'reconfigure',
     }
   }
@@ -498,7 +489,7 @@ function diagnoseSyncError(
   if (/Network error|Failed to fetch/i.test(err)) {
     return {
       title: '网络 / CORS 错误',
-      hint: '可能后端没把 chrome-extension://* 加进 CORS 白名单,或本机连不上 lhdaobeta.top。',
+      hint: '可能后端没把 chrome-extension://* 加进 CORS 白名单,或本机连不上 service.lhdao.top。',
     }
   }
   return {

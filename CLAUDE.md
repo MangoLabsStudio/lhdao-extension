@@ -32,32 +32,27 @@ GraphQL API. All business logic stays on the backend.
 ## Commands
 
 ```bash
-pnpm run dev          # WXT dev server, auto-loads to Chrome (prod endpoints)
-pnpm run dev:beta     # 同上,但指向 lhdaobeta.top + service.lhdaobeta.top
+pnpm run dev          # WXT dev server, auto-loads to Chrome
 pnpm run dev:firefox  # Firefox dev mode
-pnpm run build        # → .output/chrome-mv3/ (prod endpoints)
-pnpm run build:beta   # → .output/chrome-mv3/ (beta endpoints)
+pnpm run build        # → .output/chrome-mv3/
 pnpm run build:edge   # → .output/edge-mv3/
-pnpm run zip          # produce release zip (prod)
-pnpm run zip:beta     # produce release zip (beta)
+pnpm run zip          # produce release zip
 pnpm run typecheck    # tsc --noEmit
 pnpm run lint         # biome check
 pnpm run lint:fix     # biome check --write
 pnpm run test         # vitest run
 ```
 
-## Endpoint switching
+## Endpoints
 
-两个端点 (API + Web) **必须一起切**,因为 plugin token 数据库 per-env
-不通用 — beta 创建的 token 只在 beta backend 上有记录。
+仅 prod。Beta scripts 已经移除,避免误发 beta zip 上 Web Store。
 
 | Env  | __API_ENDPOINT__                       | __WEB_ENDPOINT__         |
 |------|----------------------------------------|--------------------------|
 | prod | https://service.lhdao.top/graphql      | https://app.lhdao.top    |
-| beta | https://service.lhdaobeta.top/graphql  | https://lhdaobeta.top    |
 
-`pnpm run *:beta` 已经把这两个 env var 一起设好,只用一个 npm script。
-手动指定也行:`WXT_API_ENDPOINT=... WXT_WEB_ENDPOINT=... pnpm build`。
+临时想跑 staging,手动 env override:
+`WXT_API_ENDPOINT=... WXT_WEB_ENDPOINT=... pnpm build`。
 
 ## Code Style
 
@@ -93,9 +88,8 @@ src/
 ## Backend
 
 GraphQL endpoint:
-- **prod:** `https://service.lhdao.top/graphql`
-- **dev:**  `https://service.lhdaobeta.top/graphql`
-- override compile-time via `WXT_API_ENDPOINT` env var
+- `https://service.lhdao.top/graphql` (compile-time default)
+- override via `WXT_API_ENDPOINT` env var if staging needed
 
 Auth: `Authorization: Bearer lhdao_pk_<32-byte-base64url>` — user creates a
 token at `https://app.lhdao.top/settings/plugin-tokens` and pastes it into the
@@ -114,7 +108,7 @@ extension ID from `web_accessible_resources` keying).
 - Content script's chip lives in **Shadow DOM** — Twitter CSS cannot reach
   in, our CSS cannot leak out, and Twitter JS cannot manipulate it.
 - `host_permissions` is the minimum: x.com / twitter.com /
-  service.lhdao.top / service.lhdaobeta.top. No `<all_urls>`.
+  service.lhdao.top. No `<all_urls>`, no beta domains.
 
 ## Data collection (USER ACTIVITY — must declare to Chrome Web Store)
 

@@ -445,7 +445,7 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-/** 从 https://lhdaobeta.top 抽出 lhdaobeta.top 给 UI 显示 */
+/** 从 https://app.lhdao.top 抽出 app.lhdao.top 给 UI 显示 */
 function hostFrom(url: string): string {
   try {
     return new URL(url).host

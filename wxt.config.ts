@@ -16,7 +16,6 @@ export default defineConfig({
       'https://x.com/*',
       'https://twitter.com/*',
       'https://service.lhdao.top/*',
-      'https://service.lhdaobeta.top/*',
     ],
     action: {
       default_title: 'Lighthouse',
@@ -26,15 +25,15 @@ export default defineConfig({
   vite: () => ({
     plugins: [tailwindcss()],
     define: {
-      // Compile-time endpoints. Override via env vars to target staging.
+      // Compile-time endpoints. 仅 prod。
       //
-      // 这两个端点要一起切 — token 数据库 per-env 不通用:
-      //   prod : __API_ENDPOINT__ = service.lhdao.top      __WEB_ENDPOINT__ = app.lhdao.top
-      //   beta : __API_ENDPOINT__ = service.lhdaobeta.top  __WEB_ENDPOINT__ = lhdaobeta.top
+      //   __API_ENDPOINT__ = service.lhdao.top    (GraphQL backend)
+      //   __WEB_ENDPOINT__ = app.lhdao.top        (app routes: /settings/plugin-tokens 等)
       //
-      // Web 是 app 子域(用户在 lhdao.top 是 landing,实际应用 + token 设置
-      // 页在 app.lhdao.top/settings/plugin-tokens),不要指错根域名 lhdao.top
-      // 否则跳转去的是介绍页找不到 /settings 路径。
+      // Web 是 app 子域 — lhdao.top 是 landing,/settings 等路径在 app.lhdao.top。
+      //
+      // 临时想用 staging,环境变量 WXT_API_ENDPOINT / WXT_WEB_ENDPOINT 覆盖即可,
+      // 不再提供 :beta npm scripts(2026-05-18 移除,避免误发 beta zip 上 Web Store)。
       __API_ENDPOINT__: JSON.stringify(
         process.env.WXT_API_ENDPOINT ?? 'https://service.lhdao.top/graphql',
       ),

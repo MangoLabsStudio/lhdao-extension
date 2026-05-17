@@ -77,14 +77,11 @@ unzip lhdao-extension-0.1.0-chrome.zip -d ~/Downloads/lighthouse
 2. **chrome://extensions 看扩展状态**:Lighthouse 卡片必须是 **"已启用"** 状态
    (绿色开关打开)
 
-### 网址 / token 不匹配?
+### Token 不工作?
 
-token 是 **per-environment** 的:
-- `app.lhdao.top` 创建的 token → 只能用于 prod 扩展(上线后)
-- `lhdaobeta.top` 创建的 token → 只能用于 beta 扩展(开发用)
-
-这个 zip 是 **prod 版本**(指向 `service.lhdao.top`)。如果你的 token 是 beta
-创建的,把它换成 `lhdao.top` 上重新创建的就行。
+这个 zip 是 **prod 版本**(指向 `service.lhdao.top`)。请确认你的 token 是
+在 `https://app.lhdao.top/settings/plugin-tokens` 创建的 — 老的 staging /
+beta token 已经无效。
 
 ### 升级新版怎么办?
 
