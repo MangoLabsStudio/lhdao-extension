@@ -65,6 +65,13 @@ export default defineBackground(() => {
       const handle = req.authorHandle.toLowerCase()
       return { type: 'tasks', tasks: map[handle] ?? [] }
     }
+    if (req.type === 'get-tasks-snapshot') {
+      // 整体快照 — content script 启动 + tasks-updated 时各拉一次,本地缓存
+      // 后 scan 直接同步查,避免 per-article RPC 串行 await 的肉眼延迟。
+      const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
+      const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
+      return { type: 'tasks-snapshot', byTweet, byAuthor }
+    }
     if (req.type === 'submit-task') {
       return submitTask(req.campaignId)
     }

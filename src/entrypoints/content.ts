@@ -87,6 +87,35 @@ const inFlight = new Set<string>()
  */
 const followClaimMountedFor = new Map<string, Element>() // campaignId → article element
 
+/**
+ * Content-side 本地任务快照,scanTimeline 同步查 — 避免 per-article
+ * `await sendMessage()` 累加成肉眼可见的延迟(20 条推文 × ~30ms ≈ 600ms)。
+ *
+ * 刷新时机:
+ *   1. content script 启动 (refreshTasksSnapshot in main())
+ *   2. 收到 BG 广播 'tasks-updated' (每次 syncTasks 完成时)
+ *
+ * null 时 scan 跳过(还在初始化 / 拉取中),下一帧 MutationObserver 再触发。
+ */
+let tasksSnapshot: {
+  byTweet: Record<string, CampaignTaskCache[]>
+  byAuthor: Record<string, CampaignTaskCache[]>
+} | null = null
+
+async function refreshTasksSnapshot(): Promise<void> {
+  if (contextDead) return
+  try {
+    const r = await sendMessage({ type: 'get-tasks-snapshot' })
+    if (r.type === 'tasks-snapshot') {
+      tasksSnapshot = { byTweet: r.byTweet, byAuthor: r.byAuthor }
+      // 拿到新数据立刻重扫 — Twitter 滚动可能已经有 article 等着挂
+      scheduleScan()
+    }
+  } catch (e) {
+    handleContextError(e)
+  }
+}
+
 /** Sidebar 卡片单例挂载状态 (Twitter 任何页面只有一个右侧 sidebar) */
 interface SidebarMountedState {
   host: HTMLElement
@@ -198,6 +227,10 @@ export default defineContentScript({
 
     const observer = new MutationObserver(scheduleScan)
     observer.observe(document.body, { childList: true, subtree: true })
+
+    // 启动时立刻拉一次 snapshot;不等 sync,UX 上 KOL 刷新页面后插件应该
+    // 在<100ms内显示已知任务,而不是等下一次 BG sync(60s alarm)。
+    void refreshTasksSnapshot()
     scheduleScan()
 
     // SPA 导航监听:Twitter 用 pushState 切换路由,焦点 tweet id 会变,
@@ -243,8 +276,10 @@ export default defineContentScript({
 
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'tasks-updated') {
-        unmountAll()
-        scheduleScan()
+        // 拉新 snapshot — refreshTasksSnapshot 内部会 scheduleScan,
+        // 不需要再 unmountAll(scanTimeline 自己有 stale + focal reconcile)。
+        // 老做法 unmountAll 会让所有 chip 闪一下重挂,视觉不好。
+        void refreshTasksSnapshot()
       }
     })
   },
@@ -267,14 +302,41 @@ function scheduleScan() {
   if (contextDead) return // 扩展已重载,继续扫只会刷屏 invalidated 错误
   if (rafScheduled) return
   rafScheduled = true
-  requestAnimationFrame(async () => {
+  requestAnimationFrame(() => {
     rafScheduled = false
-    await scanTimeline()
+    scanTimeline()
     scanSidebar()
   })
 }
 
-async function scanTimeline() {
+/**
+ * 判断 article 是否在用户能看到的位置(viewport 内 / display 没被 SPA 隐藏)。
+ *
+ * Twitter SPA timeline → detail 切换时,旧 timeline article 常常仍在 DOM
+ * 树里(放在 history stack 后台)但 ancestor 被 display:none / 容器尺寸
+ * 为 0。我们用 offsetParent + getBoundingClientRect 综合判断。
+ *
+ * `display:none` → offsetParent === null
+ * 完全在视口外滚动 → boundingRect 高度 > 0(看不见但仍可挂载,等用户滚回来)
+ * 我们认为只要不是 display:none/visibility:hidden 就算可挂载
+ */
+function isArticleRenderable(article: Element): boolean {
+  if (!(article instanceof HTMLElement)) return true // 保守:不是 HTMLElement 就当可见
+  if (article.offsetParent === null) {
+    // display:none / 任何祖先 display:none
+    // 但 position:fixed 的 offsetParent 也是 null,所以再核对一下 bounding
+    const rect = article.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) return false
+  }
+  return true
+}
+
+function scanTimeline() {
+  // 没拿到任务快照前不扫(refreshTasksSnapshot 拉完会自动 scheduleScan)
+  if (!tasksSnapshot) return
+
+  const { byTweet, byAuthor } = tasksSnapshot
+
   // —— 1. 清扫 stale 挂载 + focal 状态 reconcile ─────────────────
   // 两种需要重新挂的情况:
   //   a) Twitter SPA 把同 tweetId 的 article DOM 换了节点(timeline 卡
@@ -282,6 +344,8 @@ async function scanTimeline() {
   //   b) URL 焦点切了(/status/<a> → /status/<b> 或退到 /home),
   //      旧焦点 article 需要去掉 SubmitButton,新焦点需要补上
   //      SubmitButton。用 state.isFocal !== 当前 isFocal 判定。
+  //   c) 旧的 mounted article 不再可见(SPA 隐藏 timeline article),
+  //      需要 unmount 让 scan 重新选可见的同 tweetId article 挂。
   //
   // FOLLOW 额外清理:从 mounted 移除时,顺带释放 followClaimMountedFor
   // 里属于这条 article 的 campaignId,让下次 scan 时下一个还活着的同
@@ -290,14 +354,18 @@ async function scanTimeline() {
   for (const [tweetId, state] of mounted.entries()) {
     const stale = !state.article.isConnected
     const focalChanged = state.isFocal !== (currentFocal === tweetId)
-    if (stale || focalChanged) {
+    const hidden = !stale && !isArticleRenderable(state.article)
+    if (stale || focalChanged || hidden) {
       releaseFollowClaim(state)
       unmountArticle(state)
       mounted.delete(tweetId)
     }
   }
 
-  // —— 2. 扫新 article 挂载 ——————————————————————————————————————
+  // —— 2. 按 tweetId 分组,每组只挑最优 article(可见 > 焦点 > 首个)——
+  // SPA 切换时同 tweetId 的多个 article 可能并存(timeline + detail),如果
+  // 直接 for-each 第一个,可能挂到了用户看不到的那条。
+  const articleByTweetId = new Map<string, Element>()
   const articles = document.querySelectorAll('article')
   for (const article of articles) {
     if (article.hasAttribute(ARTICLE_FLAG)) continue
@@ -305,79 +373,60 @@ async function scanTimeline() {
     if (!tweetId) continue
     if (mounted.has(tweetId) || inFlight.has(tweetId)) continue
 
-    // 关键:在 await sendMessage 之前**先**占位,否则 MutationObserver
-    // 在等响应期间触发的下一次 scan 会拿到同一个 article(还没 ARTICLE_FLAG)
-    // 再发一次 RPC,两次都进 mount → 双 badge / 双按钮。
-    inFlight.add(tweetId)
+    const existing = articleByTweetId.get(tweetId)
+    if (!existing) {
+      articleByTweetId.set(tweetId, article)
+      continue
+    }
+    // 已有 candidate,挑更优的:可见 > 焦点匹配 > 当前位置靠后
+    const existingVisible = isArticleRenderable(existing)
+    const candVisible = isArticleRenderable(article)
+    if (candVisible && !existingVisible) {
+      articleByTweetId.set(tweetId, article)
+      continue
+    }
+    if (!candVisible && existingVisible) continue
+    // 两者可见度相同时,焦点页 article 优先
+    const isFocal = currentFocal === tweetId
+    if (isFocal) {
+      // detail 页 article 通常 DOM 位置靠后(主推文渲染晚于回复区域),
+      // 用 sourceOrder 后者覆盖前者达成"更新的 article 胜出"
+      articleByTweetId.set(tweetId, article)
+    }
+  }
+
+  // —— 3. 同步挂载每条 article(查 local cache,无 RPC,无 await)——
+  for (const [tweetId, article] of articleByTweetId.entries()) {
+    const authorHandle = extractAuthorHandleFromArticle(article)
+
+    const tweetTasks = byTweet[tweetId] ?? []
+    const authorTasks = authorHandle ? (byAuthor[authorHandle] ?? []) : []
+
+    // 合并 by (campaignId, actionType) — 同一 follow campaign 可能既在
+    // byTweet 又在 byAuthor(它是来源推文的同时也是 follow 目标)
+    const seen = new Set<string>()
+    const allTasks: CampaignTaskCache[] = []
+    for (const t of tweetTasks) {
+      const key = `${t.campaignId}:${t.actionType}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      allTasks.push(t)
+    }
+    for (const t of authorTasks) {
+      const key = `${t.campaignId}:${t.actionType}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      allTasks.push(t)
+    }
+
+    if (allTasks.length === 0) continue
+
     article.setAttribute(ARTICLE_FLAG, '1')
-
-    try {
-      // 双查:tweet-level tasks (LIKE/RT/COMMENT/COMMENT_LIKE + 来源推文上
-      // 的 FOLLOW) + author-level tasks (跨该作者所有推文的 FOLLOW)。
-      const authorHandle = extractAuthorHandleFromArticle(article)
-      const [tweetTasksRes, followTasksRes] = await Promise.all([
-        sendMessage({ type: 'get-tasks-for-tweet', tweetId }),
-        authorHandle
-          ? sendMessage({
-              type: 'get-tasks-for-author',
-              authorHandle,
-            })
-          : Promise.resolve({ type: 'tasks' as const, tasks: [] }),
-      ])
-
-      const tweetTasks =
-        tweetTasksRes.type === 'tasks' ? tweetTasksRes.tasks : []
-      const authorTasks =
-        followTasksRes.type === 'tasks' ? followTasksRes.tasks : []
-
-      // 合并 by campaignId(同一 follow campaign 可能既在 byTweet 又在
-      // byAuthor 里出现,跟来源推文重合的情况)
-      const seen = new Set<string>()
-      const allTasks: CampaignTaskCache[] = []
-      for (const t of [...tweetTasks, ...authorTasks]) {
-        const key = `${t.campaignId}:${t.actionType}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        allTasks.push(t)
-      }
-
-      if (allTasks.length === 0) {
-        article.removeAttribute(ARTICLE_FLAG)
-        continue
-      }
-      // await 期间 article 可能被 Twitter 虚拟化卸下,挂到 detached 节点
-      // 看似成功实则用户看不到。这里再确认下还活着才挂。
-      if (!article.isConnected) {
-        article.removeAttribute(ARTICLE_FLAG)
-        continue
-      }
-      const state = mountArticle(article, allTasks, tweetId, authorHandle)
-      // 即使 hosts.length === 0(caret 没找到/广告卡/Spaces 等异形 article)
-      // 也要进 mounted Map + 保留 ARTICLE_FLAG。glow 属性已经贴在原生
-      // like/RT/reply 按钮上,部分挂载也算成功,放回 Map 让后续 stale
-      // cleanup 能清。
-      //
-      // 历史 bug:这里曾在 hosts.length===0 时 unmountArticle(清 glow)+
-      // 清 flag,导致 Twitter 在 article 子树里任何 DOM 变更(媒体懒加载/
-      // 计数刷新)触发 MutationObserver → 同条 article 又被扫到 → 又贴
-      // glow → 又清 → ......高亮在所有"异形 article"上肉眼可见的闪动。
-      if (state) {
-        mounted.set(tweetId, state)
-      } else {
-        article.removeAttribute(ARTICLE_FLAG)
-      }
-    } catch (e) {
-      // 扩展 reload 导致的 context invalidated → 全局停止,不再喷错误
-      if (handleContextError(e)) {
-        inFlight.delete(tweetId)
-        article.removeAttribute(ARTICLE_FLAG)
-        return // 跳出整个 scan 循环
-      }
-      // 其他 RPC 异常 → 不能让 ARTICLE_FLAG 残留(否则永久 skip),清干净
-      console.warn('[lhdao] scan article failed', tweetId, e)
+    const state = mountArticle(article, allTasks, tweetId, authorHandle)
+    if (state) {
+      mounted.set(tweetId, state)
+    } else {
       article.removeAttribute(ARTICLE_FLAG)
-    } finally {
-      inFlight.delete(tweetId)
     }
   }
 }

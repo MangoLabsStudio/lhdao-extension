@@ -24,6 +24,12 @@ export type MsgRequest =
    * 已小写化(后端 targetUsername 字段就是小写存的)。
    */
   | { type: 'get-tasks-for-author'; authorHandle: string }
+  /**
+   * [perf] content script 启动 + 每次 tasks-updated 广播后一次性拉全量
+   * 索引,本地缓存,scan 时同步查 — 避免每条 article 单独 RPC 串行 await
+   * 带来的肉眼可见延迟。
+   */
+  | { type: 'get-tasks-snapshot' }
   /** 抢单第一步:仅占席位 (reserveEngagementSlot)。confirmCascade 让用户
    *  在收到 cascadeWarning 后点重抢时确认降档接受 */
   | { type: 'reserve-task'; campaignId: string; confirmCascade?: boolean }
@@ -48,6 +54,11 @@ export type MsgRequest =
 
 export type MsgResponse =
   | { type: 'tasks'; tasks: CampaignTaskCache[] }
+  | {
+      type: 'tasks-snapshot'
+      byTweet: Record<string, CampaignTaskCache[]>
+      byAuthor: Record<string, CampaignTaskCache[]>
+    }
   | { type: 'reserve-result'; ok: true; cooldownSeconds?: number }
   | {
       type: 'reserve-result'
