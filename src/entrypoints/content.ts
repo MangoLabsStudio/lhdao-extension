@@ -250,7 +250,11 @@ export default defineContentScript({
     // blur / pagehide / beforeunload。
     initDwellTracker()
     // 初始进入页面:如果 URL 就在 status,立即开始计时
-    onDwellUrlChange(getFocalTweetId())
+    onDwellUrlChange(
+      getFocalTweetId(),
+      getFocalFullUrl(),
+      getFocalAuthorHandle(),
+    )
 
     const observer = new MutationObserver(scheduleScan)
     observer.observe(document.body, { childList: true, subtree: true })
@@ -268,8 +272,14 @@ export default defineContentScript({
     // 重扫做兜底,scan 内部有 mounted Map 去重,多扫不会重复挂。
     watchUrlChanges(() => {
       // 通知 dwell tracker URL 变了 — 切走当前 tweet 则 flush 上报,
-      // 切到新 tweet 则开始累积。
-      onDwellUrlChange(getFocalTweetId())
+      // 切到新 tweet 则开始累积。handle 在 URL change 的瞬间 article
+      // 还没渲染,getFocalAuthorHandle() 可能返回 null;后续 scanTimeline
+      // 会再次调用 onDwellUrlChange 把 handle 补上(同 id 升级 metadata)。
+      onDwellUrlChange(
+        getFocalTweetId(),
+        getFocalFullUrl(),
+        getFocalAuthorHandle(),
+      )
       // 不再 unmountAll() — 那会让所有 article 闪一下再挂回来。
       // 让 scanTimeline 里的 focal-reconcile 自己处理:
       //   - 旧焦点 article 的 state.isFocal=true 但当前 URL 焦点变了
@@ -406,6 +416,15 @@ function scanTimeline() {
   // 里属于这条 article 的 campaignId,让下次 scan 时下一个还活着的同
   // 作者 article 接过 claim 角色。
   const currentFocal = getFocalTweetId()
+
+  // —— Dwell metadata 升级 ——
+  // URL change 时 article 可能还没渲染,onDwellUrlChange 第一次调时 handle
+  // 是 null。每次 scanTimeline 跑时再调一遍(dwell-tracker 内对 null 字段
+  // 做无打断升级),把 article 渲染好后能拿到的 handle 补上。
+  if (currentFocal) {
+    onDwellUrlChange(currentFocal, getFocalFullUrl(), getFocalAuthorHandle())
+  }
+
   for (const [tweetId, state] of mounted.entries()) {
     const stale = !state.article.isConnected
     const focalChanged = state.isFocal !== (currentFocal === tweetId)
@@ -842,6 +861,33 @@ function createShadowHost(
 function getFocalTweetId(): string | null {
   const m = location.pathname.match(/\/status\/(\d+)/)
   return m ? m[1] : null
+}
+
+/**
+ * 当前页面是详情页时返回**规范化后**的完整推文 URL — 删去 /photo/N、
+ * /analytics 等子路径以及 query string,只保留 `https://x.com/<user>/status/<id>`。
+ * 不是详情页返回 null。dwell tracker 用它存进 DB 让分析后台直接呈现。
+ */
+function getFocalFullUrl(): string | null {
+  const m = location.pathname.match(/^(\/[^/]+\/status\/\d+)/)
+  if (!m) return null
+  return `${location.origin}${m[1]}`
+}
+
+/**
+ * 详情页主推文作者的 handle(无 @,小写)。从顶层 article 的 User-Name
+ * 区抽取。article 还没渲染时返回 null,onDwellUrlChange 会在 scanTimeline
+ * 之后再调一次把 handle 补上。
+ */
+function getFocalAuthorHandle(): string | null {
+  const articles = document.querySelectorAll('article')
+  for (const a of articles) {
+    // 顶层 article(无 article 祖先)= 主推文,不是嵌套引用推文
+    if (a.parentElement?.closest('article')) continue
+    const handle = extractAuthorHandleFromArticle(a)
+    if (handle) return handle
+  }
+  return null
 }
 
 /** Twitter SPA 用 pushState,监听 popstate + 包装 pushState/replaceState */

@@ -83,7 +83,12 @@ export default defineBackground(() => {
     }
     if (req.type === 'record-dwell') {
       // fire-and-forget: 失败不影响用户,只 console.warn
-      void recordDwell(req.tweetId, req.durationMs)
+      void recordDwell(
+        req.tweetId,
+        req.durationMs,
+        req.tweetUrl ?? null,
+        req.authorHandle ?? null,
+      )
       return { type: 'ack' }
     }
     if (req.type === 'get-active-campaigns') {
@@ -532,9 +537,19 @@ function sleep(ms: number): Promise<void> {
  * 未绑 token 的用户:gql 内部会抛 'No API token configured',这里 catch
  * 静默 — 等用户绑了 token 之后的 dwell 自然能上报。
  */
-async function recordDwell(tweetId: string, durationMs: number): Promise<void> {
+async function recordDwell(
+  tweetId: string,
+  durationMs: number,
+  tweetUrl: string | null,
+  authorHandle: string | null,
+): Promise<void> {
   try {
-    await gql(RECORD_TWEET_DWELL_MUTATION, { tweetId, durationMs })
+    await gql(RECORD_TWEET_DWELL_MUTATION, {
+      tweetId,
+      durationMs,
+      tweetUrl,
+      authorHandle,
+    })
   } catch (e) {
     console.warn('[lhdao] record dwell failed', e)
   }

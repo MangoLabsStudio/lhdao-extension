@@ -41,8 +41,20 @@ export type MsgRequest =
   | { type: 'has-token' }
   /** popup 触发立即同步 — 不等 60s alarm,等 sync 跑完再返回结果 */
   | { type: 'force-sync' }
-  /** content script 上报推文详情页停留时长 (anti-cheat 信号) */
-  | { type: 'record-dwell'; tweetId: string; durationMs: number }
+  /**
+   * content script 上报推文详情页停留时长 (anti-cheat 信号)。
+   *
+   * tweetUrl / authorHandle 在 v2026-05-17 新增 — content script 在 dwell
+   * start 时从 DOM 顺手 capture,运营后台直接看到完整 URL + 作者 handle,
+   * 不用反查 Twitter API。两个字段都是可选(没拿到时不传,后端兼容)。
+   */
+  | {
+      type: 'record-dwell'
+      tweetId: string
+      durationMs: number
+      tweetUrl?: string | null
+      authorHandle?: string | null
+    }
   /** [legacy] sidebar 卡片询问当前可抢 ENGAGEMENT campaign 列表 */
   | { type: 'get-active-campaigns' }
   /** [v2] sidebar 卡片询问个人面板数据 + TWEET 任务列表(一次拿全) */

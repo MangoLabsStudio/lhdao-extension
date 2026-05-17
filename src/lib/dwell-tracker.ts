@@ -22,6 +22,11 @@ const MIN_DURATION_MS = 500
 
 interface DwellState {
   tweetId: string
+  /** 完整推文 URL(start 时 capture,如果有)— 上报给 backend 直接落 DB,
+   *  免去后端通过 tweetId 反查 Twitter API 才能拼出 URL */
+  tweetUrl: string | null
+  /** 推文作者 handle(无 @,小写,start 时从 DOM 顺手 capture)*/
+  authorHandle: string | null
   /** 已累积"可见"毫秒数(不含当前未结束的 visible 段) */
   accumulatedMs: number
   /** 当前 visible 段开始时间;null 表示已暂停或未开始 */
@@ -45,14 +50,20 @@ function resume() {
   }
 }
 
-function startNew(tweetId: string) {
+function startNew(
+  tweetId: string,
+  tweetUrl: string | null,
+  authorHandle: string | null,
+) {
   flush() // 先 flush 旧的(如果有)
   state = {
     tweetId,
+    tweetUrl,
+    authorHandle,
     accumulatedMs: 0,
     lastVisibleAt: document.visibilityState === 'visible' ? Date.now() : null,
   }
-  console.log('[lhdao dwell] start', tweetId)
+  console.log('[lhdao dwell] start', tweetId, authorHandle ?? '(no handle)')
 }
 
 /**
@@ -62,7 +73,7 @@ function startNew(tweetId: string) {
 function flush() {
   if (!state) return
   pause()
-  const { tweetId, accumulatedMs } = state
+  const { tweetId, tweetUrl, authorHandle, accumulatedMs } = state
   state = null
 
   if (accumulatedMs >= MIN_DURATION_MS) {
@@ -72,6 +83,8 @@ function flush() {
         type: 'record-dwell',
         tweetId,
         durationMs: Math.floor(accumulatedMs),
+        tweetUrl,
+        authorHandle,
       })
     } catch {
       // 扩展已 reload 等极端场景,无能为力
@@ -109,16 +122,30 @@ export function initDwellTracker() {
  * URL 切换(SPA pushState / replaceState / popstate)时调一次。
  * 传入 currentFocalTweetId(从 URL 解析的当前焦点推文 id,无则 null)。
  *
+ * tweetUrl / authorHandle 是可选的 metadata,start 时一并 capture 跟 dwell
+ * 一起上报。**调用方负责提取**(content.ts 拿 location.href 和 DOM 里的
+ * 作者 handle);dwell-tracker 不直接读 DOM,保持纯粹。
+ *
  * 三种情况:
  *  - 新 id != 老 id → flush 老的,start 新的
  *  - 新 id == 老 id → 不动(用户从推文 photo 子页面回来等情况)
  *  - 新 id === null(离开详情页)→ flush 老的
  */
-export function onDwellUrlChange(focalTweetId: string | null) {
-  if (state?.tweetId === focalTweetId) return // unchanged
+export function onDwellUrlChange(
+  focalTweetId: string | null,
+  tweetUrl: string | null = null,
+  authorHandle: string | null = null,
+) {
+  if (state?.tweetId === focalTweetId) {
+    // 同 tweet id 第二次被调 — 一般是 article 终于渲染完,handle 从 DOM
+    // 可以提取出来了。升级 state 上原本为 null 的 metadata,不打断计时。
+    if (tweetUrl && !state.tweetUrl) state.tweetUrl = tweetUrl
+    if (authorHandle && !state.authorHandle) state.authorHandle = authorHandle
+    return
+  }
   if (focalTweetId == null) {
     flush()
   } else {
-    startNew(focalTweetId)
+    startNew(focalTweetId, tweetUrl, authorHandle)
   }
 }

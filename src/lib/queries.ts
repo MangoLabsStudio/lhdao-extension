@@ -233,8 +233,18 @@ export interface VerifyEngagementResult {
 // ── 推文停留时长上报 (anti-cheat 信号) ────────────────────────────────
 
 export const RECORD_TWEET_DWELL_MUTATION = `
-  mutation RecordTweetDwell($tweetId: String!, $durationMs: Int!) {
-    recordTweetDwell(tweetId: $tweetId, durationMs: $durationMs)
+  mutation RecordTweetDwell(
+    $tweetId: String!
+    $durationMs: Int!
+    $tweetUrl: String
+    $authorHandle: String
+  ) {
+    recordTweetDwell(
+      tweetId: $tweetId
+      durationMs: $durationMs
+      tweetUrl: $tweetUrl
+      authorHandle: $authorHandle
+    )
   }
 `
 
