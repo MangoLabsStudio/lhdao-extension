@@ -8,57 +8,71 @@ interface Props {
 }
 
 /**
- * 抢单流程 = 两步:
- *   1. claim  → reserveEngagementSlot   (占席位)
- *   2. (用户去 Twitter 真的做动作)
- *   3. verify → verifyEngagement        (验证 + 发奖)
+ * 抢单 + 验证两按钮组件。
  *
- * 状态机:
- *   idle     → click: reserve  → reserved (开始 cooldown 倒计时)
- *   reserved → click: verify   → done(+N LUX) | error(retry verify)
- *   error    → click: 根据 phase 重试对应步骤
- *   done     → 终态
+ * 用户视角的两步流程拆成两个**独立按钮**(并排):
+ *   1. [抢单] reserveEngagementSlot 占席位
+ *   2. (用户离开插件,去 Twitter 真的完成动作)
+ *   3. [验证] verifyEngagement 校验 + 发奖
+ *
+ * 按钮联动:
+ *   - 抢单按钮 idle 可点;抢单中 disabled;抢成功后 disabled 显示"已抢"
+ *   - 验证按钮在抢单成功之前**永远 disabled**;抢成功 + cooldown 走完
+ *     才能点;验证中 disabled;done 显示奖励数额
+ *   - 任一阶段出错 → 该按钮显示 "重试 · 简述",再次点击重试
  *
  * 多任务串行抢:第一个任务的 cooldown 时长用作整组的倒计时;reward 累加。
  */
 
-type State =
+// 抢单阶段独立状态机
+type ReserveState =
   | { kind: 'idle' }
   | { kind: 'reserving' }
-  | { kind: 'reserved'; cooldownDeadlineMs?: number }
+  | { kind: 'done'; cooldownDeadlineMs?: number }
+  | { kind: 'error'; code: SubmitErrorCode; raw: string }
+
+// 验证阶段独立状态机(只在 reserve 完成后才会从 'locked' 变化)
+type VerifyState =
+  | { kind: 'locked' } // reserve 未完成时
+  | { kind: 'idle' } // reserve 完成,可以点
   | { kind: 'verifying' }
   | { kind: 'done'; reward: number }
-  | {
-      kind: 'error'
-      phase: 'reserve' | 'verify'
-      code: SubmitErrorCode
-      raw: string
-    }
+  | { kind: 'error'; code: SubmitErrorCode; raw: string }
 
 export function SubmitButton({ tasks }: Props) {
-  const [state, setState] = React.useState<State>({ kind: 'idle' })
+  const [reserveState, setReserveState] = React.useState<ReserveState>({
+    kind: 'idle',
+  })
+  const [verifyState, setVerifyState] = React.useState<VerifyState>({
+    kind: 'locked',
+  })
 
   // FOLLOW 任务的特殊 idle 文案 — 让用户知道点这个按钮要去关注谁。
-  // 仅当所有 task 都是 FOLLOW 时显示 "关注 @handle";混合任务保持 "claim"。
+  // 仅当所有 task 都是 FOLLOW 时显示 "关注 @handle";混合任务保持 "抢单"。
   const followOnlyHandle = React.useMemo(() => {
     if (tasks.length === 0) return null
     const allFollow = tasks.every((t) => t.actionType === 'FOLLOW')
     if (!allFollow) return null
-    const handle = tasks[0]?.targetUsername
-    return handle ?? null
+    return tasks[0]?.targetUsername ?? null
   }, [tasks])
 
-  // 倒计时 tick — 仅 reserved + cooldown 有时启用
+  // 倒计时 tick — 仅 reserve done + cooldown 时启用,影响 verify 按钮可点性
   const [now, setNow] = React.useState(Date.now())
   React.useEffect(() => {
-    if (state.kind !== 'reserved' || !state.cooldownDeadlineMs) return
+    if (reserveState.kind !== 'done' || !reserveState.cooldownDeadlineMs) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [state])
+  }, [reserveState])
 
+  const cooldownLeft =
+    reserveState.kind === 'done' && reserveState.cooldownDeadlineMs
+      ? Math.max(0, Math.ceil((reserveState.cooldownDeadlineMs - now) / 1000))
+      : 0
+
+  // ── reserve action ────────────────────────────────────────────────
   const reserve = React.useCallback(
     async (confirmCascade?: boolean) => {
-      setState({ kind: 'reserving' })
+      setReserveState({ kind: 'reserving' })
       let minCooldown: number | undefined
       let lastErr: { code: SubmitErrorCode; message: string } | null = null
 
@@ -79,33 +93,35 @@ export function SubmitButton({ tasks }: Props) {
       }
 
       if (lastErr && minCooldown === undefined) {
-        // 把详细 error 也打到页面 Console,方便用户 F12 → Console 看
         console.error(
           '[lhdao] reserve failed:',
           lastErr.code,
           '·',
           lastErr.message,
         )
-        setState({
+        setReserveState({
           kind: 'error',
-          phase: 'reserve',
           code: lastErr.code,
           raw: lastErr.message,
         })
+        // verify 仍保持 locked
       } else {
-        setState({
-          kind: 'reserved',
+        setReserveState({
+          kind: 'done',
           cooldownDeadlineMs: minCooldown
             ? Date.now() + minCooldown * 1000
             : undefined,
         })
+        // 解锁 verify 按钮(可能仍受 cooldown 限制点不动,但不再 locked)
+        setVerifyState({ kind: 'idle' })
       }
     },
     [tasks],
   )
 
+  // ── verify action ─────────────────────────────────────────────────
   const verify = React.useCallback(async () => {
-    setState({ kind: 'verifying' })
+    setVerifyState({ kind: 'verifying' })
     let totalReward = 0
     let lastErr: { code: SubmitErrorCode; message: string } | null = null
 
@@ -123,7 +139,7 @@ export function SubmitButton({ tasks }: Props) {
     }
 
     if (totalReward > 0) {
-      setState({ kind: 'done', reward: totalReward })
+      setVerifyState({ kind: 'done', reward: totalReward })
     } else if (lastErr) {
       console.error(
         '[lhdao] verify failed:',
@@ -131,95 +147,160 @@ export function SubmitButton({ tasks }: Props) {
         '·',
         lastErr.message,
       )
-      setState({
+      setVerifyState({
         kind: 'error',
-        phase: 'verify',
         code: lastErr.code,
         raw: lastErr.message,
       })
     } else {
       console.error('[lhdao] verify: no response from background')
-      setState({
+      setVerifyState({
         kind: 'error',
-        phase: 'verify',
         code: 'INTERNAL',
         raw: 'no response',
       })
     }
   }, [tasks])
 
-  const onClick = () => {
-    switch (state.kind) {
-      case 'idle':
-        return reserve()
-      case 'reserved':
-        return verify()
-      case 'error':
-        // 上次失败是 cascade 警告 → 这次重抢自动 confirmCascade=true 接受降档
-        if (state.phase === 'reserve') {
-          const isCascade = /降到\s*\w+\s*档/.test(state.raw)
-          return reserve(isCascade)
-        }
-        return verify()
-      default:
-        return
+  // ── reserve button derivation ────────────────────────────────────
+  const reserveClickable =
+    reserveState.kind === 'idle' || reserveState.kind === 'error'
+  const onReserveClick = () => {
+    if (!reserveClickable) return
+    if (reserveState.kind === 'error') {
+      // cascade 警告 → 自动 confirm 接受降档
+      const isCascade = /降到\s*\w+\s*档/.test(reserveState.raw)
+      void reserve(isCascade)
+      return
     }
+    void reserve()
   }
 
-  const disabled =
-    state.kind === 'reserving' ||
-    state.kind === 'verifying' ||
-    state.kind === 'done'
-
-  const cooldownLeft =
-    state.kind === 'reserved' && state.cooldownDeadlineMs
-      ? Math.max(0, Math.ceil((state.cooldownDeadlineMs - now) / 1000))
-      : null
+  // ── verify button derivation ──────────────────────────────────────
+  // 三层 disable:
+  //   1. locked (reserve 未完成)
+  //   2. verifying (正在验证)
+  //   3. done (已经领过奖了,不能再点)
+  //   4. cooldown 未结束(还在等席位释放/Twitter API 缓存)
+  const verifyClickable =
+    (verifyState.kind === 'idle' || verifyState.kind === 'error') &&
+    cooldownLeft === 0
+  const onVerifyClick = () => {
+    if (!verifyClickable) return
+    void verify()
+  }
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={state.kind === 'error' ? state.raw : undefined}
-      className={btnClasses(state)}
+    <span
       style={{
-        height: '32px',
-        minWidth: '70px',
-        padding: '0 12px',
-        borderRadius: '9999px',
-        fontSize: '12.5px',
-        fontWeight: 700,
         display: 'inline-flex',
         alignItems: 'center',
-        justifyContent: 'center',
-        gap: '4px',
-        whiteSpace: 'nowrap',
-        userSelect: 'none',
-        transition: 'all 150ms',
+        gap: '6px',
       }}
     >
-      <IconForState state={state} />
-      <span className="tabular-nums">
-        {labelForState(state, cooldownLeft, followOnlyHandle)}
-      </span>
-    </button>
+      <button
+        type="button"
+        onClick={onReserveClick}
+        disabled={!reserveClickable}
+        title={reserveState.kind === 'error' ? reserveState.raw : undefined}
+        className={reserveBtnClass(reserveState)}
+        style={btnStyle}
+      >
+        <ReserveIcon state={reserveState} />
+        <span className="tabular-nums">
+          {reserveLabel(reserveState, followOnlyHandle)}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onVerifyClick}
+        disabled={!verifyClickable}
+        title={verifyState.kind === 'error' ? verifyState.raw : undefined}
+        className={verifyBtnClass(verifyState, cooldownLeft)}
+        style={btnStyle}
+      >
+        <VerifyIcon state={verifyState} />
+        <span className="tabular-nums">
+          {verifyLabel(verifyState, cooldownLeft)}
+        </span>
+      </button>
+    </span>
   )
 }
 
-// ── style derivation ─────────────────────────────────────────────────
+// ── shared button style ──────────────────────────────────────────────
 
-function btnClasses(state: State): string {
+const btnStyle: React.CSSProperties = {
+  height: '32px',
+  minWidth: '64px',
+  padding: '0 12px',
+  borderRadius: '9999px',
+  fontSize: '12.5px',
+  fontWeight: 700,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: '4px',
+  whiteSpace: 'nowrap',
+  userSelect: 'none',
+  transition: 'all 150ms',
+}
+
+// ── reserve button style + label ─────────────────────────────────────
+
+function reserveBtnClass(state: ReserveState): string {
   switch (state.kind) {
     case 'idle':
-      // 主 CTA:灯塔渐变背景 + 白字 + 圆角(用户要求"系统风格的按钮渐变加上圆角")
       return 'lhdao-btn lhdao-btn-primary'
     case 'reserving':
       return 'lhdao-btn lhdao-btn-primary lhdao-btn-busy'
-    case 'reserved':
+    case 'done':
+      // reserve 完成后,按钮转灰禁用,告知用户"已经抢过了"
       return 'lhdao-btn lhdao-btn-secondary'
+    case 'error':
+      return 'lhdao-btn lhdao-btn-error'
+  }
+}
+
+function reserveLabel(
+  state: ReserveState,
+  followOnlyHandle: string | null,
+): string {
+  switch (state.kind) {
+    case 'idle':
+      if (followOnlyHandle) {
+        const display =
+          followOnlyHandle.length > 10
+            ? `${followOnlyHandle.slice(0, 9)}…`
+            : followOnlyHandle
+        return `关注 @${display}`
+      }
+      return '抢单'
+    case 'reserving':
+      return '抢单中'
+    case 'done':
+      return '已抢'
+    case 'error': {
+      const friendly = friendlyError(state.code)
+      const isGeneric =
+        state.code === 'RESERVE_FAILED' || state.code === 'INTERNAL'
+      const label = isGeneric && state.raw ? state.raw.slice(0, 12) : friendly
+      return `${label} · 重抢`
+    }
+  }
+}
+
+// ── verify button style + label ──────────────────────────────────────
+
+function verifyBtnClass(state: VerifyState, cooldownLeft: number): string {
+  if (state.kind === 'locked' || cooldownLeft > 0) {
+    return 'lhdao-btn lhdao-btn-disabled'
+  }
+  switch (state.kind) {
+    case 'idle':
+      return 'lhdao-btn lhdao-btn-primary'
     case 'verifying':
-      return 'lhdao-btn lhdao-btn-secondary lhdao-btn-busy'
+      return 'lhdao-btn lhdao-btn-primary lhdao-btn-busy'
     case 'done':
       return 'lhdao-btn lhdao-btn-done'
     case 'error':
@@ -227,72 +308,58 @@ function btnClasses(state: State): string {
   }
 }
 
-function labelForState(
-  state: State,
-  cooldownLeft: number | null,
-  followOnlyHandle: string | null,
-): string {
+function verifyLabel(state: VerifyState, cooldownLeft: number): string {
+  if (state.kind === 'locked') return '验证'
+  if (cooldownLeft > 0) return `验证 · ${cooldownLeft}s`
   switch (state.kind) {
     case 'idle':
-      // FOLLOW-only 任务在 idle 显示 "关注 @handle",区分跟 LIKE/RT 的 generic
-      // claim。handle 太长时(>14 char)截尾省略避免按钮被撑爆。
-      if (followOnlyHandle) {
-        const display =
-          followOnlyHandle.length > 14
-            ? `${followOnlyHandle.slice(0, 13)}…`
-            : followOnlyHandle
-        return `关注 @${display}`
-      }
-      return 'claim'
-    case 'reserving':
-      return '抢单中'
-    case 'reserved':
-      return cooldownLeft !== null ? `verify · ${cooldownLeft}s` : 'verify'
+      return '验证'
     case 'verifying':
       return '验证中'
     case 'done':
       return `+${state.reward} LUX`
     case 'error': {
-      // 优先用 friendlyError 的具体 code 翻译;若是 RESERVE_FAILED /
-      // VERIFY_FAILED / INTERNAL 这类兜底 code,直接用后端原文(截 18 字)
-      // 而不是显示无信息的 "失败"。完整原文 hover title 看。
       const friendly = friendlyError(state.code)
       const isGeneric =
-        state.code === 'RESERVE_FAILED' ||
-        state.code === 'VERIFY_FAILED' ||
-        state.code === 'INTERNAL'
-      const label = isGeneric && state.raw ? state.raw.slice(0, 18) : friendly
-      return state.phase === 'reserve' ? `${label} · 重抢` : `${label} · 重验证`
+        state.code === 'VERIFY_FAILED' || state.code === 'INTERNAL'
+      const label = isGeneric && state.raw ? state.raw.slice(0, 12) : friendly
+      return `${label} · 重试`
     }
   }
 }
 
-function IconForState({ state }: { state: State }) {
+// ── per-button icons ─────────────────────────────────────────────────
+
+function ReserveIcon({ state }: { state: ReserveState }) {
   const sz = { width: '14px', height: '14px' }
   switch (state.kind) {
     case 'idle':
       return <BoltIcon style={sz} />
     case 'reserving':
-    case 'verifying':
-      return (
-        <span
-          style={{
-            ...sz,
-            display: 'inline-block',
-            animation: 'lhdao-spin 1s linear infinite',
-          }}
-        >
-          <SpinnerIcon style={sz} />
-        </span>
-      )
-    case 'reserved':
+      return <Spinner style={sz} />
+    case 'done':
       return <CheckIcon style={sz} />
+    case 'error':
+      return <RetryIcon style={sz} />
+  }
+}
+
+function VerifyIcon({ state }: { state: VerifyState }) {
+  const sz = { width: '14px', height: '14px' }
+  switch (state.kind) {
+    case 'locked':
+    case 'idle':
+      return <CheckIcon style={sz} />
+    case 'verifying':
+      return <Spinner style={sz} />
     case 'done':
       return <SparkleIcon style={sz} />
     case 'error':
       return <RetryIcon style={sz} />
   }
 }
+
+// ── error code → 中文短文案 ──────────────────────────────────────────
 
 function friendlyError(code: SubmitErrorCode): string {
   switch (code) {
@@ -322,7 +389,7 @@ function friendlyError(code: SubmitErrorCode): string {
   }
 }
 
-// ── icons ────────────────────────────────────────────────────────────
+// ── icons (shared) ───────────────────────────────────────────────────
 
 function BoltIcon({ style }: { style?: React.CSSProperties }) {
   return (
@@ -335,7 +402,7 @@ function BoltIcon({ style }: { style?: React.CSSProperties }) {
 function CheckIcon({ style }: { style?: React.CSSProperties }) {
   return (
     <svg viewBox="0 0 24 24" style={style} aria-hidden="true">
-      <title>Verify</title>
+      <title>Check</title>
       <path
         d="M5 13l4 4L19 7"
         fill="none"
@@ -347,21 +414,29 @@ function CheckIcon({ style }: { style?: React.CSSProperties }) {
     </svg>
   )
 }
-function SpinnerIcon({ style }: { style?: React.CSSProperties }) {
+function Spinner({ style }: { style?: React.CSSProperties }) {
   return (
-    <svg viewBox="0 0 24 24" style={style} aria-hidden="true">
-      <title>Loading</title>
-      <circle
-        cx="12"
-        cy="12"
-        r="9"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeDasharray="40 18"
-        strokeLinecap="round"
-      />
-    </svg>
+    <span
+      style={{
+        ...style,
+        display: 'inline-block',
+        animation: 'lhdao-spin 1s linear infinite',
+      }}
+    >
+      <svg viewBox="0 0 24 24" style={style} aria-hidden="true">
+        <title>Loading</title>
+        <circle
+          cx="12"
+          cy="12"
+          r="9"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeDasharray="40 18"
+          strokeLinecap="round"
+        />
+      </svg>
+    </span>
   )
 }
 function SparkleIcon({ style }: { style?: React.CSSProperties }) {
