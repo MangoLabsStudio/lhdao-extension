@@ -632,11 +632,29 @@ function releaseFollowClaim(state: MountedArticle) {
  * fallback:有些视图 caret 在子层,用 [aria-label="More"] 也能命中。
  */
 function findTopRightAnchor(article: Element): Element | null {
-  const caret =
-    article.querySelector('[data-testid="caret"]') ??
-    article.querySelector('[aria-label="More"]') ??
-    article.querySelector('button[aria-haspopup="menu"]')
-  return caret as Element | null
+  // 策略 1:Twitter 通常用的 caret testid(timeline / detail 都常见)
+  const byTestId = article.querySelector('[data-testid="caret"]')
+  if (byTestId) return byTestId
+
+  // 策略 2:本地化无关的 aria-label fallback
+  const byMore = article.querySelector('[aria-label="More"]')
+  if (byMore) return byMore
+
+  // 策略 3:popup-menu button **但要排除 action row 里的**。
+  //
+  // 详情页主推文 article 经常没有 [data-testid="caret"](caret 在 article
+  // 外面的工具栏),策略 1/2 fall through。直接 `button[aria-haspopup="menu"]`
+  // 会**误命中 action row 里的 retweet 按钮**(点击弹出 Repost/Quote 菜单,
+  // 也带 aria-haspopup="menu"),导致 badge 挂到了 reply 和 RT 之间 — 用户
+  // 实测踩过这个 bug。
+  //
+  // role="group" 是 Twitter action row(reply/RT/like/bookmark/share)的
+  // 标准容器,排除掉就只剩顶部菜单按钮。
+  const candidates = article.querySelectorAll('button[aria-haspopup="menu"]')
+  for (const c of Array.from(candidates)) {
+    if (!c.closest('[role="group"]')) return c
+  }
+  return null
 }
 
 /**
