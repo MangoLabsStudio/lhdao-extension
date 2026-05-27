@@ -1018,15 +1018,19 @@ function attachMemberChip(article: Element, member: LighthouseMember): void {
   shadow.innerHTML = `
     <style>${MEMBER_CHIP_CSS}</style>
     <span class="chip" title="Lighthouse · ${tier} · ${escapeHtml(member.displayName)}">
-      <svg class="burst" viewBox="0 0 32 32" aria-hidden="true">
-        <g fill="#5EEAD4">
-          <path d="M16,16 L28.5,3.5 L28.5,9 L19,15 Z"/>
-          <path d="M16,16 L3.5,3.5 L3.5,9 L13,15 Z"/>
-          <path d="M16,16 L26,26 L26,22 L19,17 Z"/>
-          <path d="M16,16 L6,26 L6,22 L13,17 Z"/>
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+        <circle cx="32" cy="32" r="32" fill="#2D24C4"/>
+        <g stroke="#2EE742" stroke-width="6" stroke-linecap="round" transform="translate(32 32)">
+          <line x1="0" y1="0" x2="0" y2="-18"/>
+          <line x1="0" y1="0" x2="11" y2="-6"/>
+          <line x1="0" y1="0" x2="18" y2="5"/>
+          <line x1="0" y1="0" x2="-11" y2="-6"/>
+          <line x1="0" y1="0" x2="-18" y2="5"/>
+          <line x1="0" y1="0" x2="0" y2="13"/>
         </g>
-        <circle cx="16" cy="16" r="3" fill="#08090F"/>
-        <circle cx="16" cy="16" r="1.8" fill="#00f5d4"/>
+        <path d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
+              stroke="#fff" stroke-width="5" stroke-linecap="round"
+              stroke-linejoin="round" fill="none"/>
       </svg>
       <span class="label">灯塔</span>
     </span>
@@ -1056,10 +1060,11 @@ const MEMBER_CHIP_CSS = `
     user-select: none;
     cursor: default;
   }
-  .burst {
-    width: 11px;
-    height: 11px;
+  .mark {
+    width: 13px;
+    height: 13px;
     flex-shrink: 0;
+    border-radius: 50%;
   }
   .label { white-space: nowrap; }
 `
@@ -1151,19 +1156,20 @@ function attachProfileBadge(bioEl: Element, member: LighthouseMember): void {
   shadow.innerHTML = `
     <style>${PROFILE_BADGE_CSS}</style>
     <div class="badge">
-      <span class="icon-plate">
-        <svg viewBox="0 0 32 32" width="16" height="16" aria-hidden="true">
-          <g fill="#5EEAD4">
-            <path d="M16,16 L28.5,3.5 L28.5,9 L19,15 Z"/>
-            <path d="M16,16 L3.5,3.5 L3.5,9 L13,15 Z"/>
-            <path d="M16,16 L26,26 L26,22 L19,17 Z"/>
-            <path d="M16,16 L6,26 L6,22 L13,17 Z"/>
-          </g>
-          <circle cx="16" cy="16" r="3" fill="#08090F"/>
-          <circle cx="16" cy="16" r="1.8" fill="#00f5d4"/>
-          <circle cx="16" cy="16" r="0.9" fill="#fff"/>
-        </span>
-      </span>
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+        <circle cx="32" cy="32" r="32" fill="#2D24C4"/>
+        <g stroke="#2EE742" stroke-width="6" stroke-linecap="round" transform="translate(32 32)">
+          <line x1="0" y1="0" x2="0" y2="-18"/>
+          <line x1="0" y1="0" x2="11" y2="-6"/>
+          <line x1="0" y1="0" x2="18" y2="5"/>
+          <line x1="0" y1="0" x2="-11" y2="-6"/>
+          <line x1="0" y1="0" x2="-18" y2="5"/>
+          <line x1="0" y1="0" x2="0" y2="13"/>
+        </g>
+        <path d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
+              stroke="#fff" stroke-width="5" stroke-linecap="round"
+              stroke-linejoin="round" fill="none"/>
+      </svg>
       <div class="text">
         <div class="title">Lighthouse 成员</div>
         <div class="sub">
@@ -1191,14 +1197,11 @@ const PROFILE_BADGE_CSS = `
     font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont,
       'Segoe UI', 'PingFang SC', system-ui, sans-serif;
   }
-  .icon-plate {
-    display: inline-grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    background: #08090F;
-    border-radius: 8px;
+  .mark {
+    width: 30px;
+    height: 30px;
     flex-shrink: 0;
+    border-radius: 50%;
   }
   .text { display: flex; flex-direction: column; gap: 2px; }
   .title {

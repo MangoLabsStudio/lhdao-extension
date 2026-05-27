@@ -157,13 +157,9 @@ function Header({ connected, hasData }: { connected: boolean; hasData: boolean }
   )
 }
 
-/** Brand 标:onyx 小方块 + 内嵌 burst icon。跟 sidebar / store 一致。 */
+/** Brand 标 — 跟主站 favicon.ico / chrome 工具栏 icon 完全一致。 */
 function BrandPlate() {
-  return (
-    <span className="inline-grid h-7 w-7 place-items-center rounded-lg bg-[#08090F]">
-      <BurstIcon size={16} />
-    </span>
-  )
+  return <BurstIcon size={28} />
 }
 
 // ── ② Connected block (主内容) ───────────────────────────────────────
@@ -541,8 +537,8 @@ function SignInBlock({
   // Idle — 默认初始态
   return (
     <div className="px-4 py-5 text-center">
-      <div className="mx-auto mb-3 grid h-11 w-11 place-items-center rounded-2xl bg-[#08090F]">
-        <BurstIcon size={22} />
+      <div className="mx-auto mb-3 flex justify-center">
+        <BurstIcon size={44} />
       </div>
       <p className="text-[13px] font-bold text-slate-900 dark:text-slate-100">
         用 Lighthouse 账号登录
@@ -675,24 +671,39 @@ function SyncErrorBanner({
 
 // ── Burst icon — 同 sidebar / brand 一致 ─────────────────────────────
 
+/**
+ * Brand mark — 矢量版本的 favicon.ico,跟主站 / chrome 工具栏 icon 100%
+ * 一致(紫色 disc + 绿色 6 spokes + 白色 K-stem hook)。
+ *
+ * SVG 模板复用自 kol-dao-app/public/logo-icon-128-transparent.svg + 主站
+ * BrandLogoFallback,viewBox 0 0 64 64,内嵌 disc bg 让任何尺寸独立显示。
+ */
 function BurstIcon({ size = 16 }: { size?: number }) {
   return (
-    <svg
-      viewBox="0 0 32 32"
-      width={size}
-      height={size}
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
       <title>Lighthouse</title>
-      <g fill="#5EEAD4">
-        <path d="M16,16 L28.5,3.5 L28.5,9 L19,15 Z" />
-        <path d="M16,16 L3.5,3.5 L3.5,9 L13,15 Z" />
-        <path d="M16,16 L26,26 L26,22 L19,17 Z" />
-        <path d="M16,16 L6,26 L6,22 L13,17 Z" />
+      <circle cx="32" cy="32" r="32" fill="#2D24C4" />
+      <g
+        stroke="#2EE742"
+        strokeWidth="6"
+        strokeLinecap="round"
+        transform="translate(32 32)"
+      >
+        <line x1="0" y1="0" x2="0" y2="-18" />
+        <line x1="0" y1="0" x2="11" y2="-6" />
+        <line x1="0" y1="0" x2="18" y2="5" />
+        <line x1="0" y1="0" x2="-11" y2="-6" />
+        <line x1="0" y1="0" x2="-18" y2="5" />
+        <line x1="0" y1="0" x2="0" y2="13" />
       </g>
-      <circle cx="16" cy="16" r="3" fill="#08090F" />
-      <circle cx="16" cy="16" r="1.8" fill="#00f5d4" />
-      <circle cx="16" cy="16" r="0.9" fill="#fff" />
+      <path
+        d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
+        stroke="#FFFFFF"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
     </svg>
   )
 }

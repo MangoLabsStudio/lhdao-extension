@@ -516,19 +516,36 @@ function ChevronIcon() {
   )
 }
 
+/**
+ * Brand mark — 矢量版 favicon.ico(紫盘 + 绿 spokes + 白 hook)。
+ * 跟 chrome 工具栏 / popup / sidebar 用同一份设计。
+ */
 function BurstIcon({ size = 22 }: { size?: number }) {
   return (
-    <svg viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
+    <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
       <title>Lighthouse</title>
-      <g fill="#5EEAD4">
-        <path d="M16,16 L28.5,3.5 L28.5,9 L19,15 Z" />
-        <path d="M16,16 L3.5,3.5 L3.5,9 L13,15 Z" />
-        <path d="M16,16 L26,26 L26,22 L19,17 Z" />
-        <path d="M16,16 L6,26 L6,22 L13,17 Z" />
+      <circle cx="32" cy="32" r="32" fill="#2D24C4" />
+      <g
+        stroke="#2EE742"
+        strokeWidth="6"
+        strokeLinecap="round"
+        transform="translate(32 32)"
+      >
+        <line x1="0" y1="0" x2="0" y2="-18" />
+        <line x1="0" y1="0" x2="11" y2="-6" />
+        <line x1="0" y1="0" x2="18" y2="5" />
+        <line x1="0" y1="0" x2="-11" y2="-6" />
+        <line x1="0" y1="0" x2="-18" y2="5" />
+        <line x1="0" y1="0" x2="0" y2="13" />
       </g>
-      <circle cx="16" cy="16" r="3" fill="#08090F" />
-      <circle cx="16" cy="16" r="1.8" fill="#00f5d4" />
-      <circle cx="16" cy="16" r="0.9" fill="#fff" />
+      <path
+        d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
+        stroke="#FFFFFF"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
     </svg>
   )
 }
@@ -641,9 +658,7 @@ function PrimaryPairCard({
   return (
     <section className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-center gap-3">
-        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#08090F]">
-          <BurstIcon size={26} />
-        </span>
+        <BurstIcon size={48} />
         <div>
           <h2 className="text-[15px] font-black tracking-tight text-slate-900 dark:text-slate-50">
             用 Lighthouse 账号登录
