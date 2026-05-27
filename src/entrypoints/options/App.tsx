@@ -517,36 +517,25 @@ function ChevronIcon() {
 }
 
 /**
- * Brand mark — 矢量版 favicon.ico(紫盘 + 绿 spokes + 白 hook)。
- * 跟 chrome 工具栏 / popup / sidebar 用同一份设计。
+ * Brand mark — 直接用 manifest 里 icon/128.png(favicon 派生)。
+ * 跟主站 favicon / chrome 工具栏图标像素级一致,不做 SVG 复刻避免偏差。
  */
 function BurstIcon({ size = 22 }: { size?: number }) {
+  const src = React.useMemo(() => {
+    try {
+      return chrome.runtime.getURL('icon/128.png')
+    } catch {
+      return ''
+    }
+  }, [])
   return (
-    <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
-      <title>Lighthouse</title>
-      <circle cx="32" cy="32" r="32" fill="#2D24C4" />
-      <g
-        stroke="#2EE742"
-        strokeWidth="6"
-        strokeLinecap="round"
-        transform="translate(32 32)"
-      >
-        <line x1="0" y1="0" x2="0" y2="-18" />
-        <line x1="0" y1="0" x2="11" y2="-6" />
-        <line x1="0" y1="0" x2="18" y2="5" />
-        <line x1="0" y1="0" x2="-11" y2="-6" />
-        <line x1="0" y1="0" x2="-18" y2="5" />
-        <line x1="0" y1="0" x2="0" y2="13" />
-      </g>
-      <path
-        d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
-        stroke="#FFFFFF"
-        strokeWidth="5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-    </svg>
+    <img
+      src={src}
+      width={size}
+      height={size}
+      alt="Lighthouse"
+      style={{ display: 'inline-block' }}
+    />
   )
 }
 

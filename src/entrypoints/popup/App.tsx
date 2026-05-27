@@ -672,39 +672,26 @@ function SyncErrorBanner({
 // ── Burst icon — 同 sidebar / brand 一致 ─────────────────────────────
 
 /**
- * Brand mark — 矢量版本的 favicon.ico,跟主站 / chrome 工具栏 icon 100%
- * 一致(紫色 disc + 绿色 6 spokes + 白色 K-stem hook)。
- *
- * SVG 模板复用自 kol-dao-app/public/logo-icon-128-transparent.svg + 主站
- * BrandLogoFallback,viewBox 0 0 64 64,内嵌 disc bg 让任何尺寸独立显示。
+ * Brand mark — 直接用 manifest 里那张 icon PNG(就是 favicon.ico 派生的
+ * 128x128 PNG)。跟工具栏图标 / chrome://extensions 列表 / lhdao 主站
+ * favicon **像素级一致**,不再做 SVG 复刻避免偏差。
  */
 function BurstIcon({ size = 16 }: { size?: number }) {
+  const src = React.useMemo(() => {
+    try {
+      return chrome.runtime.getURL('icon/128.png')
+    } catch {
+      return ''
+    }
+  }, [])
   return (
-    <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
-      <title>Lighthouse</title>
-      <circle cx="32" cy="32" r="32" fill="#2D24C4" />
-      <g
-        stroke="#2EE742"
-        strokeWidth="6"
-        strokeLinecap="round"
-        transform="translate(32 32)"
-      >
-        <line x1="0" y1="0" x2="0" y2="-18" />
-        <line x1="0" y1="0" x2="11" y2="-6" />
-        <line x1="0" y1="0" x2="18" y2="5" />
-        <line x1="0" y1="0" x2="-11" y2="-6" />
-        <line x1="0" y1="0" x2="-18" y2="5" />
-        <line x1="0" y1="0" x2="0" y2="13" />
-      </g>
-      <path
-        d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
-        stroke="#FFFFFF"
-        strokeWidth="5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-    </svg>
+    <img
+      src={src}
+      width={size}
+      height={size}
+      alt="Lighthouse"
+      style={{ display: 'inline-block' }}
+    />
   )
 }
 

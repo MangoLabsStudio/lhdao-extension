@@ -41,6 +41,15 @@ export default defineConfig({
     action: {
       default_title: 'Lighthouse',
     },
+    // 让 content script 在 x.com / twitter.com 上能 fetch 扩展自带的 icon
+    // PNG(用 chrome.runtime.getURL('icon/128.png')),作为 timeline 推文
+    // 注入的 "灯塔成员" chip + profile bio badge 的内嵌 logo。
+    web_accessible_resources: [
+      {
+        resources: ['icon/*.png'],
+        matches: ['*://x.com/*', '*://twitter.com/*'],
+      },
+    ],
   },
 
   vite: () => ({

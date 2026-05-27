@@ -1015,24 +1015,12 @@ function attachMemberChip(article: Element, member: LighthouseMember): void {
 
   const shadow = host.attachShadow({ mode: 'open' })
   const tier = member.tier ? `TIER ${escapeHtml(member.tier)}` : 'member'
+  const iconUrl = chrome.runtime.getURL('icon/128.png')
   shadow.innerHTML = `
     <style>${MEMBER_CHIP_CSS}</style>
     <span class="chip" title="Lighthouse · ${tier} · ${escapeHtml(member.displayName)}">
-      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
-        <circle cx="32" cy="32" r="32" fill="#2D24C4"/>
-        <g stroke="#2EE742" stroke-width="6" stroke-linecap="round" transform="translate(32 32)">
-          <line x1="0" y1="0" x2="0" y2="-18"/>
-          <line x1="0" y1="0" x2="11" y2="-6"/>
-          <line x1="0" y1="0" x2="18" y2="5"/>
-          <line x1="0" y1="0" x2="-11" y2="-6"/>
-          <line x1="0" y1="0" x2="-18" y2="5"/>
-          <line x1="0" y1="0" x2="0" y2="13"/>
-        </g>
-        <path d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
-              stroke="#fff" stroke-width="5" stroke-linecap="round"
-              stroke-linejoin="round" fill="none"/>
-      </svg>
-      <span class="label">灯塔</span>
+      <img class="mark" src="${iconUrl}" alt="" />
+      <span class="label">灯塔成员</span>
     </span>
   `
   userName.appendChild(host)
@@ -1153,23 +1141,11 @@ function attachProfileBadge(bioEl: Element, member: LighthouseMember): void {
 
   const shadow = host.attachShadow({ mode: 'open' })
   const tier = member.tier ?? '—'
+  const iconUrl = chrome.runtime.getURL('icon/128.png')
   shadow.innerHTML = `
     <style>${PROFILE_BADGE_CSS}</style>
     <div class="badge">
-      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
-        <circle cx="32" cy="32" r="32" fill="#2D24C4"/>
-        <g stroke="#2EE742" stroke-width="6" stroke-linecap="round" transform="translate(32 32)">
-          <line x1="0" y1="0" x2="0" y2="-18"/>
-          <line x1="0" y1="0" x2="11" y2="-6"/>
-          <line x1="0" y1="0" x2="18" y2="5"/>
-          <line x1="0" y1="0" x2="-11" y2="-6"/>
-          <line x1="0" y1="0" x2="-18" y2="5"/>
-          <line x1="0" y1="0" x2="0" y2="13"/>
-        </g>
-        <path d="M34 30 L34 46 M34 38 L44 30 M34 38 L44 46"
-              stroke="#fff" stroke-width="5" stroke-linecap="round"
-              stroke-linejoin="round" fill="none"/>
-      </svg>
+      <img class="mark" src="${iconUrl}" alt="" />
       <div class="text">
         <div class="title">Lighthouse 成员</div>
         <div class="sub">
