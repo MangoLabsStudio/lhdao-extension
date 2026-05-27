@@ -6,7 +6,10 @@ import { defineConfig } from 'wxt'
 // 默认走 prod,通过 env 切 staging:
 //   prod  : 直接 `pnpm build`
 //   beta  : `WXT_API_ENDPOINT=https://service.lhdaobeta.top/graphql \
-//            WXT_WEB_ENDPOINT=https://lhdaobeta.top pnpm build`
+//            WXT_WEB_ENDPOINT=https://app.lhdaobeta.top pnpm build`
+//
+// 注意:测试环境 web 域名是 `app.lhdaobeta.top`(跟 prod 一样有 app. 前缀),
+// 不是 `lhdaobeta.top` — 后者是 landing 页,routes 都在 app 子域。
 //
 // host_permissions 必须跟 API_ENDPOINT 一致 — 否则 fetch 被 CSP 拦,sync
 // 静默失败。这里从 API_ENDPOINT origin 自动派生,避免手动维护两份配置漂移。
