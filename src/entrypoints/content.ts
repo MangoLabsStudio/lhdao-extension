@@ -12,7 +12,8 @@ import { SidebarCard } from '@/components/sidebar/SidebarCard'
 import sidebarCss from '@/components/sidebar/sidebar.css?inline'
 import { initDwellTracker, onDwellUrlChange } from '@/lib/dwell-tracker'
 import { sendMessage } from '@/lib/messaging'
-import type { CampaignTaskCache } from '@/lib/storage'
+import type { LighthouseMember } from '@/lib/queries'
+import { type CampaignTaskCache, localStore } from '@/lib/storage'
 import {
   extractAuthorHandleFromArticle,
   extractTweetIdFromArticle,
@@ -245,6 +246,9 @@ export default defineContentScript({
   async main() {
     injectGlobalStyle()
 
+    // Feature B — 加载用户的"屏蔽 sensitive 推文"偏好(默认开)
+    void loadSensitivePref()
+
     // 反作弊 dwell tracker:对所有 /<user>/status/<id> 推文详情页累积可见
     // 时长,URL 离开 / tab 关 时通过 BG 上报后端。绑 visibility / focus /
     // blur / pagehide / beforeunload。
@@ -342,6 +346,9 @@ function scheduleScan() {
     rafScheduled = false
     scanTimeline()
     scanSidebar()
+    void scanMembers()
+    void scanProfilePage()
+    scanSensitive()
   })
 }
 
@@ -926,3 +933,375 @@ function renderInto(
   root.render(node)
   return root
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Lighthouse member tagging — Feature A
+// ════════════════════════════════════════════════════════════════════════
+//
+// 两个独立 surface:
+//   1. Timeline:每条 article 的 author handle → 是成员则在 User-Name 旁
+//      注入小 chip "灯塔成员"
+//   2. Profile 页(URL 是 /<handle>):成员则在 bio 下方注入 badge
+//
+// BG SW 维护 LRU cache(5min TTL),content 这边不缓存 — 简单 set 一个
+// `data-lhdao-member` attribute 标记已扫过的 article,防止重复 RPC。
+
+const MEMBER_FLAG = 'data-lhdao-member'
+const MEMBER_BUSY = 'data-lhdao-member-busy'
+
+const RESERVED_TWITTER_PATHS = new Set([
+  'home', 'explore', 'notifications', 'messages', 'bookmarks', 'lists',
+  'profile', 'settings', 'login', 'logout', 'signup', 'search', 'compose',
+  'i', 'about', 'tos', 'privacy', 'jobs', 'help', 'communities', 'topics',
+  'verified-followers', 'connect_people', 'following', 'followers',
+])
+
+async function scanMembers(): Promise<void> {
+  if (contextDead) return
+
+  // 收集 visible article + 未扫过的 author handle
+  const articles = document.querySelectorAll('article')
+  const articleByHandle = new Map<string, Element[]>()
+  for (const article of articles) {
+    if (article.getAttribute(MEMBER_FLAG)) continue
+    if (article.getAttribute(MEMBER_BUSY)) continue
+    if (!isArticleRenderable(article)) continue
+    const handle = extractAuthorHandleFromArticle(article)
+    if (!handle) continue
+    if (!articleByHandle.has(handle)) articleByHandle.set(handle, [])
+    articleByHandle.get(handle)!.push(article)
+  }
+  if (articleByHandle.size === 0) return
+
+  // 占用 BUSY flag 避免并发 rAF 重复发 RPC
+  for (const arts of articleByHandle.values()) {
+    for (const a of arts) a.setAttribute(MEMBER_BUSY, '1')
+  }
+
+  try {
+    const r = await sendMessage({
+      type: 'check-lighthouse-members',
+      handles: Array.from(articleByHandle.keys()),
+    })
+    if (r.type !== 'lighthouse-members-result') return
+
+    for (const [handle, arts] of articleByHandle.entries()) {
+      const member = r.members[handle]
+      for (const art of arts) {
+        art.removeAttribute(MEMBER_BUSY)
+        art.setAttribute(MEMBER_FLAG, member ? 'yes' : 'no')
+        if (member) attachMemberChip(art, member)
+      }
+    }
+  } catch (e) {
+    // 失败 → 清掉 BUSY 让下次 rAF 重试,但不标 FLAG(下次还会再查)
+    for (const arts of articleByHandle.values()) {
+      for (const a of arts) a.removeAttribute(MEMBER_BUSY)
+    }
+    if (handleContextError(e)) return
+  }
+}
+
+function attachMemberChip(article: Element, member: LighthouseMember): void {
+  const userName = article.querySelector('[data-testid="User-Name"]')
+  if (!userName) return
+  if (userName.querySelector('[data-lhdao-member-chip]')) return
+
+  const host = document.createElement('span')
+  host.setAttribute('data-lhdao-member-chip', '')
+  host.style.display = 'inline-flex'
+  host.style.verticalAlign = 'middle'
+  host.style.marginLeft = '4px'
+
+  const shadow = host.attachShadow({ mode: 'open' })
+  const tier = member.tier ? `TIER ${escapeHtml(member.tier)}` : 'member'
+  shadow.innerHTML = `
+    <style>${MEMBER_CHIP_CSS}</style>
+    <span class="chip" title="Lighthouse · ${tier} · ${escapeHtml(member.displayName)}">
+      <svg class="burst" viewBox="0 0 32 32" aria-hidden="true">
+        <g fill="#5EEAD4">
+          <path d="M16,16 L28.5,3.5 L28.5,9 L19,15 Z"/>
+          <path d="M16,16 L3.5,3.5 L3.5,9 L13,15 Z"/>
+          <path d="M16,16 L26,26 L26,22 L19,17 Z"/>
+          <path d="M16,16 L6,26 L6,22 L13,17 Z"/>
+        </g>
+        <circle cx="16" cy="16" r="3" fill="#08090F"/>
+        <circle cx="16" cy="16" r="1.8" fill="#00f5d4"/>
+      </svg>
+      <span class="label">灯塔</span>
+    </span>
+  `
+  userName.appendChild(host)
+}
+
+const MEMBER_CHIP_CSS = `
+  :host { all: initial; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px 1px 5px;
+    background: linear-gradient(135deg, #0D9488 0%, #06B6D4 100%);
+    color: #fff;
+    border-radius: 999px;
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 16px;
+    letter-spacing: 0.01em;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.30) inset,
+      0 2px 6px -1px rgba(13,148,136,0.40);
+    vertical-align: middle;
+    user-select: none;
+    cursor: default;
+  }
+  .burst {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
+  }
+  .label { white-space: nowrap; }
+`
+
+// ── Profile page badge ──────────────────────────────────────────────
+
+const PROFILE_BADGE_FLAG_SELECTOR = '[data-lhdao-profile-badge]'
+let lastProfileHandle: string | null = null
+let lastProfileResult: LighthouseMember | null = null
+
+async function scanProfilePage(): Promise<void> {
+  if (contextDead) return
+  const handle = extractProfileHandleFromUrl(location.pathname)
+
+  // URL 不是 profile 页 → 移除任何残留 badge
+  if (!handle) {
+    document.querySelectorAll(PROFILE_BADGE_FLAG_SELECTOR).forEach((el) => {
+      el.remove()
+    })
+    lastProfileHandle = null
+    lastProfileResult = null
+    return
+  }
+
+  // 换了 profile?清旧 badge
+  if (handle !== lastProfileHandle) {
+    document.querySelectorAll(PROFILE_BADGE_FLAG_SELECTOR).forEach((el) => {
+      el.remove()
+    })
+    lastProfileHandle = handle
+    lastProfileResult = null
+  }
+
+  // 还没拿过 result → 查
+  if (lastProfileResult === null) {
+    // 标 placeholder 防止并发重复 RPC(用一个 module-level promise)
+    if (profilePagePending === handle) return
+    profilePagePending = handle
+    try {
+      const r = await sendMessage({
+        type: 'check-lighthouse-members',
+        handles: [handle],
+      })
+      if (r.type === 'lighthouse-members-result') {
+        lastProfileResult = r.members[handle] ?? null
+      }
+    } catch (e) {
+      if (handleContextError(e)) return
+    } finally {
+      if (profilePagePending === handle) profilePagePending = null
+    }
+  }
+
+  // 非成员 → 不挂 badge
+  if (!lastProfileResult) return
+
+  // 找 bio anchor
+  const bio = document.querySelector('[data-testid="UserDescription"]')
+  if (!bio || !bio.parentElement) {
+    // bio 可能还没渲染,下次 rAF 再试
+    return
+  }
+  if (bio.parentElement.querySelector(PROFILE_BADGE_FLAG_SELECTOR)) return
+
+  attachProfileBadge(bio, lastProfileResult)
+}
+
+let profilePagePending: string | null = null
+
+function extractProfileHandleFromUrl(pathname: string): string | null {
+  // 只匹配纯 /<handle> 或 /<handle>/(没有 /status/ 等子路径)
+  // X 用户 handle 规则:1-15 字符,字母数字下划线
+  const m = pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/)
+  if (!m) return null
+  const handle = m[1].toLowerCase()
+  if (RESERVED_TWITTER_PATHS.has(handle)) return null
+  return handle
+}
+
+function attachProfileBadge(bioEl: Element, member: LighthouseMember): void {
+  if (!bioEl.parentElement) return
+
+  const host = document.createElement('div')
+  host.setAttribute('data-lhdao-profile-badge', '')
+  host.style.marginTop = '8px'
+
+  const shadow = host.attachShadow({ mode: 'open' })
+  const tier = member.tier ?? '—'
+  shadow.innerHTML = `
+    <style>${PROFILE_BADGE_CSS}</style>
+    <div class="badge">
+      <span class="icon-plate">
+        <svg viewBox="0 0 32 32" width="16" height="16" aria-hidden="true">
+          <g fill="#5EEAD4">
+            <path d="M16,16 L28.5,3.5 L28.5,9 L19,15 Z"/>
+            <path d="M16,16 L3.5,3.5 L3.5,9 L13,15 Z"/>
+            <path d="M16,16 L26,26 L26,22 L19,17 Z"/>
+            <path d="M16,16 L6,26 L6,22 L13,17 Z"/>
+          </g>
+          <circle cx="16" cy="16" r="3" fill="#08090F"/>
+          <circle cx="16" cy="16" r="1.8" fill="#00f5d4"/>
+          <circle cx="16" cy="16" r="0.9" fill="#fff"/>
+        </span>
+      </span>
+      <div class="text">
+        <div class="title">Lighthouse 成员</div>
+        <div class="sub">
+          TIER ${escapeHtml(tier)} · ${escapeHtml(member.displayName)}
+        </div>
+      </div>
+    </div>
+  `
+  // 挂到 bio 后(同级 sibling)
+  bioEl.parentElement.insertBefore(host, bioEl.nextSibling)
+}
+
+const PROFILE_BADGE_CSS = `
+  :host { all: initial; display: block; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px 7px 8px;
+    background: linear-gradient(135deg,
+      oklch(0.97 0.025 195) 0%,
+      oklch(0.99 0.01 195) 100%);
+    border: 1px solid oklch(0.92 0.06 195);
+    border-radius: 12px;
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont,
+      'Segoe UI', 'PingFang SC', system-ui, sans-serif;
+  }
+  .icon-plate {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    background: #08090F;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+  .text { display: flex; flex-direction: column; gap: 2px; }
+  .title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #0F172A;
+    line-height: 1.1;
+  }
+  .sub {
+    font-size: 11px;
+    font-weight: 500;
+    color: #475569;
+    letter-spacing: 0.01em;
+  }
+  @media (prefers-color-scheme: dark) {
+    .badge {
+      background: linear-gradient(135deg,
+        oklch(0.22 0.03 195) 0%,
+        oklch(0.20 0.015 195) 100%);
+      border-color: oklch(0.30 0.04 195);
+    }
+    .title { color: oklch(0.95 0.01 195); }
+    .sub { color: oklch(0.70 0.02 240); }
+  }
+`
+
+function escapeHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Feature B — Sensitive (NSFW / 软色情等) 推文屏蔽
+// ════════════════════════════════════════════════════════════════════════
+//
+// 用户在 Options 里翻开关 hideSensitiveTweets(default true)。开着的话:
+//
+//   1. scanSensitive() 找所有 article 里 [data-testid] 含 "sensitive"
+//      或者 "contentWarning" 的子节点 — 这是 X 自家系统标过的"成人/
+//      血腥/敏感内容"
+//   2. 命中的 article 贴 data-lhdao-hide-sensitive
+//   3. highlight.css 里的 selector 把整条 display:none
+//
+// 关掉开关 → 清掉所有 data-lhdao-hide-sensitive 属性,X 立即恢复原显示。
+//
+// 实现走 X 自家标识 + display:none,完全不读 / 改 X 自己的样式或 DOM,
+// 跟 Shadow DOM 隔离策略一致。
+
+let sensitiveHideOn = true // 默认开,等 loadSensitivePref 读真实值
+
+async function loadSensitivePref(): Promise<void> {
+  if (contextDead) return
+  try {
+    const v = await localStore.get('hideSensitiveTweets')
+    // null / undefined → 默认 true(初次安装行为)
+    sensitiveHideOn = v !== false
+  } catch (e) {
+    if (handleContextError(e)) return
+    // 读取失败保持默认 true
+  }
+}
+
+function scanSensitive(): void {
+  if (contextDead) return
+
+  // 关着 → 一次性清掉残留 hide attribute,X 立即恢复
+  if (!sensitiveHideOn) {
+    for (const a of document.querySelectorAll(
+      'article[data-lhdao-hide-sensitive]',
+    )) {
+      a.removeAttribute('data-lhdao-hide-sensitive')
+    }
+    return
+  }
+
+  // 开着 → 扫所有 article 找 sensitive 标识
+  //
+  // X 标识有几种变体:
+  //   - [data-testid="sensitive-media-warning"]   单图被遮罩
+  //   - [data-testid="contentWarning"]            整推被遮罩
+  //   - 其他 testid 含 "sensitive" 的子组件
+  //
+  // 用 attribute selector 含 "sensitive" 一网打尽,加上 contentWarning。
+  // case-insensitive (i) 防 X 改大小写。
+  for (const article of document.querySelectorAll('article')) {
+    if (article.hasAttribute('data-lhdao-hide-sensitive')) continue
+    const hit =
+      article.querySelector('[data-testid*="sensitive" i]') ||
+      article.querySelector('[data-testid="contentWarning"]')
+    if (hit) {
+      article.setAttribute('data-lhdao-hide-sensitive', '1')
+    }
+  }
+}
+
+// 监听 storage 变化 — Options 切换开关时立即生效,不需要刷页
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return
+  if ('hideSensitiveTweets' in changes) {
+    sensitiveHideOn = changes.hideSensitiveTweets.newValue !== false
+    scanSensitive()
+  }
+})

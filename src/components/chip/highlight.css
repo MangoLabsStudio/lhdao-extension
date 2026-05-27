@@ -176,3 +176,15 @@ article[data-lhdao-active="1"] {
       0 0 8px 2px rgba(6, 182, 212, 0.3);
   }
 }
+
+/* ── Sensitive content filter — Feature B ───────────────────────────
+ *
+ * X 自家用 [data-testid] 上含 "sensitive" 的元素标识被自动判断为成人 /
+ * 软色情 / 暴力等 sensitive media。Content script 扫到就给整 article 贴
+ * data-lhdao-hide-sensitive,这条 CSS 把整条隐藏掉,等用户在 Options 关
+ * 掉开关或 X 自身解除标识就自动恢复(因为下次 scan 不再贴 attribute)。
+ *
+ * `!important` 防止 X 的 SPA 自家 inline style 覆盖。 */
+article[data-lhdao-hide-sensitive] {
+  display: none !important;
+}

@@ -10,6 +10,9 @@ import {
   CREATE_EXTENSION_PAIRING_MUTATION,
   type CreateExtensionPairingResult,
   type EngagementActionType,
+  LIGHTHOUSE_MEMBERS_QUERY,
+  type LighthouseMember,
+  type LighthouseMembersResult,
   ME_QUERY,
   type MeResult,
   POLL_EXTENSION_PAIRING_QUERY,
@@ -190,6 +193,11 @@ export default defineBackground(() => {
         taskCount,
         tweetCount,
       }
+    }
+    // ── Lighthouse member lookup(灯塔成员识别) ──────────────────────
+    if (req.type === 'check-lighthouse-members') {
+      const members = await checkLighthouseMembers(req.handles)
+      return { type: 'lighthouse-members-result', members }
     }
     // ── Extension Pairing (一键登录) ─────────────────────────────────
     if (req.type === 'start-pairing') {
@@ -931,4 +939,122 @@ async function cancelPairing(): Promise<void> {
   await closePairingTab()
   setPairingState({ kind: 'cancelled' })
   scheduleReset()
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Lighthouse member lookup cache(灯塔成员识别)
+// ════════════════════════════════════════════════════════════════════════
+//
+// Content script 频繁批查"这些 X handle 是不是灯塔成员"。简单的 in-memory
+// cache + 5min TTL 已经够:
+//   - 同一个用户 timeline 滚动通常重复出现同样的 author handle
+//   - SW 在 idle 时被 GC,cache 丢失也无所谓(下次重查即可)
+//   - 不需要持久化(成员状态变化频率远高于 5min,持久化反而 stale)
+//
+// cache entry 同时记录 hit / miss — miss 也缓存,避免对 known-non-member
+// 反复打后端。
+
+interface MemberCacheEntry {
+  cachedAt: number
+  /** null = 非成员 / undefined = 未查 */
+  info: LighthouseMember | null
+}
+
+const MEMBER_CACHE_TTL_MS = 5 * 60 * 1000
+const MEMBER_QUERY_BATCH_SIZE = 50
+
+const memberCache = new Map<string, MemberCacheEntry>()
+
+/**
+ * 批查 Twitter handle → LighthouseMember 映射。
+ *
+ *   1. 输入 lowercase + dedupe
+ *   2. 先 cache lookup,过期 / 不存在的入 missing
+ *   3. missing chunk 成 ≤50 一批,调 lighthouseMembers query
+ *   4. 合并所有结果,refresh cache(hit 和 miss 都记)
+ *   5. 返回:**只含成员**的 map
+ *
+ * 任何一批查询失败 → 那一批 handles 留作未知(不缓存 miss,下次重试),
+ * 已有的 cached hits 仍正常返回。
+ */
+async function checkLighthouseMembers(
+  handles: string[],
+): Promise<Record<string, LighthouseMember>> {
+  if (!handles || handles.length === 0) return {}
+
+  // 没 token 时跳过(成员识别需要鉴权 query,虽然 @AllowPluginToken 也允许)
+  const token = await localStore.get('apiToken')
+  if (!token) return {}
+
+  // 标准化 + 去重
+  const normalized = Array.from(
+    new Set(
+      handles
+        .filter((h): h is string => typeof h === 'string')
+        .map((h) => h.trim().toLowerCase())
+        .filter((h) => h.length > 0 && h.length <= 40),
+    ),
+  )
+  if (normalized.length === 0) return {}
+
+  const now = Date.now()
+  const result: Record<string, LighthouseMember> = {}
+  const missing: string[] = []
+
+  // Cache lookup
+  for (const h of normalized) {
+    const cached = memberCache.get(h)
+    if (cached && now - cached.cachedAt < MEMBER_CACHE_TTL_MS) {
+      if (cached.info) result[h] = cached.info
+      // null = cached non-member,跳过
+    } else {
+      missing.push(h)
+    }
+  }
+
+  // 全部命中 cache
+  if (missing.length === 0) return result
+
+  // chunk + query
+  for (let i = 0; i < missing.length; i += MEMBER_QUERY_BATCH_SIZE) {
+    const batch = missing.slice(i, i + MEMBER_QUERY_BATCH_SIZE)
+    try {
+      const r = await gql<LighthouseMembersResult, { handles: string[] }>(
+        LIGHTHOUSE_MEMBERS_QUERY,
+        { handles: batch },
+      )
+      const hits = new Set(
+        r.lighthouseMembers.map((m) => m.twitterHandle.toLowerCase()),
+      )
+      // 命中的写 cache + result
+      for (const m of r.lighthouseMembers) {
+        const key = m.twitterHandle.toLowerCase()
+        memberCache.set(key, { cachedAt: now, info: m })
+        result[key] = m
+      }
+      // 这一批没命中的也写 cache (info=null),避免反复查
+      for (const h of batch) {
+        if (!hits.has(h)) {
+          memberCache.set(h, { cachedAt: now, info: null })
+        }
+      }
+    } catch (e) {
+      // 单批失败不打断其他批次,只是这些 handle 这次不入 cache,下次重试
+      console.warn(
+        '[lhdao] lighthouseMembers batch failed:',
+        (e as Error).message,
+      )
+    }
+  }
+
+  // cache 太大时简单截断(运行很久后保护内存,不是性能瓶颈)
+  if (memberCache.size > 5000) {
+    const entries = Array.from(memberCache.entries())
+    entries.sort((a, b) => a[1].cachedAt - b[1].cachedAt)
+    for (let i = 0; i < 2500; i++) {
+      memberCache.delete(entries[i][0])
+    }
+  }
+
+  return result
 }

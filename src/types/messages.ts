@@ -7,6 +7,7 @@
  *   - 单向广播(BG → CS)用 `tasks-updated`,响应永远是 `ack`
  */
 
+import type { LighthouseMember } from '@/lib/queries'
 import type {
   ActiveCampaignSummary,
   CampaignTaskCache,
@@ -85,6 +86,14 @@ export type MsgRequest =
   | { type: 'cancel-pairing' }
   /** UI 重新打开时查询当前 pairing state,避免 popup close 期间错过广播 */
   | { type: 'get-pairing-status' }
+  /**
+   * Content script 批查"这些 handles 哪些是灯塔成员"。
+   *
+   * BG SW 内置 LRU cache(5min TTL),去重 + chunk(50/批)后调后端
+   * lighthouseMembers query。返回只包含真正命中的 handle → 成员信息映射;
+   * 不在结果里的 handle = 非成员(扩展端 set difference 推断)。
+   */
+  | { type: 'check-lighthouse-members'; handles: string[] }
   /** BG → CS 广播:任务列表已更新,请重新查询 */
   | { type: 'tasks-updated' }
   /**
@@ -173,6 +182,20 @@ export type MsgResponse =
     }
   /** get-pairing-status 响应:返回当前 state */
   | { type: 'pairing-status-result'; state: PairingState }
+  /**
+   * check-lighthouse-members 响应。
+   *
+   * `members`:只包含真正命中的成员 — key 是 lowercase handle,value 是
+   *   该用户的 LighthouseMember 公开信息。未命中的 handle 不在 map 里。
+   *
+   * 调用方拿到后:
+   *   - input handles 中,在 map 里的 → 灯塔成员,渲染 chip
+   *   - 不在 map 里的 → 非成员,跳过
+   */
+  | {
+      type: 'lighthouse-members-result'
+      members: Record<string, LighthouseMember>
+    }
   | { type: 'ack' }
 
 /**

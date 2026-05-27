@@ -171,6 +171,8 @@ export function App() {
         </>
       )}
 
+      <SensitiveToggleCard />
+
       <footer className="mt-12 border-t border-slate-200 pt-4 text-[11px] text-slate-400 dark:border-slate-800 dark:text-slate-600">
         <p>
           token 仅存于 chrome.storage.local,不会出现在 localStorage 或 cookie。
@@ -714,4 +716,102 @@ function hostFrom(url: string): string {
   } catch {
     return url
   }
+}
+
+// ── Feature B · Sensitive content toggle ────────────────────────────
+
+/**
+ * "屏蔽 sensitive 推文" 开关。
+ *
+ * 直接读写 chrome.storage.local.hideSensitiveTweets,content script 监听
+ * onChanged 实时 apply / un-apply,不需要刷页。
+ *
+ * 默认 true(初次安装即生效)— 首次 mount 时如果 storage 里没值,显示成
+ * "已开",用户翻开关时才把 false 写进去。
+ */
+function SensitiveToggleCard() {
+  const [on, setOn] = React.useState<boolean | null>(null) // null = 还在加载
+  const [busy, setBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    void (async () => {
+      try {
+        const v = await localStore.get('hideSensitiveTweets')
+        setOn(v !== false) // null/undefined → 默认 true
+      } catch {
+        setOn(true)
+      }
+    })()
+  }, [])
+
+  const toggle = React.useCallback(async () => {
+    if (on === null || busy) return
+    setBusy(true)
+    const next = !on
+    try {
+      await localStore.set('hideSensitiveTweets', next)
+      setOn(next)
+    } finally {
+      setBusy(false)
+    }
+  }, [on, busy])
+
+  return (
+    <section className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex items-start gap-4 p-5">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100 dark:bg-slate-800">
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            className="text-slate-500 dark:text-slate-400"
+            aria-hidden="true"
+          >
+            <title>shield</title>
+            <path
+              d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+              strokeLinejoin="round"
+            />
+            <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[14px] font-bold text-slate-900 dark:text-slate-100">
+            屏蔽敏感推文
+          </h2>
+          <p className="mt-1 text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">
+            自动隐藏 X 上被标记为成人 / 软色情 / 暴力等
+            <span className="font-semibold text-slate-600 dark:text-slate-300">
+              {' '}
+              sensitive 内容{' '}
+            </span>
+            的推文。仅依赖 X 自己的判断,不读你的浏览记录。
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={!!on}
+          onClick={toggle}
+          disabled={on === null || busy}
+          className={
+            on
+              ? 'relative h-7 w-12 shrink-0 rounded-full bg-gradient-to-br from-teal-600 to-cyan-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.3)] transition disabled:opacity-50'
+              : 'relative h-7 w-12 shrink-0 rounded-full bg-slate-300 transition disabled:opacity-50 dark:bg-slate-700'
+          }
+        >
+          <span
+            className={
+              on
+                ? 'absolute left-[22px] top-[3px] block h-5 w-5 rounded-full bg-white shadow transition'
+                : 'absolute left-[3px] top-[3px] block h-5 w-5 rounded-full bg-white shadow transition'
+            }
+          />
+        </button>
+      </div>
+    </section>
+  )
 }

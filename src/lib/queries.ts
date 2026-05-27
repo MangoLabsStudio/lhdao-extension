@@ -242,6 +242,43 @@ export interface VerifyEngagementResult {
   verifyEngagement: { actualReward: number }
 }
 
+// ── Lighthouse member lookup(灯塔成员识别) ─────────────────────────
+//
+// 用途:扩展扫 X timeline + profile 页面时,批量查询哪些 Twitter handle
+// 是 Lighthouse 平台已激活成员,然后给这些推文 / 个人主页加 chip / badge。
+//
+// 后端 @AllowPluginToken,扩展用现有 plugin token 调即可。每次最多 50 个
+// handle(后端校验),所以扩展端需要 chunk + LRU cache 去重。
+//
+// 返回的是**只有成员**的列表 — 非成员不在结果里。扩展用 set difference
+// 推断 "input - output = 非成员",省传输流量。
+
+export const LIGHTHOUSE_MEMBERS_QUERY = `
+  query LighthouseMembers($handles: [String!]!) {
+    lighthouseMembers(handles: $handles) {
+      twitterHandle
+      displayName
+      avatar
+      tier
+    }
+  }
+`
+
+export interface LighthouseMember {
+  /** 小写化的 Twitter handle(不带 @) */
+  twitterHandle: string
+  /** 显示名 — 优先 nickname / fallback username / fallback handle */
+  displayName: string
+  /** 头像 URL,可能 null */
+  avatar: string | null
+  /** Tier 等级 S/A/B/C/D/E,可能 null(新注册未评级) */
+  tier: string | null
+}
+
+export interface LighthouseMembersResult {
+  lighthouseMembers: LighthouseMember[]
+}
+
 // ── Extension Pairing (一键登录) ─────────────────────────────────────
 //
 // 流程见 kol-dao-service 后端 ExtensionPairingService doc。

@@ -16,6 +16,17 @@ interface LocalSchema {
   apiToken: string | null
   /** 是否同意上报错误日志 (placeholder,后续接 Sentry) */
   optInErrorReport: boolean
+  /**
+   * 是否自动屏蔽 X 上的 sensitive(成人/软色情/暴力等)推文。
+   * 默认 true — 装上立即生效,Options 里可反勾。
+   *
+   * Content script 扫到 article 内有 [data-testid*="sensitive"] 就贴
+   * data-lhdao-hide-sensitive,highlight.css 把整条 display:none。
+   *
+   * 设置变化通过 chrome.storage.onChanged 通知 content script 实时
+   * apply / un-apply,不需要刷页。
+   */
+  hideSensitiveTweets: boolean
 }
 
 interface SessionSchema {
