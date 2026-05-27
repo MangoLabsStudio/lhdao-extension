@@ -1,6 +1,24 @@
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'wxt'
 
+// ── env resolution ───────────────────────────────────────────────────
+//
+// 默认走 prod,通过 env 切 staging:
+//   prod  : 直接 `pnpm build`
+//   beta  : `WXT_API_ENDPOINT=https://service.lhdaobeta.top/graphql \
+//            WXT_WEB_ENDPOINT=https://lhdaobeta.top pnpm build`
+//
+// host_permissions 必须跟 API_ENDPOINT 一致 — 否则 fetch 被 CSP 拦,sync
+// 静默失败。这里从 API_ENDPOINT origin 自动派生,避免手动维护两份配置漂移。
+//
+// WEB_ENDPOINT 不需要 host_permission(只 navigation,不 fetch),所以不算
+// 进列表 — 维持 "least permission" 原则,Web Store 审核也更顺。
+const API_ENDPOINT =
+  process.env.WXT_API_ENDPOINT ?? 'https://service.lhdao.top/graphql'
+const WEB_ENDPOINT = process.env.WXT_WEB_ENDPOINT ?? 'https://app.lhdao.top'
+
+const API_HOST_PATTERN = `${new URL(API_ENDPOINT).origin}/*`
+
 // See https://wxt.dev/api/config.html
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
@@ -15,7 +33,7 @@ export default defineConfig({
     host_permissions: [
       'https://x.com/*',
       'https://twitter.com/*',
-      'https://service.lhdao.top/*',
+      API_HOST_PATTERN,
     ],
     action: {
       default_title: 'Lighthouse',
@@ -25,21 +43,8 @@ export default defineConfig({
   vite: () => ({
     plugins: [tailwindcss()],
     define: {
-      // Compile-time endpoints. 仅 prod。
-      //
-      //   __API_ENDPOINT__ = service.lhdao.top    (GraphQL backend)
-      //   __WEB_ENDPOINT__ = app.lhdao.top        (app routes: /settings/plugin-tokens 等)
-      //
-      // Web 是 app 子域 — lhdao.top 是 landing,/settings 等路径在 app.lhdao.top。
-      //
-      // 临时想用 staging,环境变量 WXT_API_ENDPOINT / WXT_WEB_ENDPOINT 覆盖即可,
-      // 不再提供 :beta npm scripts(2026-05-18 移除,避免误发 beta zip 上 Web Store)。
-      __API_ENDPOINT__: JSON.stringify(
-        process.env.WXT_API_ENDPOINT ?? 'https://service.lhdao.top/graphql',
-      ),
-      __WEB_ENDPOINT__: JSON.stringify(
-        process.env.WXT_WEB_ENDPOINT ?? 'https://app.lhdao.top',
-      ),
+      __API_ENDPOINT__: JSON.stringify(API_ENDPOINT),
+      __WEB_ENDPOINT__: JSON.stringify(WEB_ENDPOINT),
     },
   }),
 })
