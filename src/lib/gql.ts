@@ -35,18 +35,34 @@ interface GqlResponse<T> {
   errors?: GqlErrorEntry[]
 }
 
+interface GqlOpts {
+  /**
+   * 匿名模式 — 不带 Authorization header,即便本地有 token 也忽略。
+   *
+   * 用于调 @IsPublic 的 endpoint(目前只有 extension pairing 三件套:
+   * createExtensionPairing / completeExtensionPairing 主站调 /
+   * pollExtensionPairing)。Pairing 流程里,扩展尚未持有 token,身份
+   * 完全靠 32-char hex code 自证。
+   */
+  anonymous?: boolean
+}
+
 /**
  * GraphQL fetcher。统一用 plugin token 走 Bearer auth,失败抛 GqlError。
  *
  * 仅在 background SW 内调用 — content script / popup 通过 messaging
  * 间接发起,token 永不泄露给 hostile page。
+ *
+ * @param opts.anonymous - 设为 true 时不带 token header,可调 @IsPublic
+ *   endpoint。默认 false(走 plugin token Bearer auth)。
  */
 export async function gql<TResult, TVars = Record<string, unknown>>(
   query: string,
   variables?: TVars,
+  opts?: GqlOpts,
 ): Promise<TResult> {
-  const token = await localStore.get('apiToken')
-  if (!token) {
+  const token = opts?.anonymous ? null : await localStore.get('apiToken')
+  if (!opts?.anonymous && !token) {
     throw new GqlError('No API token configured')
   }
 
@@ -58,10 +74,12 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
         'Content-Type': 'application/json',
         // Apollo Server 4 csrfPrevention 校验:任意一个非 CORS-safelisted
         // 请求头都会让 preflight 触发。我们已经因为 Authorization 触发了,
-        // 但显式加上这个让任何 Apollo 配置都能通过。
+        // 但显式加上这个让任何 Apollo 配置都能通过。anonymous 模式下也加
+        // 一个 custom header 触发 preflight(否则后端的 csrfPrevention
+        // 会 reject simple POST)。
         'apollo-require-preflight': 'true',
         'X-Apollo-Operation-Name': inferOperationName(query) ?? 'unknown',
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ query, variables }),
     })

@@ -24,18 +24,9 @@ export function MetadataBadge({ tasks }: Props) {
   const displayReward = fmtReward(single ? single.expectedReward : total)
 
   return (
-    <span
-      style={{ fontSize: '11px', lineHeight: '16px' }}
-      className="ml-1 inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-teal-500/12 px-1.5 align-middle font-bold text-teal-700 dark:bg-teal-400/18 dark:text-teal-300"
-      title={tooltip}
-    >
-      <span className="tabular-nums">+{displayReward}</span>
-      <span
-        style={{ fontSize: '9px' }}
-        className="ml-0.5 font-medium opacity-70"
-      >
-        LUX
-      </span>
+    <span className="lhdao-reward-pill ml-1 shrink-0" title={tooltip}>
+      <span>+{displayReward}</span>
+      <span className="lhdao-reward-pill-unit">LUX</span>
     </span>
   )
 }

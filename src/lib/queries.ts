@@ -158,6 +158,8 @@ export const AVAILABLE_TWEETS_QUERY = `
       expectedReward
       myExpectedReward
       targetUrl
+      isParticipated
+      isSoldOut
     }
   }
 `
@@ -174,6 +176,16 @@ export interface AvailableTweet {
   /** 我 tier 下的精确奖励;null 时 fallback 到 expectedReward */
   myExpectedReward: number | null
   targetUrl: string | null
+  /**
+   * 当前用户是不是已经参与过这个 campaign(抢过或完成过)。
+   * sidebar 用来过滤"可抢单"列表 — 已参与的不展示。
+   */
+  isParticipated?: boolean | null
+  /**
+   * 席位是不是已经被抢光(totalParticipants + reservedCount >= seats)。
+   * sidebar 用来过滤"可抢单"列表 — 已售罄的不展示。
+   */
+  isSoldOut?: boolean | null
 }
 
 export interface AvailableTweetsResult {
@@ -228,6 +240,46 @@ export const VERIFY_ENGAGEMENT_MUTATION = `
 
 export interface VerifyEngagementResult {
   verifyEngagement: { actualReward: number }
+}
+
+// ── Extension Pairing (一键登录) ─────────────────────────────────────
+//
+// 流程见 kol-dao-service 后端 ExtensionPairingService doc。
+//
+// 扩展端只调 2 个 endpoint:
+//   - createExtensionPairing(code) — 占 code slot,扩展 BG 调,@IsPublic
+//   - pollExtensionPairing(code)    — polling 拿 token,@IsPublic
+//
+// completeExtensionPairing 是主站调的(用户在 connect 页点 Allow),扩展
+// 不调,所以不在这里。
+
+export const CREATE_EXTENSION_PAIRING_MUTATION = `
+  mutation CreateExtensionPairing($code: String!) {
+    createExtensionPairing(code: $code)
+  }
+`
+
+export interface CreateExtensionPairingResult {
+  createExtensionPairing: boolean
+}
+
+export const POLL_EXTENSION_PAIRING_QUERY = `
+  query PollExtensionPairing($code: String!) {
+    pollExtensionPairing(code: $code) {
+      status
+      token
+    }
+  }
+`
+
+export type ExtensionPairingStatus = 'PENDING' | 'READY' | 'EXPIRED'
+
+export interface PollExtensionPairingResult {
+  pollExtensionPairing: {
+    status: ExtensionPairingStatus
+    /** 仅当 status === 'READY' 时非 null,返回明文 plugin token */
+    token: string | null
+  }
 }
 
 // ── 推文停留时长上报 (anti-cheat 信号) ────────────────────────────────

@@ -2,7 +2,9 @@ import * as React from 'react'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
 import { ME_QUERY, type MeResult } from '@/lib/queries'
+import { sendMessage } from '@/lib/messaging'
 import { localStore } from '@/lib/storage'
+import type { PairingState } from '@/types/messages'
 
 const TOKEN_PATTERN = /^lhdao_pk_[A-Za-z0-9_-]{32,}$/
 
@@ -22,6 +24,7 @@ type VerifyState =
 export function App() {
   const [token, setToken] = React.useState('')
   const [state, setState] = React.useState<VerifyState>({ kind: 'idle' })
+  const [pairing, setPairing] = React.useState<PairingState>({ kind: 'idle' })
 
   // 启动时若已有 token,先回填 + 验证有效性
   React.useEffect(() => {
@@ -38,6 +41,46 @@ export function App() {
         setState({ kind: 'error', message: errorText(e) })
       }
     })()
+  }, [])
+
+  // 监听 BG pairing 状态广播 — 一键登录走的另一条路
+  React.useEffect(() => {
+    void (async () => {
+      const r = await sendMessage({ type: 'get-pairing-status' })
+      if (r.type === 'pairing-status-result') setPairing(r.state)
+    })()
+    const listener = (msg: { type?: string; state?: PairingState }) => {
+      if (msg?.type === 'pairing-status' && msg.state) {
+        setPairing(msg.state)
+        // Pairing 成功后让 main verify 流程也跑一次,转到 Bound 卡
+        if (msg.state.kind === 'success') {
+          void (async () => {
+            const stored = await localStore.get('apiToken')
+            if (!stored) return
+            setToken(stored)
+            try {
+              const r = await gql<MeResult>(ME_QUERY)
+              if (r.me) setState({ kind: 'bound', user: r.me })
+            } catch {
+              /* 同步失败留给后续重试 */
+            }
+          })()
+        }
+      }
+    }
+    chrome.runtime.onMessage.addListener(listener)
+    return () => chrome.runtime.onMessage.removeListener(listener)
+  }, [])
+
+  const startPair = React.useCallback(async () => {
+    const r = await sendMessage({ type: 'start-pairing' })
+    if (r.type === 'pairing-started' && !r.ok) {
+      setPairing({ kind: 'error', reason: r.reason })
+    }
+  }, [])
+
+  const cancelPair = React.useCallback(async () => {
+    await sendMessage({ type: 'cancel-pairing' })
   }, [])
 
   const trimmed = token.trim()
@@ -90,21 +133,41 @@ export function App() {
         <BoundCard user={state.user} onUnbind={clearToken} />
       ) : (
         <>
-          <Step1Instructions />
-          <Step2TokenInput
-            token={token}
-            valid={valid}
-            dirty={!!dirty}
-            verifying={state.kind === 'verifying'}
-            onChange={setToken}
-            onVerify={verify}
+          <PrimaryPairCard
+            pairing={pairing}
+            onStart={startPair}
+            onCancel={cancelPair}
           />
-          {state.kind === 'error' && (
-            <ErrorBanner
-              message={state.message}
-              onDismiss={() => setState({ kind: 'idle' })}
-            />
-          )}
+
+          {/* 折叠区 · 高级用户走手动粘贴 token(dev / staging / 调试) */}
+          <details className="mt-6 rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 [&>summary]:cursor-pointer [&[open]>summary]:border-b [&[open]>summary]:border-slate-200 dark:[&[open]>summary]:border-slate-800">
+            <summary className="flex items-center justify-between px-5 py-3 text-[12.5px] font-bold text-slate-600 dark:text-slate-400 [&::-webkit-details-marker]:hidden">
+              <span className="flex items-center gap-2">
+                <ChevronIcon />
+                高级 · 手动粘贴 token
+              </span>
+              <span className="text-[10.5px] font-medium text-slate-400 dark:text-slate-500">
+                给开发者 / 调试用
+              </span>
+            </summary>
+            <div className="px-5 pb-5">
+              <Step1Instructions />
+              <Step2TokenInput
+                token={token}
+                valid={valid}
+                dirty={!!dirty}
+                verifying={state.kind === 'verifying'}
+                onChange={setToken}
+                onVerify={verify}
+              />
+              {state.kind === 'error' && (
+                <ErrorBanner
+                  message={state.message}
+                  onDismiss={() => setState({ kind: 'idle' })}
+                />
+              )}
+            </div>
+          </details>
         </>
       )}
 
@@ -432,6 +495,205 @@ function ExternalIcon() {
         strokeLinejoin="round"
       />
     </svg>
+  )
+}
+
+function ChevronIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3 w-3" aria-hidden="true">
+      <title>expand</title>
+      <path
+        d="M9 6l6 6-6 6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function BurstIcon({ size = 22 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
+      <title>Lighthouse</title>
+      <g fill="#5EEAD4">
+        <path d="M16,16 L28.5,3.5 L28.5,9 L19,15 Z" />
+        <path d="M16,16 L3.5,3.5 L3.5,9 L13,15 Z" />
+        <path d="M16,16 L26,26 L26,22 L19,17 Z" />
+        <path d="M16,16 L6,26 L6,22 L13,17 Z" />
+      </g>
+      <circle cx="16" cy="16" r="3" fill="#08090F" />
+      <circle cx="16" cy="16" r="1.8" fill="#00f5d4" />
+      <circle cx="16" cy="16" r="0.9" fill="#fff" />
+    </svg>
+  )
+}
+
+// ── PrimaryPairCard — 一键登录 hero(代替原 Step 1+2 作为默认入口) ──
+
+function PrimaryPairCard({
+  pairing,
+  onStart,
+  onCancel,
+}: {
+  pairing: PairingState
+  onStart: () => void
+  onCancel: () => void
+}) {
+  // Waiting
+  if (pairing.kind === 'waiting') {
+    return (
+      <section className="mt-8 overflow-hidden rounded-2xl border border-teal-200 bg-gradient-to-br from-teal-50 to-cyan-50 p-6 dark:border-teal-900/40 dark:from-teal-950/30 dark:to-cyan-950/20">
+        <div className="flex items-center gap-3">
+          <span className="grid h-10 w-10 place-items-center rounded-full bg-white shadow-sm dark:bg-slate-900">
+            <SpinnerIcon className="h-5 w-5 animate-spin text-teal-600 dark:text-teal-400" />
+          </span>
+          <div>
+            <p className="text-[14px] font-bold text-slate-900 dark:text-slate-100">
+              等待主站授权…
+            </p>
+            <p className="mt-0.5 text-[12px] text-slate-600 dark:text-slate-400">
+              已打开授权页。完成后插件自动接管。
+            </p>
+          </div>
+        </div>
+        <PairingCountdownBar startedAt={pairing.startedAt} />
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-3 text-[12px] font-semibold text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline dark:text-slate-400 dark:hover:text-slate-200"
+        >
+          取消
+        </button>
+      </section>
+    )
+  }
+
+  // Success — 短暂提示,父组件会切到 BoundCard
+  if (pairing.kind === 'success') {
+    return (
+      <section className="mt-8 rounded-2xl border border-emerald-200 bg-emerald-50 p-6 dark:border-emerald-900/40 dark:bg-emerald-950/30">
+        <div className="flex items-center gap-3">
+          <span className="grid h-10 w-10 place-items-center rounded-full bg-emerald-500 text-white">
+            <CheckIcon className="h-5 w-5" />
+          </span>
+          <div>
+            <p className="text-[14px] font-bold text-emerald-700 dark:text-emerald-300">
+              已连接 Lighthouse
+            </p>
+            <p className="mt-0.5 text-[12px] text-emerald-600/80 dark:text-emerald-400/70">
+              正在同步任务…
+            </p>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  // Timeout / error / cancelled — 显示原因 + 重试按钮
+  if (
+    pairing.kind === 'timeout' ||
+    pairing.kind === 'error' ||
+    pairing.kind === 'cancelled'
+  ) {
+    const reason =
+      pairing.kind === 'timeout'
+        ? '授权超时(60 秒未完成)'
+        : pairing.kind === 'cancelled'
+          ? '已取消授权'
+          : pairing.reason
+    return (
+      <section className="mt-8 rounded-2xl border border-rose-200 bg-rose-50 p-6 dark:border-rose-900/40 dark:bg-rose-950/30">
+        <div className="flex items-center gap-3">
+          <span className="grid h-10 w-10 place-items-center rounded-full bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <title>error</title>
+              <path d="M12 8v5" strokeLinecap="round" />
+              <circle cx="12" cy="16.5" r="0.6" fill="currentColor" />
+              <circle cx="12" cy="12" r="9" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[14px] font-bold text-rose-700 dark:text-rose-300">
+              授权未完成
+            </p>
+            <p className="mt-0.5 break-all text-[12px] text-rose-600/80 dark:text-rose-400/70">
+              {reason}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onStart}
+          className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-teal-600 to-cyan-500 px-4 py-2 text-[13px] font-bold text-white shadow-[0_4px_10px_-2px_rgba(13,148,136,0.35)] transition hover:brightness-105"
+        >
+          重新发起授权
+        </button>
+      </section>
+    )
+  }
+
+  // Idle — 默认 hero
+  return (
+    <section className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex items-center gap-3">
+        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#08090F]">
+          <BurstIcon size={26} />
+        </span>
+        <div>
+          <h2 className="text-[15px] font-black tracking-tight text-slate-900 dark:text-slate-50">
+            用 Lighthouse 账号登录
+          </h2>
+          <p className="mt-0.5 text-[12px] text-slate-500 dark:text-slate-400">
+            点击下方按钮,会跳转到主站确认授权。不需要手动粘贴 token。
+          </p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onStart}
+        className="mt-5 inline-flex items-center gap-2 rounded-lg bg-gradient-to-br from-teal-600 to-cyan-500 px-5 py-2.5 text-[13.5px] font-bold text-white shadow-[0_1px_0_rgba(255,255,255,0.3)_inset,0_4px_10px_-2px_rgba(13,148,136,0.4)] transition hover:brightness-105"
+      >
+        立即登录
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <title>arrow</title>
+          <path d="M5 12h14M13 6l6 6-6 6" />
+        </svg>
+      </button>
+      <p className="mt-3 text-[10.5px] text-slate-400 dark:text-slate-600">
+        授权过程会创建一个跟当前账号绑定的 plugin token,可随时在主站
+        <code className="mx-1 rounded bg-slate-100 px-1 py-px font-mono text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+          /settings/plugin-tokens
+        </code>
+        撤销。
+      </p>
+    </section>
+  )
+}
+
+function PairingCountdownBar({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = React.useState(Date.now())
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(id)
+  }, [])
+  const elapsedMs = now - startedAt
+  const pct = Math.max(0, Math.min(100, (elapsedMs / 60_000) * 100))
+  const remain = Math.max(0, Math.ceil((60_000 - elapsedMs) / 1000))
+  return (
+    <div className="mt-4">
+      <div className="h-1 overflow-hidden rounded-full bg-white/60 dark:bg-slate-800">
+        <div
+          className="h-full bg-gradient-to-r from-teal-500 to-cyan-400 transition-[width]"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="mt-1 text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400">
+        剩余 {remain}s
+      </div>
+    </div>
   )
 }
 

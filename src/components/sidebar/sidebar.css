@@ -1,22 +1,24 @@
 @import 'tailwindcss';
 
 /*
- * Sidebar 卡片 v2 Shadow DOM 样式 — 完全重写。
+ * Sidebar 卡片 v3 — Shadow DOM 样式
  *
- * 设计 spec:docs/sidebar-card-design.md
+ * 视觉规范跟 Chrome Web Store screenshot-2-sidebar.png 1:1 一致:
+ *   ① 顶部 brand bar      — burst icon + LIGHTHOUSE + synced N s ago
+ *   ② identity 内嵌卡片   — 头像 / name / @handle / TIER chip + 大字余额 + today delta
+ *   ③ LIVE TASKS eyebrow  — 小字 + 匹配数 + auto-refresh 60s
+ *   ④ task rows           — color-coded icon + author + brief + +X.X LUX
+ *   ⑤ footer stats        — 3 个微指标(TASKS LIVE / TODAY / TIER)
+ *   ⑥ 发布任务 CTA        — 卡片底部按钮
  *
- * 5 段节奏:14 → 16 → 10 → 12 → 10(舒-紧-动-紧-舒)
- *   ① 身份 strip       14/16 padding
- *   ② 指标 row         16/16 padding
- *   ③ CTA 按钮         10/16 padding
- *   ─ hairline ─
- *   ④ section header  12/16 padding
- *   ⑤ 任务行          10/12 padding
- *   ⑥ footer link    10/16 padding
- *
- * 颜色 token 全用 OKLCH(感知均匀),neutral 微偏 brand teal。
- * 字体:system stack — 跟 Twitter / 用户 OS 一致,长期共存不违和。
- * 60-30-10:60% neutral surface / 30% ink+border / 10% brand teal。
+ * Brand color tokens(OKLCH,brand teal/cyan + 微 tint 中性色):
+ *   --teal-600  : #0D9488   主色
+ *   --teal-300  : #5EEAD4   反白配深底
+ *   --cyan-500  : #06B6D4   辅助
+ *   --beacon    : #00f5d4   logo halo
+ *   --ink-900   : #0F172A   主文字 / Tier chip 底
+ *   --muted-500 : #475569   次文字
+ *   --hairline  : rgba(15,23,42,0.08)
  */
 
 :host {
@@ -53,621 +55,570 @@
 /* ── Card container ──────────────────────────────────────────────── */
 
 .lh-card {
-  background: oklch(0.99 0.003 195);
-  border: 1px solid oklch(0.93 0.005 195);
-  border-radius: 16px;
+  position: relative;
+  background: #ffffff;
+  border: 1px solid oklch(0.91 0.005 240);
+  border-radius: 20px;
+  padding: 16px 18px 14px;
   overflow: hidden;
+  box-shadow:
+    0 1px 0 rgba(15, 23, 42, 0.03),
+    0 18px 36px -16px rgba(15, 23, 42, 0.08);
+}
+/* halo 装饰:右上角的青色光晕 */
+.lh-card::before {
+  content: '';
+  position: absolute;
+  right: -90px;
+  top: -90px;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    oklch(0.94 0.1 188 / 0.32) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
 }
 @media (prefers-color-scheme: dark) {
   .lh-card {
     background: oklch(0.18 0.008 240);
     border-color: oklch(0.28 0.01 240);
+    box-shadow:
+      0 1px 0 rgba(0, 0, 0, 0.2),
+      0 18px 36px -16px rgba(0, 0, 0, 0.4);
   }
 }
 
-/* ── ① Identity strip ────────────────────────────────────────────── */
+/* ── ① Brand bar ─────────────────────────────────────────────────── */
 
-.lh-strip {
+.lh-brand-bar {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 16px 12px;
 }
 
-/* User avatar — 36px round, brand-gradient fallback for null / load error */
-.lh-strip-avatar {
+.lh-burst {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  object-fit: cover;
-  background: oklch(0.94 0.005 195);
+}
+
+.lh-brand-name {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  color: oklch(0.2 0.02 240);
 }
 @media (prefers-color-scheme: dark) {
-  .lh-strip-avatar {
-    background: oklch(0.25 0.01 240);
+  .lh-brand-name {
+    color: oklch(0.95 0.01 195);
   }
 }
-.lh-strip-avatar-fallback {
+
+.lh-sync {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 6px;
+  font-size: 11px;
+  color: oklch(0.55 0.02 240);
+}
+
+.lh-sync-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #0d9488;
+  box-shadow: 0 0 8px rgba(13, 148, 136, 0.7);
+}
+
+/* ── ② Identity card ─────────────────────────────────────────────── */
+
+.lh-identity {
+  position: relative;
+  z-index: 1;
+  margin-top: 14px;
+  padding: 14px;
   background: linear-gradient(
     135deg,
-    oklch(0.62 0.13 195) 0%,
-    oklch(0.7 0.12 215) 100%
+    oklch(0.97 0.025 195) 0%,
+    oklch(0.99 0.01 195) 100%
   );
-  color: white;
+  border: 1px solid oklch(0.92 0.06 195);
+  border-radius: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-identity {
+    background: linear-gradient(
+      135deg,
+      oklch(0.22 0.03 195) 0%,
+      oklch(0.2 0.015 195) 100%
+    );
+    border-color: oklch(0.3 0.04 195);
+  }
 }
 
-/* Name + handle stacked vertically, takes remaining width */
-.lh-strip-meta {
-  flex: 1;
+.lh-identity-row {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  overflow: hidden;
-}
-.lh-strip-name {
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  color: oklch(0.2 0.02 250);
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-strip-name {
-    color: oklch(0.95 0.005 240);
-  }
-}
-.lh-strip-handle {
-  font-size: 12px;
-  font-weight: 500;
-  color: oklch(0.55 0.01 250);
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-strip-handle {
-    color: oklch(0.65 0.008 240);
-  }
-}
-
-.lh-tier {
-  display: inline-flex;
   align-items: center;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: oklch(0.96 0.025 195);
-  color: oklch(0.5 0.13 195);
-  font-size: 10.5px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  white-space: nowrap;
+  gap: 10px;
+}
+
+.lh-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  box-shadow: 0 0 0 2px #ffffff;
+}
+.lh-avatar-fallback {
+  background: linear-gradient(135deg, #34d399 0%, #06b6d4 100%);
+  color: oklch(0.2 0.02 240);
+  font-weight: 900;
+  font-size: 18px;
+  display: grid;
+  place-items: center;
+  letter-spacing: -0.02em;
 }
 @media (prefers-color-scheme: dark) {
-  .lh-tier {
-    background: oklch(0.28 0.06 195 / 0.4);
-    color: oklch(0.82 0.13 195);
+  .lh-avatar {
+    box-shadow: 0 0 0 2px oklch(0.18 0.008 240);
   }
 }
 
-/* ── ② Metric row (balance + today) ──────────────────────────────── */
-
-.lh-metric {
-  padding: 4px 16px 14px;
+.lh-identity-meta {
+  flex: 1;
+  min-width: 0;
 }
 
-.lh-metric-label {
-  display: block;
-  font-size: 10.5px;
+.lh-identity-name {
+  font-size: 14px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: oklch(0.55 0.01 250);
-  margin-bottom: 4px;
+  color: oklch(0.2 0.02 240);
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 @media (prefers-color-scheme: dark) {
-  .lh-metric-label {
-    color: oklch(0.65 0.008 240);
+  .lh-identity-name {
+    color: oklch(0.95 0.01 195);
   }
 }
 
-.lh-balance {
+.lh-identity-handle {
+  font-size: 12px;
+  color: oklch(0.55 0.02 240);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lh-tier-chip {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 4px 9px;
+  background: oklch(0.2 0.02 240);
+  color: #5eead4;
+  border-radius: 6px;
+}
+
+.lh-balance-row {
+  margin-top: 14px;
   display: flex;
   align-items: baseline;
-  gap: 5px;
-  font-variant-numeric: tabular-nums;
-  color: oklch(0.55 0.13 195);
-  line-height: 1;
-  letter-spacing: -0.025em;
+  gap: 8px;
 }
-@media (prefers-color-scheme: dark) {
-  .lh-balance {
-    color: oklch(0.8 0.13 195);
-  }
-}
+
 .lh-balance-num {
-  font-size: 24px;
   font-weight: 900;
-}
-.lh-balance-unit {
-  font-size: 13px;
-  font-weight: 700;
-  opacity: 0.75;
-}
-
-.lh-today {
-  margin-top: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: oklch(0.65 0.1 195);
+  font-size: 32px;
+  letter-spacing: -0.01em;
+  color: oklch(0.2 0.02 240);
   font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 @media (prefers-color-scheme: dark) {
-  .lh-today {
-    color: oklch(0.75 0.1 195);
+  .lh-balance-num {
+    color: oklch(0.95 0.01 195);
   }
 }
 
-/* ── ③ Main CTA ──────────────────────────────────────────────────── */
+.lh-balance-unit {
+  font-weight: 700;
+  font-size: 14px;
+  color: #0d9488;
+  letter-spacing: 0.04em;
+}
+
+.lh-today-delta {
+  margin-left: auto;
+  font-size: 12px;
+  color: #0d9488;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── ③ Section header ────────────────────────────────────────────── */
+
+.lh-section {
+  position: relative;
+  z-index: 1;
+  margin: 18px 4px 8px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.lh-section-label {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: oklch(0.42 0.02 240);
+}
+@media (prefers-color-scheme: dark) {
+  .lh-section-label {
+    color: oklch(0.7 0.02 240);
+  }
+}
+
+.lh-section-meta {
+  font-size: 11px;
+  color: oklch(0.62 0.02 240);
+}
+
+/* ── ④ Task rows ─────────────────────────────────────────────────── */
+
+.lh-tasks {
+  position: relative;
+  z-index: 1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lh-task {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid oklch(0.93 0.005 240);
+  border-radius: 12px;
+  background: oklch(0.99 0.003 195);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 150ms;
+}
+.lh-task:hover {
+  border-color: oklch(0.83 0.01 240);
+  background: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-task {
+    background: oklch(0.22 0.008 240);
+    border-color: oklch(0.3 0.01 240);
+  }
+  .lh-task:hover {
+    background: oklch(0.25 0.01 240);
+    border-color: oklch(0.4 0.015 240);
+  }
+}
+
+.lh-task-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+/* TWEET 类型 — 黄色 tag(同 mock 里 Quote retweet 一行) */
+.lh-task-icon-tweet {
+  background: #fef3c7;
+  color: #b45309;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-task-icon-tweet {
+    background: oklch(0.32 0.06 70);
+    color: oklch(0.85 0.08 70);
+  }
+}
+
+.lh-task-mid {
+  flex: 1;
+  min-width: 0;
+}
+
+.lh-task-author {
+  font-size: 13px;
+  font-weight: 600;
+  color: oklch(0.2 0.02 240);
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-task-author {
+    color: oklch(0.95 0.01 195);
+  }
+}
+
+.lh-task-sub {
+  font-size: 11.5px;
+  color: oklch(0.55 0.02 240);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lh-task-reward {
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: #0d9488;
+  flex-shrink: 0;
+}
+.lh-task-reward-unit {
+  font-size: 10px;
+  color: oklch(0.55 0.02 240);
+  font-weight: 500;
+  margin-left: 2px;
+}
+
+/* ── ⑤ Footer stats ──────────────────────────────────────────────── */
+
+.lh-foot {
+  position: relative;
+  z-index: 1;
+  margin-top: 14px;
+  padding: 12px 12px 4px;
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px dashed oklch(0.88 0.01 240);
+}
+@media (prefers-color-scheme: dark) {
+  .lh-foot {
+    border-top-color: oklch(0.32 0.01 240);
+  }
+}
+
+.lh-foot-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lh-foot-label {
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: oklch(0.62 0.02 240);
+}
+
+.lh-foot-value {
+  font-weight: 700;
+  font-size: 18px;
+  color: oklch(0.2 0.02 240);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+@media (prefers-color-scheme: dark) {
+  .lh-foot-value {
+    color: oklch(0.95 0.01 195);
+  }
+}
+
+/* ── ⑥ CTA — 发布任务 ─────────────────────────────────────────────── */
 
 .lh-cta-wrap {
-  padding: 0 16px 14px;
+  position: relative;
+  z-index: 1;
+  margin-top: 12px;
 }
 
 .lh-cta {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   width: 100%;
-  padding: 10px 14px;
+  height: 38px;
   border-radius: 10px;
-  background: oklch(0.62 0.13 195);
-  color: white;
+  background: linear-gradient(135deg, #0d9488 0%, #06b6d4 100%);
+  color: #ffffff;
   font-size: 13px;
   font-weight: 700;
+  letter-spacing: 0.005em;
   text-decoration: none;
-  border: none;
-  cursor: pointer;
-  transition: background-color 120ms ease;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.3) inset,
+    0 4px 10px -2px rgba(13, 148, 136, 0.35);
+  transition: filter 150ms;
 }
 .lh-cta:hover {
-  background: oklch(0.55 0.14 195);
-}
-.lh-cta:active {
-  transform: scale(0.98);
-}
-@media (prefers-color-scheme: dark) {
-  .lh-cta {
-    background: oklch(0.7 0.13 195);
-    color: oklch(0.16 0.008 240);
-  }
-  .lh-cta:hover {
-    background: oklch(0.62 0.13 195);
-  }
-}
-.lh-cta-icon {
-  width: 14px;
-  height: 14px;
+  filter: brightness(1.04);
 }
 
-/* ── ④ Section header ────────────────────────────────────────────── */
+/* ── List more (>5 tasks) ────────────────────────────────────────── */
 
-.lh-section-header {
-  padding: 12px 16px 8px;
-  border-top: 1px solid oklch(0.93 0.005 195);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: oklch(0.55 0.01 250);
-}
-@media (prefers-color-scheme: dark) {
-  .lh-section-header {
-    border-top-color: oklch(0.28 0.01 240);
-    color: oklch(0.65 0.008 240);
-  }
-}
-.lh-section-count {
-  opacity: 0.7;
-  margin-left: 3px;
-}
-
-/* ── ⑤ Task list ─────────────────────────────────────────────────── */
-
-.lh-list {
-  margin: 0;
-  padding: 0 8px 4px;
-  list-style: none;
-}
-.lh-list li {
-  margin: 0;
-  padding: 0;
-}
-
-.lh-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: background-color 120ms ease;
-  text-decoration: none;
-  color: inherit;
-}
-.lh-row:hover {
-  background: oklch(0.97 0.025 195);
-}
-@media (prefers-color-scheme: dark) {
-  .lh-row:hover {
-    background: oklch(0.27 0.04 195 / 0.5);
-  }
-}
-
-.lh-row-body {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  overflow: hidden;
-}
-
-.lh-project {
-  font-size: 12.5px;
-  font-weight: 500;
-  color: oklch(0.55 0.01 250);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.3;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-project {
-    color: oklch(0.65 0.008 240);
-  }
-}
-
-.lh-brief {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: oklch(0.2 0.02 250);
-  line-height: 1.35;
-  margin: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-brief {
-    color: oklch(0.95 0.005 240);
-  }
-}
-
-.lh-deadline {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  color: oklch(0.55 0.01 250);
-  font-variant-numeric: tabular-nums;
-  margin-top: 1px;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-deadline {
-    color: oklch(0.65 0.008 240);
-  }
-}
-.lh-deadline svg {
-  width: 10px;
-  height: 10px;
-  flex-shrink: 0;
-}
-.lh-deadline-urgent {
-  color: oklch(0.6 0.14 30);
-}
-@media (prefers-color-scheme: dark) {
-  .lh-deadline-urgent {
-    color: oklch(0.78 0.14 30);
-  }
-}
-
-.lh-reward {
-  text-align: right;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  color: oklch(0.55 0.13 195);
-  line-height: 1;
-  align-self: center;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-reward {
-    color: oklch(0.8 0.13 195);
-  }
-}
-.lh-reward-num {
-  font-size: 18px;
-  font-weight: 900;
-  letter-spacing: -0.02em;
+.lh-list-more {
   display: block;
-}
-.lh-reward-unit {
-  font-size: 10px;
-  font-weight: 700;
-  opacity: 0.7;
-  display: block;
-  margin-top: 3px;
-  letter-spacing: 0.05em;
-}
-
-/* ── ⑥ Footer link ───────────────────────────────────────────────── */
-
-.lh-footer {
-  display: block;
-  padding: 10px 16px 12px;
   text-align: center;
-  font-size: 12.5px;
-  font-weight: 700;
-  color: oklch(0.55 0.13 195);
+  margin-top: 10px;
+  font-size: 12px;
+  color: #0d9488;
   text-decoration: none;
-  border-top: 1px solid oklch(0.93 0.005 195);
-  transition: background-color 120ms ease;
+  font-weight: 600;
 }
-@media (prefers-color-scheme: dark) {
-  .lh-footer {
-    color: oklch(0.8 0.13 195);
-    border-top-color: oklch(0.28 0.01 240);
-  }
-}
-.lh-footer:hover {
-  background: oklch(0.97 0.025 195);
-}
-@media (prefers-color-scheme: dark) {
-  .lh-footer:hover {
-    background: oklch(0.27 0.04 195 / 0.5);
-  }
+.lh-list-more:hover {
+  text-decoration: underline;
 }
 
 /* ── Empty state ─────────────────────────────────────────────────── */
 
 .lh-empty {
-  padding: 28px 16px 24px;
-  border-top: 1px solid oklch(0.93 0.005 195);
+  position: relative;
+  z-index: 1;
+  padding: 22px 14px 18px;
   text-align: center;
 }
-@media (prefers-color-scheme: dark) {
-  .lh-empty {
-    border-top-color: oklch(0.28 0.01 240);
-  }
-}
-
 .lh-empty-dot {
   display: inline-block;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
-  background: oklch(0.62 0.13 195);
-  opacity: 0.65;
-  margin-bottom: 12px;
-  animation: lh-dot-pulse 2s ease-in-out infinite;
+  border-radius: 50%;
+  background: oklch(0.85 0.01 240);
+  margin-bottom: 8px;
 }
-@media (prefers-color-scheme: dark) {
-  .lh-empty-dot {
-    background: oklch(0.78 0.13 195);
-  }
-}
-@keyframes lh-dot-pulse {
-  0%,
-  100% {
-    opacity: 0.4;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.9;
-    transform: scale(1.2);
-  }
-}
-
 .lh-empty-title {
   font-size: 13px;
-  font-weight: 700;
-  color: oklch(0.2 0.02 250);
-  margin: 0 0 4px;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-empty-title {
-    color: oklch(0.95 0.005 240);
-  }
+  font-weight: 600;
+  color: oklch(0.4 0.02 240);
+  margin: 0;
 }
 .lh-empty-hint {
   font-size: 11.5px;
-  font-weight: 500;
-  color: oklch(0.55 0.01 250);
-  margin: 0;
-  line-height: 1.5;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-empty-hint {
-    color: oklch(0.65 0.008 240);
-  }
+  color: oklch(0.6 0.02 240);
+  margin: 4px 0 0;
 }
 
 /* ── Unauth state ────────────────────────────────────────────────── */
 
 .lh-unauth {
-  padding: 14px 16px 18px;
+  position: relative;
+  z-index: 1;
+  margin-top: 16px;
+  padding: 18px 14px 16px;
   text-align: center;
 }
 .lh-unauth-title {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 700;
-  color: oklch(0.2 0.02 250);
-  margin: 10px 0 6px;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-unauth-title {
-    color: oklch(0.95 0.005 240);
-  }
+  color: oklch(0.2 0.02 240);
+  margin: 0;
 }
 .lh-unauth-hint {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: oklch(0.55 0.01 250);
-  margin: 0 0 14px;
+  font-size: 12px;
   line-height: 1.5;
-}
-@media (prefers-color-scheme: dark) {
-  .lh-unauth-hint {
-    color: oklch(0.65 0.008 240);
-  }
+  color: oklch(0.5 0.02 240);
+  margin: 8px 0 14px;
 }
 .lh-unauth-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
-  border-radius: 10px;
-  background: transparent;
-  border: 1px solid oklch(0.55 0.13 195);
-  color: oklch(0.55 0.13 195);
-  font-size: 12.5px;
+  height: 32px;
+  padding: 0 14px;
+  background: linear-gradient(135deg, #0d9488 0%, #06b6d4 100%);
+  color: #ffffff;
+  font-size: 12px;
   font-weight: 700;
+  border-radius: 8px;
   text-decoration: none;
-  transition: background-color 120ms ease;
-}
-.lh-unauth-btn:hover {
-  background: oklch(0.97 0.025 195);
-}
-@media (prefers-color-scheme: dark) {
-  .lh-unauth-btn {
-    border-color: oklch(0.78 0.13 195);
-    color: oklch(0.78 0.13 195);
-  }
-  .lh-unauth-btn:hover {
-    background: oklch(0.27 0.04 195 / 0.5);
-  }
+  box-shadow: 0 4px 10px -2px rgba(13, 148, 136, 0.35);
 }
 
-/* ── Loading skeleton ────────────────────────────────────────────── */
+/* ── Skeleton blocks ─────────────────────────────────────────────── */
 
-.lh-sk-block {
+.lh-sk {
   display: inline-block;
-  background: oklch(0.94 0.005 195);
   border-radius: 6px;
-  animation: lh-sk-pulse 1.4s ease-in-out infinite;
+  background: linear-gradient(
+    90deg,
+    oklch(0.94 0.005 240) 0%,
+    oklch(0.97 0.005 240) 50%,
+    oklch(0.94 0.005 240) 100%
+  );
+  background-size: 200% 100%;
+  animation: lh-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes lh-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 @media (prefers-color-scheme: dark) {
-  .lh-sk-block {
-    background: oklch(0.25 0.01 240);
+  .lh-sk {
+    background: linear-gradient(
+      90deg,
+      oklch(0.26 0.01 240) 0%,
+      oklch(0.3 0.01 240) 50%,
+      oklch(0.26 0.01 240) 100%
+    );
+    background-size: 200% 100%;
   }
-}
-@keyframes lh-sk-pulse {
-  0%,
-  100% {
-    opacity: 0.6;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-.lh-sk-tier {
-  width: 44px;
-  height: 18px;
-  border-radius: 999px;
 }
 .lh-sk-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
   flex-shrink: 0;
 }
-.lh-sk-name {
-  width: 80px;
-  height: 12px;
-  border-radius: 4px;
-}
-.lh-sk-handle {
-  width: 60px;
+.lh-sk-line {
+  display: block;
   height: 10px;
-  margin-top: 4px;
-  border-radius: 4px;
+  margin: 4px 0;
 }
-.lh-sk-label {
-  width: 60px;
-  height: 10px;
-  margin-bottom: 8px;
+.lh-sk-tier {
+  width: 50px;
+  height: 18px;
+  border-radius: 6px;
+  margin-left: auto;
 }
 .lh-sk-balance {
-  width: 130px;
-  height: 24px;
-  margin-bottom: 8px;
-}
-.lh-sk-today {
-  width: 80px;
-  height: 12px;
-}
-.lh-sk-cta {
-  width: 100%;
-  height: 38px;
-  border-radius: 10px;
-}
-.lh-sk-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-  padding: 10px 12px;
-  align-items: center;
-}
-.lh-sk-rowbody {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.lh-sk-project {
-  width: 50%;
-  height: 10px;
-}
-.lh-sk-brief1 {
-  width: 90%;
-  height: 12px;
-}
-.lh-sk-brief2 {
-  width: 70%;
-  height: 12px;
-}
-.lh-sk-deadline {
-  width: 40%;
-  height: 9px;
-}
-.lh-sk-reward {
-  width: 36px;
+  width: 110px;
   height: 28px;
 }
-
-/* ── Reduced motion ──────────────────────────────────────────────── */
-
-@media (prefers-reduced-motion: reduce) {
-  .lh-empty-dot,
-  .lh-sk-block {
-    animation: none;
-  }
-  .lh-row,
-  .lh-cta,
-  .lh-footer,
-  .lh-unauth-btn {
-    transition: none;
-  }
+.lh-task-sk {
+  pointer-events: none;
+}
+.lh-sk-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.lh-sk-reward {
+  width: 44px;
+  height: 14px;
 }

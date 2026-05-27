@@ -59,8 +59,46 @@ export type MsgRequest =
   | { type: 'get-active-campaigns' }
   /** [v2] sidebar 卡片询问个人面板数据 + TWEET 任务列表(一次拿全) */
   | { type: 'get-sidebar-data' }
+  /**
+   * [v3] popup 询问完整概览数据 — token mask + profile + 任务计数 +
+   * sync 状态,一次拿全。
+   *
+   * 跟 sidebar-data 的区别:
+   *   - 多 tokenMasked(脱敏后的 token,popup 展示用)
+   *   - 多 taskCount / tweetCount(从 tasksByTweetId 算的总数)
+   *   - 多 lastSync* 三件套(同步状态)
+   *   - 不返回 tweetCampaigns(popup 不展示任务列表)
+   */
+  | { type: 'get-popup-data' }
+  /**
+   * [v4] 一键登录 — UI 触发 pairing 流程。
+   *
+   * BG 生成 32-char hex code → 调 createExtensionPairing 占 slot →
+   * 打开 app.lhdao.top/extension/connect?code=xxx 新 tab → 启动 polling
+   * state machine(每 2s,60s 超时)。
+   *
+   * 异步过程,结果通过 `pairing-status` 单向广播(BG → UI)告知 UI。
+   * 同步 response 为 `pairing-started`(确认 BG 已收到指令)。
+   */
+  | { type: 'start-pairing' }
+  /** 用户取消 / popup 关闭 — 终止当前 polling,关 tab(如还开着) */
+  | { type: 'cancel-pairing' }
+  /** UI 重新打开时查询当前 pairing state,避免 popup close 期间错过广播 */
+  | { type: 'get-pairing-status' }
   /** BG → CS 广播:任务列表已更新,请重新查询 */
   | { type: 'tasks-updated' }
+  /**
+   * BG → UI 广播 pairing 状态变化。
+   *
+   * 状态:
+   *   - idle      :未启动 / 已完成 / 已取消(可以重新开始)
+   *   - waiting   :已开 tab,polling 中
+   *   - success   :拿到 token,storage 写入完毕,准备关 tab + sync
+   *   - timeout   :60s 超时
+   *   - error     :网络 / code 冲突 / 其他异常
+   *   - cancelled :用户主动取消
+   */
+  | { type: 'pairing-status'; state: PairingState }
 
 // ── Responses ────────────────────────────────────────────────────────
 
@@ -94,6 +132,25 @@ export type MsgResponse =
       tokenConfigured: boolean
     }
   | {
+      type: 'popup-data'
+      /** 是否已配置 token */
+      hasToken: boolean
+      /** 脱敏 token,形如 `lhdao_pk_••••••••8f3d`;无 token 时 null */
+      tokenMasked: string | null
+      /** 个人面板;未配置 token / 未同步过时 null */
+      profile: UserProfile | null
+      /** 当前覆盖到的 engagement 任务总数(LIKE+RT+COMMENT+FOLLOW…) */
+      taskCount: number
+      /** 当前覆盖到的推文数(去重) */
+      tweetCount: number
+      /** 上次成功同步时间戳(ms);从未同步过则 null */
+      lastSyncAt: number | null
+      /** 上次同步错误文案;成功后清空为 null */
+      lastSyncError: string | null
+      /** 上次同步 HTTP 状态码(用于诊断 401 / 403 / 5xx) */
+      lastSyncHttpStatus: number | null
+    }
+  | {
       type: 'sync-result'
       ok: true
       lastSyncAt: number
@@ -101,7 +158,41 @@ export type MsgResponse =
       tweetCount: number
     }
   | { type: 'sync-result'; ok: false; error: string; httpStatus?: number }
+  /** start-pairing 同步 ack:BG 已收到指令并已开始 pairing 流程 */
+  | {
+      type: 'pairing-started'
+      ok: true
+      /** 32-char hex code,UI 可以展示前 8 位让用户在 tab 上确认 */
+      code: string
+    }
+  | {
+      type: 'pairing-started'
+      ok: false
+      /** 启动失败原因 — 网络 / code 冲突重试用尽 / 等 */
+      reason: string
+    }
+  /** get-pairing-status 响应:返回当前 state */
+  | { type: 'pairing-status-result'; state: PairingState }
   | { type: 'ack' }
+
+/**
+ * Pairing flow 状态机。
+ *
+ *   idle      ─start-pairing→  waiting ─poll READY→  success → (auto idle)
+ *                              waiting ─poll EXPIRED/60s→ timeout
+ *                              waiting ─cancel→     cancelled → (auto idle)
+ *                              *       ─exception→  error
+ *
+ * success / timeout / error / cancelled 都是 terminal state,会在 5s 后
+ * 自动回 idle,让 UI 可以重新开始一轮。
+ */
+export type PairingState =
+  | { kind: 'idle' }
+  | { kind: 'waiting'; code: string; startedAt: number }
+  | { kind: 'success' }
+  | { kind: 'timeout' }
+  | { kind: 'error'; reason: string }
+  | { kind: 'cancelled' }
 
 /**
  * submit-task 失败的标准 code。让 content script 决定 toast 文案,

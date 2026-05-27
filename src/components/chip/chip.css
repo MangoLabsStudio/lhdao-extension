@@ -1,18 +1,19 @@
 @import 'tailwindcss';
 
 /*
- * Chip Shadow DOM 内部样式表。
+ * Chip Shadow DOM 样式 v3 — 跟 store-assets/screenshot-1-chip.png 视觉一致
  *
- * `:host { all: initial; }` 把宿主元素重置成 inherit-naïve,Twitter 的
- * 全局 CSS 不会渗进来;同时 Tailwind 的 utility 仅在 shadow root 内生效,
- * 不会污染 timeline。
+ * 关键设计:
+ *   - primary 按钮 = Teal-Cyan gradient pill,带 inner highlight + 深 cyan glow
+ *     像一个"elevated chip"(从推文里浮出来)而不是 flat button
+ *   - 半透明白色的 inner highlight + 深 cyan drop shadow 制造"liquid pill"质感
+ *   - 高度 34px(比之前 32px 略加,让 reward chip 更易嵌入)
  *
- * 字体显式声明 system stack 而不依赖外部 font-loading,Shadow DOM 隔离
- * 后 inherited font-family 拿不到 Twitter 的 Chirp。
+ * `:host { all: initial }` 隔离 Twitter CSS。Tailwind utility 在 shadow root
+ * 内生效(via @import 'tailwindcss')。
  *
- * 注意:该文件被 content.ts 通过 import ... from '...?inline' 加载,
- * Vite 会先把 @import 'tailwindcss' 编译成实际的 utility 规则再返回字符串
- * (不要改成 ?raw,否则 Tailwind 不生效,SVG 会退回 300x150 默认尺寸)。
+ * 注意:该文件被 content.ts 通过 `?inline` 加载,Vite 编译 @import 'tailwindcss'
+ * 后注入 shadow DOM 的 <style>。不要改成 `?raw`。
  */
 
 :host {
@@ -30,14 +31,12 @@
   color-scheme: light dark;
 }
 
-/* 让 chip 内的元素继承重置后的 box-sizing,Tailwind 默认 border-box */
 :host *,
 :host *::before,
 :host *::after {
   box-sizing: border-box;
 }
 
-/* SVG 默认尺寸防御 — 即使没有 utility 类也保证不撑成 300x150 */
 :host svg {
   display: inline-block;
   vertical-align: middle;
@@ -45,38 +44,53 @@
   max-height: 100%;
 }
 
-/* ── 按钮风格 (品牌 teal-cyan 渐变 + ghost/error 变体) ──────────── */
+/* ── 按钮:Teal-Cyan gradient chip + inner highlight + cyan glow ──── */
 
 .lhdao-btn {
   border: none;
   cursor: pointer;
   outline: none;
+  font-feature-settings: 'tnum';
+  letter-spacing: 0.005em;
+  transition: filter 150ms, transform 150ms, box-shadow 150ms;
 }
 .lhdao-btn:disabled {
   cursor: not-allowed;
 }
 
-/* primary — 灯塔渐变背景 + 白字,主 CTA (claim) */
+/* === primary — 主 CTA(claim) =================================== */
 .lhdao-btn-primary {
-  background: linear-gradient(90deg, #0d9488 0%, #06b6d4 100%);
-  color: white;
-  box-shadow: 0 1px 3px rgba(20, 184, 166, 0.35);
+  background: linear-gradient(135deg, #0d9488 0%, #06b6d4 100%);
+  color: #ffffff;
+  /* "Liquid pill" 质感:
+     - inset top hairline 给一笔顶部高光(光从上来,顶部更亮)
+     - elevated cyan glow shadow 让它从推文里浮出来
+     - 中间 cyan ring 模拟环境光反射 */
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.35) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.08) inset,
+    0 4px 10px -2px rgba(13, 148, 136, 0.4),
+    0 10px 22px -6px rgba(13, 148, 136, 0.35);
 }
 .lhdao-btn-primary:not(:disabled):hover {
-  filter: brightness(1.08);
-  box-shadow: 0 2px 8px rgba(20, 184, 166, 0.45);
+  filter: brightness(1.06);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.4) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.08) inset,
+    0 6px 14px -2px rgba(13, 148, 136, 0.5),
+    0 14px 28px -6px rgba(13, 148, 136, 0.4);
 }
 .lhdao-btn-primary:not(:disabled):active {
   transform: scale(0.97);
 }
 
-/* secondary — 浅色 outline,reserve 完成后的 verify 按钮 */
+/* === secondary — reserve 完成后的 verify 按钮(idle) =============== */
 .lhdao-btn-secondary {
-  background: white;
+  background: #ffffff;
   color: #0d9488;
   box-shadow:
     inset 0 0 0 1.5px #0d9488,
-    0 1px 3px rgba(20, 184, 166, 0.2);
+    0 1px 3px rgba(20, 184, 166, 0.18);
 }
 @media (prefers-color-scheme: dark) {
   .lhdao-btn-secondary {
@@ -91,55 +105,126 @@
   background: rgba(20, 184, 166, 0.08);
 }
 
-/* busy — 提交中,带 wait 样式 */
+/* === busy ====================================================== */
 .lhdao-btn-busy {
-  opacity: 0.7;
+  opacity: 0.78;
 }
 
-/* disabled — verify 按钮在 reserve 完成前的 locked 态。视觉上比 secondary
-   更"灰",清楚告诉用户"暂时不能点"。深色模式同步降亮。 */
+/* === disabled — verify 按钮在 reserve 完成前 ====================== */
 .lhdao-btn-disabled {
   background: rgba(15, 23, 42, 0.04);
-  color: rgba(15, 23, 42, 0.35);
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.12);
+  color: rgba(15, 23, 42, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.10);
 }
 @media (prefers-color-scheme: dark) {
   .lhdao-btn-disabled {
     background: rgba(255, 255, 255, 0.04);
-    color: rgba(255, 255, 255, 0.35);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.38);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
   }
 }
 
-/* done — 已完成,emerald */
+/* === done — emerald ============================================== */
 .lhdao-btn-done {
   background: rgb(209, 250, 229);
   color: rgb(4, 120, 87);
-  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.4);
+  box-shadow:
+    inset 0 0 0 1px rgba(16, 185, 129, 0.4),
+    0 1px 3px rgba(16, 185, 129, 0.18);
 }
 @media (prefers-color-scheme: dark) {
   .lhdao-btn-done {
     background: rgba(6, 78, 59, 0.4);
     color: rgb(110, 231, 183);
-    box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.4);
+    box-shadow:
+      inset 0 0 0 1px rgba(16, 185, 129, 0.4),
+      0 1px 3px rgba(16, 185, 129, 0.18);
   }
 }
 
-/* error — rose */
+/* === error — rose ============================================== */
 .lhdao-btn-error {
-  background: white;
+  background: #ffffff;
   color: rgb(225, 29, 72);
-  box-shadow: inset 0 0 0 1.5px rgb(244, 63, 94);
+  box-shadow:
+    inset 0 0 0 1.5px rgb(244, 63, 94),
+    0 1px 3px rgba(244, 63, 94, 0.15);
 }
 @media (prefers-color-scheme: dark) {
   .lhdao-btn-error {
     background: rgba(15, 23, 42, 0.6);
     color: rgb(251, 113, 133);
-    box-shadow: inset 0 0 0 1.5px rgb(251, 113, 133);
+    box-shadow:
+      inset 0 0 0 1.5px rgb(251, 113, 133),
+      0 1px 3px rgba(251, 113, 133, 0.15);
   }
 }
 .lhdao-btn-error:not(:disabled):hover {
   background: rgba(244, 63, 94, 0.08);
+}
+
+/* ── Reward pill — mock 风格的"+N LUX" 微 chip ─────────────────────
+ *
+ * 用在 MetadataBadge(推文 header 右侧)。半透明 teal 背景 + teal 文字,
+ * 跟 chip 主按钮 gradient 形成视觉呼应但不抢戏。
+ * 设计跟 store-assets/screenshot-1-chip.png 里 chip 内嵌的 +0.8 LUX 一致。
+ */
+
+.lhdao-reward-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(13, 148, 136, 0.12);
+  color: #0d9488;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.lhdao-reward-pill-unit {
+  font-size: 9px;
+  font-weight: 600;
+  opacity: 0.72;
+  margin-left: 1px;
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-reward-pill {
+    background: rgba(45, 212, 191, 0.18);
+    color: #5eead4;
+  }
+}
+
+/* ── eyebrow tag — "LIGHTHOUSE TASK" 标签 ────────────────────────── */
+
+.lhdao-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #0d9488;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.lhdao-eyebrow::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #00f5d4;
+  box-shadow: 0 0 6px rgba(0, 245, 212, 0.65);
+}
+@media (prefers-color-scheme: dark) {
+  .lhdao-eyebrow {
+    color: #5eead4;
+  }
 }
 
 @keyframes lhdao-spin {

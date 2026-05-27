@@ -1,4 +1,4 @@
-import { SYNC_INTERVAL_SECONDS, VERIFY_RETRY_DELAY_MS } from '@/lib/env'
+import { SYNC_INTERVAL_SECONDS, VERIFY_RETRY_DELAY_MS, WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
@@ -7,9 +7,13 @@ import {
   type AvailableEngagementsResult,
   type AvailableTweet,
   type AvailableTweetsResult,
+  CREATE_EXTENSION_PAIRING_MUTATION,
+  type CreateExtensionPairingResult,
   type EngagementActionType,
   ME_QUERY,
   type MeResult,
+  POLL_EXTENSION_PAIRING_QUERY,
+  type PollExtensionPairingResult,
   RECORD_TWEET_DWELL_MUTATION,
   RESERVE_SLOT_MUTATION,
   type ReserveSlotResult,
@@ -25,7 +29,11 @@ import {
   type UserProfile,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
-import type { MsgResponse, SubmitErrorCode } from '@/types/messages'
+import type {
+  MsgResponse,
+  PairingState,
+  SubmitErrorCode,
+} from '@/types/messages'
 
 const ALARM_NAME = 'lhdao-sync'
 const SUPPORTED_ACTIONS = new Set<EngagementActionType>([
@@ -35,6 +43,21 @@ const SUPPORTED_ACTIONS = new Set<EngagementActionType>([
   'COMMENT_LIKE',
   'FOLLOW',
 ])
+
+/**
+ * 把 plugin token 脱敏成 popup 展示用的形式:
+ *   lhdao_pk_aBcD...xyz8f3d  →  lhdao_pk_••••••••8f3d
+ *
+ * 保留 prefix 标识(让用户一眼认出"是个 lhdao_pk_ token")+ 末 4 字符
+ * (足够用户判断"是不是我刚粘贴的那个"),中间一律 8 个 bullet。
+ */
+function maskToken(token: string): string {
+  if (!token) return ''
+  if (token.length < 13) return token // 太短无法 mask
+  const prefix = token.startsWith('lhdao_pk_') ? 'lhdao_pk_' : token.slice(0, 4)
+  const suffix = token.slice(-4)
+  return `${prefix}••••••••${suffix}`
+}
 
 /**
  * Background service worker.
@@ -111,6 +134,32 @@ export default defineBackground(() => {
       const token = await localStore.get('apiToken')
       return { type: 'token-status', configured: !!token }
     }
+    if (req.type === 'get-popup-data') {
+      // popup 一次拿全:token / profile / 任务计数 / sync 状态
+      const token = await localStore.get('apiToken')
+      const profile = (await sessionStore.get('userProfile')) ?? null
+      const map = (await sessionStore.get('tasksByTweetId')) ?? {}
+      let taskCount = 0
+      let tweetCount = 0
+      for (const arr of Object.values(map)) {
+        if (arr.length > 0) {
+          tweetCount += 1
+          taskCount += arr.length
+        }
+      }
+      return {
+        type: 'popup-data',
+        hasToken: !!token,
+        tokenMasked: token ? maskToken(token) : null,
+        profile,
+        taskCount,
+        tweetCount,
+        lastSyncAt: (await sessionStore.get('lastSyncAt')) ?? null,
+        lastSyncError: (await sessionStore.get('lastSyncError')) ?? null,
+        lastSyncHttpStatus:
+          (await sessionStore.get('lastSyncHttpStatus')) ?? null,
+      }
+    }
     if (req.type === 'force-sync') {
       // popup "刷新" 按钮的入口 — 等 sync 跑完再 return,UI 可以即时
       // 看到错误或最新计数,不用等下一个 60s alarm。
@@ -141,6 +190,19 @@ export default defineBackground(() => {
         taskCount,
         tweetCount,
       }
+    }
+    // ── Extension Pairing (一键登录) ─────────────────────────────────
+    if (req.type === 'start-pairing') {
+      const r = await startPairing()
+      if (r.ok) return { type: 'pairing-started', ok: true, code: r.code }
+      return { type: 'pairing-started', ok: false, reason: r.reason }
+    }
+    if (req.type === 'cancel-pairing') {
+      await cancelPairing()
+      return { type: 'ack' }
+    }
+    if (req.type === 'get-pairing-status') {
+      return { type: 'pairing-status-result', state: pairingState }
     }
     return { type: 'ack' }
   })
@@ -262,9 +324,15 @@ function parseNumber(v: unknown): number | null {
  * 把后端 availableTweets 整理成 sidebar 列表行数据。
  *
  * - 类型必须是 TWEET(防御性,后端 query 本来就只返 TWEET)
+ * - **过滤已参与 (isParticipated) — 用户抢过 / 完成过的不再展示**
+ * - **过滤已售罄 (isSoldOut) — 席位满的不再展示(KOL 抢不到了)**
  * - 奖励优先 myExpectedReward(我 tier 下的精确值),fallback expectedReward
  * - brief 优先 description,fallback title,都没就 null
  * - 按 myExpectedReward / expectedReward 降序排,值钱的靠前
+ *
+ * 后端 `listAvailableTweets` 会返回所有 ACTIVE TWEET campaign(包括用户已抢的
+ * 和已售罄的),用 isParticipated / isSoldOut 字段标注。sidebar 是"我现在
+ * 还能抢什么"视图,只展示**真正可抢**的。
  */
 function buildTweetCampaignSummaries(
   tweets: AvailableTweet[],
@@ -272,6 +340,8 @@ function buildTweetCampaignSummaries(
   const result: TweetCampaignSummary[] = []
   for (const t of tweets) {
     if (t.type !== 'TWEET') continue
+    if (t.isParticipated) continue
+    if (t.isSoldOut) continue
     const reward = t.myExpectedReward ?? t.expectedReward ?? 0
     result.push({
       campaignId: t.id,
@@ -663,4 +733,202 @@ async function verifyOnly(campaignId: string): Promise<MsgResponse> {
     code: 'INTERNAL',
     message: 'unreachable',
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Extension Pairing (一键登录) state machine
+// ════════════════════════════════════════════════════════════════════════
+//
+// Module-level mutable state — SW 重启会丢失,但 60s 内 polling 期间 fetch
+// 活动让 SW 保活,实际不会发生。如果发生,用户重新点登录即可。
+//
+// Flow:
+//   idle  ─start-pairing→  waiting ─poll READY→  success → (5s)→ idle
+//                          waiting ─poll EXPIRED / 60s→ timeout
+//                          waiting ─cancel→        cancelled
+//                          any  ─exception→        error
+
+let pairingState: PairingState = { kind: 'idle' }
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let timeoutTimer: ReturnType<typeof setTimeout> | null = null
+let resetTimer: ReturnType<typeof setTimeout> | null = null
+let pairingTabId: number | null = null
+
+const PAIRING_POLL_INTERVAL_MS = 2000
+const PAIRING_TIMEOUT_MS = 60_000
+const PAIRING_RESET_DELAY_MS = 5000
+
+/**
+ * 32-char hex code,~128 bit 熵 — 跟后端 ExtensionPairingService.CODE_REGEX
+ * 一致。碰撞概率天文级低,3 次重试已经远超必要。
+ */
+function generatePairingCode(): string {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * 更新 state + 广播给所有 extension views(popup / options)。
+ * popup 没开时 sendMessage 会 reject,silent 忽略。
+ */
+function setPairingState(next: PairingState): void {
+  pairingState = next
+  chrome.runtime
+    .sendMessage({ type: 'pairing-status', state: next })
+    .catch(() => {
+      // popup / options 没打开是常态,no-op
+    })
+}
+
+function clearPairingTimers(): void {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+  if (timeoutTimer !== null) {
+    clearTimeout(timeoutTimer)
+    timeoutTimer = null
+  }
+}
+
+async function closePairingTab(): Promise<void> {
+  if (pairingTabId === null) return
+  const id = pairingTabId
+  pairingTabId = null
+  try {
+    await chrome.tabs.remove(id)
+  } catch {
+    // tab 可能已被用户关掉,no-op
+  }
+}
+
+/** 5s 后回 idle 让 UI 重置成"再来一次"状态 */
+function scheduleReset(): void {
+  if (resetTimer !== null) clearTimeout(resetTimer)
+  resetTimer = setTimeout(() => {
+    resetTimer = null
+    if (
+      pairingState.kind === 'success' ||
+      pairingState.kind === 'timeout' ||
+      pairingState.kind === 'cancelled' ||
+      pairingState.kind === 'error'
+    ) {
+      setPairingState({ kind: 'idle' })
+    }
+  }, PAIRING_RESET_DELAY_MS)
+}
+
+async function startPairing(): Promise<
+  { ok: true; code: string } | { ok: false; reason: string }
+> {
+  // 先清旧的(用户连点两次 / 上次没走完)
+  if (pairingState.kind === 'waiting') {
+    clearPairingTimers()
+    await closePairingTab()
+  }
+
+  // 注册 code,极小概率冲突重试 3 次
+  let code = ''
+  let createOk = false
+  for (let i = 0; i < 3; i++) {
+    code = generatePairingCode()
+    try {
+      await gql<CreateExtensionPairingResult>(
+        CREATE_EXTENSION_PAIRING_MUTATION,
+        { code },
+        { anonymous: true },
+      )
+      createOk = true
+      break
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (/already in use/i.test(msg)) continue
+      // 网络 / 其他错误 — 不重试,直接报
+      const reason = msg
+      setPairingState({ kind: 'error', reason })
+      scheduleReset()
+      return { ok: false, reason }
+    }
+  }
+  if (!createOk) {
+    const reason = 'Could not allocate pairing slot (3 collisions)'
+    setPairingState({ kind: 'error', reason })
+    scheduleReset()
+    return { ok: false, reason }
+  }
+
+  // 开主站 connect 页
+  const url = `${WEB_ENDPOINT}/extension/connect?code=${code}`
+  try {
+    const tab = await chrome.tabs.create({ url, active: true })
+    pairingTabId = tab.id ?? null
+  } catch (e) {
+    const reason = `Failed to open authorization page: ${(e as Error).message}`
+    setPairingState({ kind: 'error', reason })
+    scheduleReset()
+    return { ok: false, reason }
+  }
+
+  // state → waiting,启动 polling + 60s 超时
+  setPairingState({ kind: 'waiting', code, startedAt: Date.now() })
+  pollTimer = setInterval(() => {
+    void pollPairingOnce(code)
+  }, PAIRING_POLL_INTERVAL_MS)
+  timeoutTimer = setTimeout(() => {
+    void onPairingTimeout()
+  }, PAIRING_TIMEOUT_MS)
+
+  return { ok: true, code }
+}
+
+async function pollPairingOnce(code: string): Promise<void> {
+  // 状态已变(取消 / 超时 / 完成),不再 poll
+  if (pairingState.kind !== 'waiting' || pairingState.code !== code) return
+
+  try {
+    const r = await gql<PollExtensionPairingResult>(
+      POLL_EXTENSION_PAIRING_QUERY,
+      { code },
+      { anonymous: true },
+    )
+    const { status, token } = r.pollExtensionPairing
+
+    if (status === 'READY' && token) {
+      clearPairingTimers()
+      await localStore.set('apiToken', token)
+      await closePairingTab()
+      setPairingState({ kind: 'success' })
+      scheduleReset()
+      // storage.onChanged 监听器会自动 trigger syncTasks(),无需手动
+      return
+    }
+    if (status === 'EXPIRED') {
+      clearPairingTimers()
+      await closePairingTab()
+      setPairingState({ kind: 'timeout' })
+      scheduleReset()
+      return
+    }
+    // PENDING:继续下次 tick
+  } catch (e) {
+    // 网络偶发抖动不打断 polling — 等下次 tick 重试
+    console.warn('[lhdao] poll pairing transient fail:', e)
+  }
+}
+
+async function onPairingTimeout(): Promise<void> {
+  if (pairingState.kind !== 'waiting') return
+  clearPairingTimers()
+  await closePairingTab()
+  setPairingState({ kind: 'timeout' })
+  scheduleReset()
+}
+
+async function cancelPairing(): Promise<void> {
+  if (pairingState.kind !== 'waiting') return
+  clearPairingTimers()
+  await closePairingTab()
+  setPairingState({ kind: 'cancelled' })
+  scheduleReset()
 }
