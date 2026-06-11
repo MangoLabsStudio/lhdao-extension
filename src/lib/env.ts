@@ -26,8 +26,11 @@ export const API_ENDPOINT: string = __API_ENDPOINT__
  */
 export const WEB_ENDPOINT: string = __WEB_ENDPOINT__
 
-/** 后台 alarm 拉取任务的间隔 (秒)。<60s 会被 chrome 限制为 60s。 */
-export const SYNC_INTERVAL_SECONDS = 60
+/** 后台 alarm 拉取任务的间隔 (秒)。<60s 会被 chrome 限制为 60s。
+ *  2026-06-11: 60 → 300。429 限流事故治理:全量安装 7×24 每分钟两条
+ *  bootstrap 查询是服务端最大的稳态轮询负载;chip 数据滞后 ≤5 分钟对
+ *  「刷推文顺手接任务」的场景无感。配合 background 的 0~60s 随机抖动。 */
+export const SYNC_INTERVAL_SECONDS = 300
 
 /** 验证 mutation 失败后等待重试的间隔 (毫秒)。 */
 export const VERIFY_RETRY_DELAY_MS = 5000

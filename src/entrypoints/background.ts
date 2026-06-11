@@ -72,10 +72,12 @@ function maskToken(token: string): string {
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
-  // 启动立刻 sync 一次,然后每 60s
+  // 启动立刻 sync 一次,然后每 SYNC_INTERVAL_SECONDS(5 分钟)
   void syncTasks()
+  // 0~60s 随机抖动:全量安装若按整分钟对齐,会在后端形成周期性请求尖峰;
+  // service worker 每次被唤醒重建 alarm 时抖动也会重新随机,长期自然打散。
   chrome.alarms.create(ALARM_NAME, {
-    periodInMinutes: SYNC_INTERVAL_SECONDS / 60,
+    periodInMinutes: (SYNC_INTERVAL_SECONDS + Math.random() * 60) / 60,
   })
   chrome.alarms.onAlarm.addListener((a) => {
     if (a.name === ALARM_NAME) void syncTasks()
