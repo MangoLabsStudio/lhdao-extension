@@ -346,7 +346,6 @@ function scheduleScan() {
     rafScheduled = false
     scanTimeline()
     scanSidebar()
-    void scanMembers()
     void scanProfilePage()
     scanSensitive()
   })
@@ -938,16 +937,12 @@ function renderInto(
 // Lighthouse member tagging — Feature A
 // ════════════════════════════════════════════════════════════════════════
 //
-// 两个独立 surface:
-//   1. Timeline:每条 article 的 author handle → 是成员则在 User-Name 旁
-//      注入小 chip "灯塔成员"
-//   2. Profile 页(URL 是 /<handle>):成员则在 bio 下方注入 badge
+// 只在 Profile 页(URL 是 /<handle>):成员则在 bio 下方注入 badge。
 //
-// BG SW 维护 LRU cache(5min TTL),content 这边不缓存 — 简单 set 一个
-// `data-lhdao-member` attribute 标记已扫过的 article,防止重复 RPC。
-
-const MEMBER_FLAG = 'data-lhdao-member'
-const MEMBER_BUSY = 'data-lhdao-member-busy'
+// (timeline / 评论区的逐条 article "灯塔成员" chip 已下线 — 不再在 feed
+//  和评论列表里标注成员。)
+//
+// BG SW 维护 LRU cache(5min TTL),content 这边不缓存。
 
 const RESERVED_TWITTER_PATHS = new Set([
   'home', 'explore', 'notifications', 'messages', 'bookmarks', 'lists',
@@ -955,107 +950,6 @@ const RESERVED_TWITTER_PATHS = new Set([
   'i', 'about', 'tos', 'privacy', 'jobs', 'help', 'communities', 'topics',
   'verified-followers', 'connect_people', 'following', 'followers',
 ])
-
-async function scanMembers(): Promise<void> {
-  if (contextDead) return
-
-  // 收集 visible article + 未扫过的 author handle
-  const articles = document.querySelectorAll('article')
-  const articleByHandle = new Map<string, Element[]>()
-  for (const article of articles) {
-    if (article.getAttribute(MEMBER_FLAG)) continue
-    if (article.getAttribute(MEMBER_BUSY)) continue
-    if (!isArticleRenderable(article)) continue
-    const handle = extractAuthorHandleFromArticle(article)
-    if (!handle) continue
-    if (!articleByHandle.has(handle)) articleByHandle.set(handle, [])
-    articleByHandle.get(handle)!.push(article)
-  }
-  if (articleByHandle.size === 0) return
-
-  // 占用 BUSY flag 避免并发 rAF 重复发 RPC
-  for (const arts of articleByHandle.values()) {
-    for (const a of arts) a.setAttribute(MEMBER_BUSY, '1')
-  }
-
-  try {
-    const r = await sendMessage({
-      type: 'check-lighthouse-members',
-      handles: Array.from(articleByHandle.keys()),
-    })
-    if (r.type !== 'lighthouse-members-result') return
-
-    for (const [handle, arts] of articleByHandle.entries()) {
-      const member = r.members[handle]
-      for (const art of arts) {
-        art.removeAttribute(MEMBER_BUSY)
-        art.setAttribute(MEMBER_FLAG, member ? 'yes' : 'no')
-        if (member) attachMemberChip(art, member)
-      }
-    }
-  } catch (e) {
-    // 失败 → 清掉 BUSY 让下次 rAF 重试,但不标 FLAG(下次还会再查)
-    for (const arts of articleByHandle.values()) {
-      for (const a of arts) a.removeAttribute(MEMBER_BUSY)
-    }
-    if (handleContextError(e)) return
-  }
-}
-
-function attachMemberChip(article: Element, member: LighthouseMember): void {
-  const userName = article.querySelector('[data-testid="User-Name"]')
-  if (!userName) return
-  if (userName.querySelector('[data-lhdao-member-chip]')) return
-
-  const host = document.createElement('span')
-  host.setAttribute('data-lhdao-member-chip', '')
-  host.style.display = 'inline-flex'
-  host.style.verticalAlign = 'middle'
-  host.style.marginLeft = '4px'
-
-  const shadow = host.attachShadow({ mode: 'open' })
-  const tier = member.tier ? `TIER ${escapeHtml(member.tier)}` : 'member'
-  const iconUrl = chrome.runtime.getURL('icon/128.png')
-  shadow.innerHTML = `
-    <style>${MEMBER_CHIP_CSS}</style>
-    <span class="chip" title="Lighthouse · ${tier} · ${escapeHtml(member.displayName)}">
-      <img class="mark" src="${iconUrl}" alt="" />
-      <span class="label">灯塔成员</span>
-    </span>
-  `
-  userName.appendChild(host)
-}
-
-const MEMBER_CHIP_CSS = `
-  :host { all: initial; }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 1px 7px 1px 5px;
-    background: linear-gradient(135deg, #0D9488 0%, #06B6D4 100%);
-    color: #fff;
-    border-radius: 999px;
-    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    font-size: 10.5px;
-    font-weight: 700;
-    line-height: 16px;
-    letter-spacing: 0.01em;
-    box-shadow:
-      0 1px 0 rgba(255,255,255,0.30) inset,
-      0 2px 6px -1px rgba(13,148,136,0.40);
-    vertical-align: middle;
-    user-select: none;
-    cursor: default;
-  }
-  .mark {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-    border-radius: 50%;
-  }
-  .label { white-space: nowrap; }
-`
 
 // ── Profile page badge ──────────────────────────────────────────────
 
