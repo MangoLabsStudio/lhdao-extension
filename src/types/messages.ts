@@ -70,6 +70,18 @@ export type MsgRequest =
       tweetUrl?: string | null
       authorHandle?: string | null
     }
+  /**
+   * [shadow 捕获] MAIN-world 捕获到用户互动动作(LIKE/RT/COMMENT)→ isolated
+   * bridge 转发到 background 上报后端 reportEngagementCapture(非资金,供 API-vs-
+   * 插件 一致率影子对比)。fire-and-forget,background 回 ack。
+   */
+  | {
+      type: 'report-engagement-capture'
+      actionType: 'LIKE' | 'RT' | 'COMMENT'
+      tweetId: string
+      commentText?: string
+      capturedAt: string
+    }
   /** [legacy] sidebar 卡片询问当前可抢 ENGAGEMENT campaign 列表 */
   | { type: 'get-active-campaigns' }
   /** [v2] sidebar 卡片询问个人面板数据 + TWEET 任务列表(一次拿全) */

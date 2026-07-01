@@ -242,6 +242,28 @@ export interface VerifyEngagementResult {
   verifyEngagement: { actualReward: number }
 }
 
+// ── [shadow 捕获] 上报插件捕获到的互动动作(非资金,供一致率影子对比) ──────
+// 后端 @AllowPluginToken,不发奖、不动钱;background 累积某 campaign 已捕获动作
+// 后调用,返回 Boolean。input 见后端 ReportEngagementCaptureInput。
+export const REPORT_ENGAGEMENT_CAPTURE_MUTATION = `
+  mutation ReportEngagementCapture($input: ReportEngagementCaptureInput!) {
+    reportEngagementCapture(input: $input)
+  }
+`
+
+export interface ReportEngagementCaptureVars {
+  input: {
+    campaignId: string
+    actions: { actionType: string; tweetId?: string; capturedAt?: string }[]
+    commentText?: string
+    dwellMs?: number
+  }
+}
+
+export interface ReportEngagementCaptureResult {
+  reportEngagementCapture: boolean
+}
+
 // ── Lighthouse member lookup(灯塔成员识别) ─────────────────────────
 //
 // 用途:扩展扫 X timeline + profile 页面时,批量查询哪些 Twitter handle

@@ -51,6 +51,16 @@ interface SessionSchema {
    * 跟 tasksByTweetId 合并起来挂 chip。
    */
   tasksByAuthorHandle: Record<string, CampaignTaskCache[]>
+  /**
+   * [shadow 捕获] key = campaignId,value = 该 campaign 至今捕获到的动作(按
+   * actionType 去重)。累积上报:后端 recordCapture 是 latest-wins 覆盖,故每次
+   * 报「该 campaign 全部已捕获动作」,避免多动作任务互相覆盖漏判。session 级
+   * (SW 重启清空,后端 Redis 本就有 TTL)。
+   */
+  capturedActions: Record<
+    string,
+    { actionType: string; tweetId: string; capturedAt: string }[]
+  >
   /** 上次 background SW 拉取任务的时间戳 (ms since epoch) */
   lastSyncAt: number
   /** 上次同步的错误信息;成功时为 null */

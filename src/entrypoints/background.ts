@@ -28,7 +28,10 @@ import {
   CREATE_AUTO_REINVEST_MUTATION,
   type CreateAutoReinvestResult,
   type CreateAutoReinvestVars,
+  REPORT_ENGAGEMENT_CAPTURE_MUTATION,
+  type ReportEngagementCaptureResult,
 } from '@/lib/queries'
+import { mapCaptureToCampaigns, mergeAction } from '@/lib/engagement-capture'
 import {
   type ActiveCampaignSummary,
   type CampaignTaskCache,
@@ -127,6 +130,16 @@ export default defineBackground(() => {
         req.durationMs,
         req.tweetUrl ?? null,
         req.authorHandle ?? null,
+      )
+      return { type: 'ack' }
+    }
+    if (req.type === 'report-engagement-capture') {
+      // fire-and-forget:非资金影子上报,失败静默(同 record-dwell)
+      void handleEngagementCapture(
+        req.actionType,
+        req.tweetId,
+        req.commentText,
+        req.capturedAt,
       )
       return { type: 'ack' }
     }
@@ -698,6 +711,79 @@ async function recordDwell(
     })
   } catch (e) {
     console.warn('[lhdao] record dwell failed', e)
+  }
+}
+
+/**
+ * [shadow 捕获] 串行化闸门:doHandleEngagementCapture 是异步 read-modify-write
+ * (读 capturedActions → 合并 → 写回),并发调用会互相覆盖内存累积。用一条
+ * promise 链串起来消除竞态(shadow 非资金,串行代价可接受)。
+ */
+let captureChain: Promise<void> = Promise.resolve()
+
+/**
+ * [shadow 捕获] 把插件捕获到的一个互动动作映射到命中的 campaign 并上报后端。
+ * 无 token → 静默(同 dwell);该 tweet 无匹配任务 → 不上报。多动作累积上报
+ * (session capturedActions),避免后端 latest-wins 覆盖漏判。fire-and-forget,串行。
+ */
+function handleEngagementCapture(
+  actionType: 'LIKE' | 'RT' | 'COMMENT',
+  tweetId: string,
+  commentText: string | undefined,
+  capturedAt: string,
+): Promise<void> {
+  captureChain = captureChain
+    .then(() =>
+      doHandleEngagementCapture(actionType, tweetId, commentText, capturedAt),
+    )
+    .catch(() => {})
+  return captureChain
+}
+
+async function doHandleEngagementCapture(
+  actionType: 'LIKE' | 'RT' | 'COMMENT',
+  tweetId: string,
+  commentText: string | undefined,
+  capturedAt: string,
+): Promise<void> {
+  try {
+    const token = await localStore.get('apiToken')
+    if (!token) return
+    const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
+    const cap = commentText
+      ? { actionType, tweetId, commentText }
+      : { actionType, tweetId }
+    const mapped = mapCaptureToCampaigns(cap, byTweet)
+    if (mapped.length === 0) return
+
+    const acc = (await sessionStore.get('capturedActions')) ?? {}
+    for (const m of mapped) {
+      const merged = mergeAction(acc[m.campaignId], {
+        actionType: m.actionType,
+        tweetId: m.tweetId,
+        capturedAt,
+      })
+      acc[m.campaignId] = merged
+      await gql<ReportEngagementCaptureResult>(REPORT_ENGAGEMENT_CAPTURE_MUTATION, {
+        input: {
+          campaignId: m.campaignId,
+          actions: merged,
+          ...(m.commentText ? { commentText: m.commentText } : {}),
+        },
+      })
+    }
+    // 剪枝:只留仍在当前活跃任务集里的 campaign,防 capturedActions 无界增长
+    // (chrome.storage.session 跨 SW 重启不清,只在浏览器关闭时清)。
+    const activeIds = new Set(
+      Object.values(byTweet).flatMap((tasks) => tasks.map((t) => t.campaignId)),
+    )
+    const pruned: typeof acc = {}
+    for (const id of Object.keys(acc)) {
+      if (activeIds.has(id)) pruned[id] = acc[id]
+    }
+    await sessionStore.set('capturedActions', pruned)
+  } catch (e) {
+    console.warn('[lhdao] report engagement capture failed', e)
   }
 }
 
