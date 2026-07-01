@@ -22,6 +22,12 @@ import {
   type ReserveSlotResult,
   VERIFY_ENGAGEMENT_MUTATION,
   type VerifyEngagementResult,
+  PROMOTE_TWEET_MUTATION,
+  type PromoteTweetResult,
+  type PromoteTweetVars,
+  CREATE_AUTO_REINVEST_MUTATION,
+  type CreateAutoReinvestResult,
+  type CreateAutoReinvestVars,
 } from '@/lib/queries'
 import {
   type ActiveCampaignSummary,
@@ -106,6 +112,13 @@ export default defineBackground(() => {
     }
     if (req.type === 'verify-task') {
       return verifyOnly(req.campaignId)
+    }
+    if (req.type === 'promote-tweet') {
+      return promoteTweetHandler(req)
+    }
+    if (req.type === 'get-balance') {
+      const p = await sessionStore.get('userProfile')
+      return { type: 'balance-result', balance: p?.newLux ?? null }
     }
     if (req.type === 'record-dwell') {
       // fire-and-forget: 失败不影响用户,只 console.warn
@@ -516,6 +529,61 @@ function flattenTasks(
  *      - 第二次还失败就返回错误 code
  *   3. 成功后 syncTasks() 刷新缓存,chip 自动消失
  */
+/**
+ * 一键推广:调后端 promoteTweet(带 plugin token)建 ENGAGEMENT 商单。
+ * 后端按平台价格表 + 余额校验 + 10% 手续费处理;前端只传 预算/动作/档位。
+ */
+async function promoteTweetHandler(req: {
+  tweetUrl: string
+  actions: { actionType: string; tierSlots: Record<string, number> }[]
+  reinvestCount?: number
+}): Promise<MsgResponse> {
+  const token = await localStore.get('apiToken')
+  if (!token) {
+    return {
+      type: 'promote-result',
+      ok: false,
+      code: 'NO_TOKEN',
+      message: '请先在插件 options 配置 plugin token',
+    }
+  }
+  try {
+    const data = await gql<PromoteTweetResult, PromoteTweetVars>(
+      PROMOTE_TWEET_MUTATION,
+      { input: { tweetUrl: req.tweetUrl, actions: req.actions } },
+    )
+    const campaignIds = data.promoteTweet.map((c) => c.id)
+
+    // 持续复投:给每个子单建 auto-reinvest 任务(best-effort,失败不影响推广成功)
+    let reinvested = false
+    if (req.reinvestCount && req.reinvestCount > 0 && campaignIds.length) {
+      try {
+        for (const id of campaignIds) {
+          await gql<CreateAutoReinvestResult, CreateAutoReinvestVars>(
+            CREATE_AUTO_REINVEST_MUTATION,
+            { input: { campaignId: id, reinvestCount: req.reinvestCount } },
+          )
+        }
+        reinvested = true
+      } catch (e) {
+        console.warn('[lhdao] auto-reinvest setup failed:', e)
+      }
+    }
+
+    void syncTasks() // 刷新余额缓存
+    return { type: 'promote-result', ok: true, campaignIds, reinvested }
+  } catch (e) {
+    const msg = e instanceof GqlError ? e.message : String(e)
+    const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
+    let code = 'INTERNAL'
+    if (httpStatus === 401) code = 'TOKEN_INVALID'
+    else if (/Insufficient|余额/.test(msg)) code = 'INSUFFICIENT_BALANCE'
+    else if (/DUPLICATE/.test(msg)) code = 'DUPLICATE'
+    else if (/最低|MIN_BUDGET/.test(msg)) code = 'MIN_BUDGET'
+    return { type: 'promote-result', ok: false, code, message: msg }
+  }
+}
+
 async function submitTask(campaignId: string): Promise<MsgResponse> {
   // —— Reserve ——
   try {

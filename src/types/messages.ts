@@ -17,6 +17,9 @@ import type {
 
 // ── Requests (CS → BG, 偶尔反向) ─────────────────────────────────────
 
+/** 一键推广可选的互动动作 */
+export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
+
 export type MsgRequest =
   /** content script 询问某条推文上挂着哪些任务(LIKE/RT/COMMENT 等 tweet-level)*/
   | { type: 'get-tasks-for-tweet'; tweetId: string }
@@ -38,6 +41,17 @@ export type MsgRequest =
   | { type: 'verify-task'; campaignId: string }
   /** [legacy] reserve + verify 一锅炖 — 兼容老调用,新代码用 reserve / verify 分两步 */
   | { type: 'submit-task'; campaignId: string }
+  /** 一键推广:推文 + 预算 + 动作 + 档位 → promoteTweet(后端建 ENGAGEMENT 商单) */
+  | {
+      type: 'promote-tweet'
+      tweetUrl: string
+      /** 每动作 + 每 tier 招募人数(每动作建一个 ≥2 LUX 子单) */
+      actions: { actionType: PromoteAction; tierSlots: Record<string, number> }[]
+      /** >0 则成功后给作者建 auto-reinvest 任务(持续复投 N 次) */
+      reinvestCount?: number
+    }
+  /** 取当前缓存的余额(newLux),给推广弹窗显示 */
+  | { type: 'get-balance' }
   /** content script 询问当前是否已配置 token (popup 也用) */
   | { type: 'has-token' }
   /** popup 触发立即同步 — 不等 60s alarm,等 sync 跑完再返回结果 */
@@ -129,6 +143,14 @@ export type MsgResponse =
   | { type: 'verify-result'; ok: false; code: SubmitErrorCode; message: string }
   | { type: 'submit-result'; ok: true; reward: number }
   | { type: 'submit-result'; ok: false; code: SubmitErrorCode; message: string }
+  | {
+      type: 'promote-result'
+      ok: true
+      campaignIds: string[]
+      reinvested: boolean
+    }
+  | { type: 'promote-result'; ok: false; code: string; message: string }
+  | { type: 'balance-result'; balance: number | null }
   | { type: 'token-status'; configured: boolean }
   | { type: 'active-campaigns'; campaigns: ActiveCampaignSummary[] }
   | {

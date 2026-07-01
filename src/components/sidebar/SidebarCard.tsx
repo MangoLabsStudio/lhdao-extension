@@ -67,33 +67,11 @@ export function SidebarCard() {
   }
 
   const campaigns = data.tweetCampaigns ?? []
-  const visibleTasks = campaigns.slice(0, VISIBLE_TASK_LIMIT)
-  const hasMore = campaigns.length > VISIBLE_TASK_LIMIT
 
   return (
     <section className="lh-card">
       <BrandBar lastSyncAt={lastSyncAt} />
       <IdentityCard profile={data.profile} />
-      <SectionHeader count={campaigns.length} />
-      {visibleTasks.length === 0 ? (
-        <EmptyState />
-      ) : (
-        <ul className="lh-tasks">
-          {visibleTasks.map((c) => (
-            <TaskRow key={c.campaignId} task={c} />
-          ))}
-        </ul>
-      )}
-      {hasMore && (
-        <a
-          className="lh-list-more"
-          href={`${WEB_ENDPOINT}/campaigns`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          查看全部 {campaigns.length} 个 →
-        </a>
-      )}
       <FooterStats profile={data.profile} taskCount={campaigns.length} />
       <CtaRow />
     </section>
@@ -311,22 +289,6 @@ function LoadingCard() {
           <span className="lh-sk lh-sk-balance" />
         </div>
       </div>
-      <div className="lh-section">
-        <span className="lh-section-label">LIVE TASKS</span>
-        <span className="lh-section-meta">…</span>
-      </div>
-      <ul className="lh-tasks">
-        {[1, 2, 3].map((i) => (
-          <li key={i} className="lh-task lh-task-sk">
-            <span className="lh-sk lh-sk-icon" />
-            <div className="lh-task-mid">
-              <span className="lh-sk lh-sk-line" style={{ width: 70 }} />
-              <span className="lh-sk lh-sk-line" style={{ width: 140 }} />
-            </div>
-            <span className="lh-sk lh-sk-reward" />
-          </li>
-        ))}
-      </ul>
     </section>
   )
 }
