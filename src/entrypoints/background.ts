@@ -1,4 +1,8 @@
-import { SYNC_INTERVAL_SECONDS, VERIFY_RETRY_DELAY_MS, WEB_ENDPOINT } from '@/lib/env'
+import {
+  SYNC_INTERVAL_SECONDS,
+  VERIFY_RETRY_DELAY_MS,
+  WEB_ENDPOINT,
+} from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
@@ -31,7 +35,11 @@ import {
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
   type ReportEngagementCaptureResult,
 } from '@/lib/queries'
-import { mapCaptureToCampaigns, mergeAction } from '@/lib/engagement-capture'
+import {
+  type CapturedAction,
+  mapCaptureToCampaigns,
+  mergeAction,
+} from '@/lib/engagement-capture'
 import {
   type ActiveCampaignSummary,
   type CampaignTaskCache,
@@ -135,12 +143,7 @@ export default defineBackground(() => {
     }
     if (req.type === 'report-engagement-capture') {
       // fire-and-forget:非资金影子上报,失败静默(同 record-dwell)
-      void handleEngagementCapture(
-        req.actionType,
-        req.tweetId,
-        req.commentText,
-        req.capturedAt,
-      )
+      void handleEngagementCapture(req, req.capturedAt)
       return { type: 'ack' }
     }
     if (req.type === 'get-active-campaigns') {
@@ -727,56 +730,54 @@ let captureChain: Promise<void> = Promise.resolve()
  * (session capturedActions),避免后端 latest-wins 覆盖漏判。fire-and-forget,串行。
  */
 function handleEngagementCapture(
-  actionType: 'LIKE' | 'RT' | 'COMMENT',
-  tweetId: string,
-  commentText: string | undefined,
+  cap: CapturedAction,
   capturedAt: string,
 ): Promise<void> {
   captureChain = captureChain
-    .then(() =>
-      doHandleEngagementCapture(actionType, tweetId, commentText, capturedAt),
-    )
+    .then(() => doHandleEngagementCapture(cap, capturedAt))
     .catch(() => {})
   return captureChain
 }
 
 async function doHandleEngagementCapture(
-  actionType: 'LIKE' | 'RT' | 'COMMENT',
-  tweetId: string,
-  commentText: string | undefined,
+  cap: CapturedAction,
   capturedAt: string,
 ): Promise<void> {
   try {
     const token = await localStore.get('apiToken')
     if (!token) return
     const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
-    const cap = commentText
-      ? { actionType, tweetId, commentText }
-      : { actionType, tweetId }
-    const mapped = mapCaptureToCampaigns(cap, byTweet)
+    const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
+    const mapped = mapCaptureToCampaigns(cap, { byTweet, byAuthor })
     if (mapped.length === 0) return
 
     const acc = (await sessionStore.get('capturedActions')) ?? {}
     for (const m of mapped) {
-      const merged = mergeAction(acc[m.campaignId], {
-        actionType: m.actionType,
-        tweetId: m.tweetId,
-        capturedAt,
-      })
+      const next = m.tweetId
+        ? { actionType: m.actionType, tweetId: m.tweetId, capturedAt }
+        : { actionType: m.actionType, capturedAt }
+      const merged = mergeAction(acc[m.campaignId], next)
       acc[m.campaignId] = merged
-      await gql<ReportEngagementCaptureResult>(REPORT_ENGAGEMENT_CAPTURE_MUTATION, {
-        input: {
-          campaignId: m.campaignId,
-          actions: merged,
-          ...(m.commentText ? { commentText: m.commentText } : {}),
+      await gql<ReportEngagementCaptureResult>(
+        REPORT_ENGAGEMENT_CAPTURE_MUTATION,
+        {
+          input: {
+            campaignId: m.campaignId,
+            actions: merged,
+            ...(m.commentText ? { commentText: m.commentText } : {}),
+          },
         },
-      })
+      )
     }
-    // 剪枝:只留仍在当前活跃任务集里的 campaign,防 capturedActions 无界增长
-    // (chrome.storage.session 跨 SW 重启不清,只在浏览器关闭时清)。
-    const activeIds = new Set(
-      Object.values(byTweet).flatMap((tasks) => tasks.map((t) => t.campaignId)),
-    )
+    // 剪枝:只留仍在当前活跃任务集(byTweet + byAuthor)里的 campaign,防
+    // capturedActions 无界增长(chrome.storage.session 跨 SW 重启不清)。
+    const activeIds = new Set<string>()
+    for (const tasks of Object.values(byTweet)) {
+      for (const t of tasks) activeIds.add(t.campaignId)
+    }
+    for (const tasks of Object.values(byAuthor)) {
+      for (const t of tasks) activeIds.add(t.campaignId)
+    }
     const pruned: typeof acc = {}
     for (const id of Object.keys(acc)) {
       if (activeIds.has(id)) pruned[id] = acc[id]

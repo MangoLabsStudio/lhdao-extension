@@ -46,7 +46,10 @@ export type MsgRequest =
       type: 'promote-tweet'
       tweetUrl: string
       /** 每动作 + 每 tier 招募人数(每动作建一个 ≥2 LUX 子单) */
-      actions: { actionType: PromoteAction; tierSlots: Record<string, number> }[]
+      actions: {
+        actionType: PromoteAction
+        tierSlots: Record<string, number>
+      }[]
       /** >0 则成功后给作者建 auto-reinvest 任务(持续复投 N 次) */
       reinvestCount?: number
     }
@@ -71,14 +74,16 @@ export type MsgRequest =
       authorHandle?: string | null
     }
   /**
-   * [shadow 捕获] MAIN-world 捕获到用户互动动作(LIKE/RT/COMMENT)→ isolated
-   * bridge 转发到 background 上报后端 reportEngagementCapture(非资金,供 API-vs-
-   * 插件 一致率影子对比)。fire-and-forget,background 回 ack。
+   * [shadow 捕获] MAIN-world 捕获到用户互动动作(LIKE/RT/COMMENT/FOLLOW)→
+   * isolated bridge 转发到 background 上报后端 reportEngagementCapture(非资金,
+   * 供 API-vs-插件 一致率影子对比)。fire-and-forget,background 回 ack。
+   * tweetId(LIKE/RT/COMMENT)与 handle(FOLLOW,被关注者)二选一。
    */
   | {
       type: 'report-engagement-capture'
-      actionType: 'LIKE' | 'RT' | 'COMMENT'
-      tweetId: string
+      actionType: 'LIKE' | 'RT' | 'COMMENT' | 'FOLLOW'
+      tweetId?: string
+      handle?: string
       commentText?: string
       capturedAt: string
     }

@@ -18,12 +18,15 @@ export default defineContentScript({
         | undefined
       if (!d || d.__lhcap !== true || !d.action) return
       const a = d.action
-      if (typeof a.actionType !== 'string' || typeof a.tweetId !== 'string')
-        return
+      if (typeof a.actionType !== 'string') return
+      const tweetId = typeof a.tweetId === 'string' ? a.tweetId : undefined
+      const handle = typeof a.handle === 'string' ? a.handle : undefined
+      if (!tweetId && !handle) return // 没有可映射的目标
       void sendMessage({
         type: 'report-engagement-capture',
-        actionType: a.actionType as 'LIKE' | 'RT' | 'COMMENT',
-        tweetId: a.tweetId,
+        actionType: a.actionType as 'LIKE' | 'RT' | 'COMMENT' | 'FOLLOW',
+        tweetId,
+        handle,
         commentText:
           typeof a.commentText === 'string' ? a.commentText : undefined,
         capturedAt:

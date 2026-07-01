@@ -59,7 +59,7 @@ interface SessionSchema {
    */
   capturedActions: Record<
     string,
-    { actionType: string; tweetId: string; capturedAt: string }[]
+    { actionType: string; tweetId?: string; capturedAt: string }[]
   >
   /** 上次 background SW 拉取任务的时间戳 (ms since epoch) */
   lastSyncAt: number

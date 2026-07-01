@@ -1,15 +1,18 @@
 // ─────────────────────────────────────────────────────────────────────────
-// [shadow 捕获] 从 X 请求里抽取用户互动动作 + 映射到灯塔任务的纯逻辑。
+// [shadow 捕获] 从 X 请求/响应里抽取用户互动动作 + 映射到灯塔任务的纯逻辑。
 // content(MAIN 捕获)与 background(映射上报)共用;无副作用,便于单测。
-// 范围 v1:LIKE / RT / COMMENT(tweet-id 干净映射)。FOLLOW 暂缓(friendships
-// 只给 user_id,映射需 handle);撤销/收藏暂缓。
+// 范围:LIKE / RT / COMMENT(GraphQL 请求体,tweet-id 映射)+ FOLLOW
+// (friendships/create 响应体拿 screen_name,handle 映射)。撤销/收藏暂缓。
 // ─────────────────────────────────────────────────────────────────────────
 
-export type CaptureActionType = 'LIKE' | 'RT' | 'COMMENT'
+export type CaptureActionType = 'LIKE' | 'RT' | 'COMMENT' | 'FOLLOW'
 
 export interface CapturedAction {
   actionType: CaptureActionType
-  tweetId: string
+  /** LIKE/RT/COMMENT:动作针对的推文 id。 */
+  tweetId?: string
+  /** FOLLOW:被关注者 handle(小写)。 */
+  handle?: string
   /** 仅 COMMENT 带:发布的评论正文(用于后续评论审计 / 交付)。 */
   commentText?: string
 }
@@ -22,8 +25,8 @@ export const CAPTURE_OPS = [
 ] as const
 
 /**
- * 从 X mutation 的请求体抽取一个互动动作。返回 null = 不是我们关心的动作
- * (未知 op / 原创推文而非评论 / 缺 tweet_id / body 解析失败)。
+ * 从 X mutation 的请求体抽取一个互动动作(LIKE/RT/COMMENT)。返回 null = 不是
+ * 我们关心的动作(未知 op / 原创推文而非评论 / 缺 tweet_id / body 解析失败)。
  */
 export function extractCapturedAction(
   op: string | null | undefined,
@@ -60,6 +63,24 @@ export function extractCapturedAction(
   return null
 }
 
+/**
+ * FOLLOW:REST `/1.1/friendships/create.json` 的**响应体**就是被关注的用户对象
+ * (v1.1 顶层带 screen_name)→ 直接拿 handle,无需 user_id→handle 反查。
+ * 返回 null = 非该接口 / 响应无 screen_name。
+ */
+export function extractFollowFromResponse(
+  url: string | undefined,
+  responseJson: unknown,
+): CapturedAction | null {
+  if (!url || !/\/friendships\/create/.test(url)) return null
+  const handle =
+    responseJson && typeof responseJson === 'object'
+      ? (responseJson as { screen_name?: unknown }).screen_name
+      : undefined
+  if (typeof handle !== 'string' || !handle) return null
+  return { actionType: 'FOLLOW', handle: handle.toLowerCase() }
+}
+
 /** 捕获到的动作是否满足某任务的 actionType。COMMENT_LIKE 组合任务放宽匹配。 */
 export function actionMatchesTask(
   captured: CaptureActionType,
@@ -78,22 +99,42 @@ export interface CampaignTaskLike {
   actionType: string
 }
 
+export interface TaskSnapshot {
+  /** tweetId → 推文级任务(LIKE/RT/COMMENT)。 */
+  byTweet: Record<string, CampaignTaskLike[]>
+  /** author handle(小写)→ FOLLOW 任务。 */
+  byAuthor: Record<string, CampaignTaskLike[]>
+}
+
 export interface MappedReport {
   campaignId: string
   actionType: CaptureActionType
-  tweetId: string
+  tweetId?: string
+  handle?: string
   commentText?: string
 }
 
 /**
- * 把一个捕获动作映射到它命中的灯塔任务(可能多个 campaign 共用同一 tweet)。
- * tasksByTweetId 是 background 已缓存的 tweetId → 任务数组索引。
+ * 把一个捕获动作映射到它命中的灯塔任务(可能多个 campaign)。
+ * FOLLOW 走 byAuthor(handle);LIKE/RT/COMMENT 走 byTweet(tweetId)。
  */
 export function mapCaptureToCampaigns(
   cap: CapturedAction,
-  tasksByTweetId: Record<string, CampaignTaskLike[]>,
+  snapshot: TaskSnapshot,
 ): MappedReport[] {
-  const tasks = tasksByTweetId[cap.tweetId] ?? []
+  if (cap.actionType === 'FOLLOW') {
+    if (!cap.handle) return []
+    const tasks = snapshot.byAuthor[cap.handle.toLowerCase()] ?? []
+    return tasks
+      .filter((t) => t.actionType === 'FOLLOW')
+      .map((t) => ({
+        campaignId: t.campaignId,
+        actionType: 'FOLLOW' as const,
+        handle: cap.handle,
+      }))
+  }
+  if (!cap.tweetId) return []
+  const tasks = snapshot.byTweet[cap.tweetId] ?? []
   return tasks
     .filter((t) => actionMatchesTask(cap.actionType, t.actionType))
     .map((t) => ({
@@ -107,7 +148,8 @@ export function mapCaptureToCampaigns(
 export interface ReportedAction {
   // string(非 CaptureActionType):与 storage session 键 + 后端 actionType:String 契约一致
   actionType: string
-  tweetId: string
+  /** FOLLOW 无 tweetId(按 handle 匹配),故可选。 */
+  tweetId?: string
   capturedAt: string
 }
 

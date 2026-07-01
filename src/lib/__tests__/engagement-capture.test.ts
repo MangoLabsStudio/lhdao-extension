@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   actionMatchesTask,
   extractCapturedAction,
+  extractFollowFromResponse,
   mapCaptureToCampaigns,
   mergeAction,
 } from '../engagement-capture'
@@ -51,11 +52,39 @@ describe('extractCapturedAction', () => {
   })
 })
 
+describe('extractFollowFromResponse', () => {
+  it('friendships/create 响应带 screen_name → FOLLOW(handle 小写)', () => {
+    expect(
+      extractFollowFromResponse(
+        'https://x.com/i/api/1.1/friendships/create.json',
+        { id: 1, screen_name: 'AliceKOL', name: 'Alice' },
+      ),
+    ).toEqual({ actionType: 'FOLLOW', handle: 'alicekol' })
+  })
+  it('非 friendships/create URL → null', () => {
+    expect(
+      extractFollowFromResponse('https://x.com/i/api/1.1/friendships/destroy.json', {
+        screen_name: 'bob',
+      }),
+    ).toBeNull()
+    expect(extractFollowFromResponse(undefined, { screen_name: 'bob' })).toBeNull()
+  })
+  it('响应无 screen_name → null', () => {
+    expect(
+      extractFollowFromResponse('/i/api/1.1/friendships/create.json', { id: 1 }),
+    ).toBeNull()
+    expect(
+      extractFollowFromResponse('/i/api/1.1/friendships/create.json', null),
+    ).toBeNull()
+  })
+})
+
 describe('actionMatchesTask', () => {
   it('精确匹配', () => {
     expect(actionMatchesTask('LIKE', 'LIKE')).toBe(true)
     expect(actionMatchesTask('RT', 'RT')).toBe(true)
     expect(actionMatchesTask('COMMENT', 'COMMENT')).toBe(true)
+    expect(actionMatchesTask('FOLLOW', 'FOLLOW')).toBe(true)
   })
   it('COMMENT_LIKE 组合:COMMENT/LIKE 命中,RT 不命中', () => {
     expect(actionMatchesTask('COMMENT', 'COMMENT_LIKE')).toBe(true)
@@ -70,13 +99,18 @@ describe('actionMatchesTask', () => {
 
 describe('mapCaptureToCampaigns', () => {
   const snapshot = {
-    t1: [
-      { campaignId: 'cA', actionType: 'LIKE' },
-      { campaignId: 'cB', actionType: 'RT' },
-    ],
-    t2: [{ campaignId: 'cC', actionType: 'COMMENT_LIKE' }],
+    byTweet: {
+      t1: [
+        { campaignId: 'cA', actionType: 'LIKE' },
+        { campaignId: 'cB', actionType: 'RT' },
+      ],
+      t2: [{ campaignId: 'cC', actionType: 'COMMENT_LIKE' }],
+    },
+    byAuthor: {
+      alicekol: [{ campaignId: 'cF', actionType: 'FOLLOW' }],
+    },
   }
-  it('单命中', () => {
+  it('单命中(tweet)', () => {
     expect(
       mapCaptureToCampaigns({ actionType: 'LIKE', tweetId: 't1' }, snapshot),
     ).toEqual([{ campaignId: 'cA', actionType: 'LIKE', tweetId: 't1' }])
@@ -96,12 +130,19 @@ describe('mapCaptureToCampaigns', () => {
       },
     ])
   })
-  it('该 tweet 无匹配任务 → 空', () => {
+  it('FOLLOW 走 byAuthor(handle 大小写不敏感)', () => {
+    expect(
+      mapCaptureToCampaigns({ actionType: 'FOLLOW', handle: 'AliceKOL' }, snapshot),
+    ).toEqual([{ campaignId: 'cF', actionType: 'FOLLOW', handle: 'AliceKOL' }])
+  })
+  it('无匹配 / 缺 tweetId 或 handle → 空', () => {
     expect(
       mapCaptureToCampaigns({ actionType: 'RT', tweetId: 't2' }, snapshot),
     ).toEqual([])
+    expect(mapCaptureToCampaigns({ actionType: 'LIKE' }, snapshot)).toEqual([])
+    expect(mapCaptureToCampaigns({ actionType: 'FOLLOW' }, snapshot)).toEqual([])
     expect(
-      mapCaptureToCampaigns({ actionType: 'LIKE', tweetId: 'tX' }, snapshot),
+      mapCaptureToCampaigns({ actionType: 'FOLLOW', handle: 'nobody' }, snapshot),
     ).toEqual([])
   })
 })
@@ -130,5 +171,10 @@ describe('mergeAction', () => {
       { actionType: 'LIKE', tweetId: 't1', capturedAt: 'b' },
     )
     expect(r).toEqual([{ actionType: 'LIKE', tweetId: 't1', capturedAt: 'b' }])
+  })
+  it('FOLLOW 无 tweetId 也能累积', () => {
+    expect(
+      mergeAction(undefined, { actionType: 'FOLLOW', capturedAt: 'a' }),
+    ).toEqual([{ actionType: 'FOLLOW', capturedAt: 'a' }])
   })
 })
