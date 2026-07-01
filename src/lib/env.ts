@@ -26,8 +26,8 @@ export const API_ENDPOINT: string = __API_ENDPOINT__
  */
 export const WEB_ENDPOINT: string = __WEB_ENDPOINT__
 
-/** 后台 alarm 拉取任务的间隔 (秒)。<60s 会被 chrome 限制为 60s。 */
-export const SYNC_INTERVAL_SECONDS = 60
+/** 后台 alarm 拉取任务的间隔 (秒)。chrome.alarms 下限 60s;这里设 5 分钟。 */
+export const SYNC_INTERVAL_SECONDS = 300
 
 /** 验证 mutation 失败后等待重试的间隔 (毫秒)。 */
 export const VERIFY_RETRY_DELAY_MS = 5000

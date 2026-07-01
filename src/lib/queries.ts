@@ -340,3 +340,70 @@ export const RECORD_TWEET_DWELL_MUTATION = `
 export interface RecordTweetDwellResult {
   recordTweetDwell: boolean
 }
+
+// ── Watermark mint (抢单接口防护) ─────────────────────────────────────
+//
+// 抢单/验证 mutation 在后端被 WatermarkInterceptor 保护(加密信封 + jti 防重放
+// + reserve 的 PoW)。扩展在调 ReserveEngagementSlot / VerifyEngagement 前,先
+// mint 一个 watermark token 并拼进请求头。详见 src/lib/watermark.ts。
+
+export const MINT_WATERMARK_TOKEN_QUERY = `
+  query MintWatermarkToken($operationName: String!, $opType: String!) {
+    mintWatermarkToken(operationName: $operationName, opType: $opType) {
+      token
+      expiresAt
+      kid
+      powChallenge
+      powDifficulty
+    }
+  }
+`
+
+export interface MintWatermarkTokenResult {
+  mintWatermarkToken: {
+    token: string
+    expiresAt: string | null
+    kid: string | null
+    powChallenge: string | null
+    powDifficulty: string | null
+  }
+}
+
+// ── 一键推广(promoteTweet)──────────────────────────────────────────
+// 后端按平台价格表把 预算+动作+档位 折成 ENGAGEMENT 商单(余额校验/10% 手续费)。
+// promoteTweet 返回创建的子单数组(每动作一个)。
+export const PROMOTE_TWEET_MUTATION = `
+  mutation PromoteTweet($input: PromoteTweetInput!) {
+    promoteTweet(input: $input) {
+      id
+    }
+  }
+`
+
+export interface PromoteTweetVars {
+  input: {
+    tweetUrl: string
+    actions: { actionType: string; tierSlots: Record<string, number> }[]
+  }
+}
+
+export interface PromoteTweetResult {
+  promoteTweet: { id: string }[]
+}
+
+// 持续复投:给某子单建 auto-reinvest 任务(作者发新推文自动复投 N 次)。
+export const CREATE_AUTO_REINVEST_MUTATION = `
+  mutation CreateAutoReinvestTask($input: CreateAutoReinvestTaskInput!) {
+    createAutoReinvestTask(input: $input) {
+      id
+    }
+  }
+`
+
+export interface CreateAutoReinvestVars {
+  input: { campaignId: string; reinvestCount: number }
+}
+
+export interface CreateAutoReinvestResult {
+  createAutoReinvestTask: { id: string }
+}

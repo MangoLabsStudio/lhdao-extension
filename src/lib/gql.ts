@@ -1,5 +1,6 @@
 import { API_ENDPOINT } from './env'
 import { localStore } from './storage'
+import { getDeviceId, maybeAttachWatermark } from './watermark'
 
 /**
  * GraphQL 错误的统一类型。区分 HTTP 层(httpStatus)与 GraphQL 层
@@ -66,21 +67,32 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
     throw new GqlError('No API token configured')
   }
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    // Apollo Server 4 csrfPrevention 校验:任意一个非 CORS-safelisted
+    // 请求头都会让 preflight 触发。我们已经因为 Authorization 触发了,
+    // 但显式加上这个让任何 Apollo 配置都能通过。anonymous 模式下也加
+    // 一个 custom header 触发 preflight(否则后端的 csrfPrevention
+    // 会 reject simple POST)。
+    'apollo-require-preflight': 'true',
+    'X-Apollo-Operation-Name': inferOperationName(query) ?? 'unknown',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+
+  // —— Watermark(抢单接口防护)————————————————————————————————
+  // 给受保护的抢单/验证 mutation 拼上 watermark 头(mint token + reserve 的
+  // PoW)。anonymous(pairing 三件套)不带 token、也不在保护名单,跳过。
+  // x-device-id 统一在这里设,保证它跟 mint 内部用的是同一个 did。
+  if (!opts?.anonymous && token) {
+    headers['x-device-id'] = await getDeviceId()
+    await maybeAttachWatermark(headers, query)
+  }
+
   let res: Response
   try {
     res = await fetch(API_ENDPOINT, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Apollo Server 4 csrfPrevention 校验:任意一个非 CORS-safelisted
-        // 请求头都会让 preflight 触发。我们已经因为 Authorization 触发了,
-        // 但显式加上这个让任何 Apollo 配置都能通过。anonymous 模式下也加
-        // 一个 custom header 触发 preflight(否则后端的 csrfPrevention
-        // 会 reject simple POST)。
-        'apollo-require-preflight': 'true',
-        'X-Apollo-Operation-Name': inferOperationName(query) ?? 'unknown',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers,
       body: JSON.stringify({ query, variables }),
     })
   } catch (e) {

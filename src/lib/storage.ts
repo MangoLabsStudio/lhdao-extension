@@ -14,6 +14,14 @@
 interface LocalSchema {
   /** 用户在 web 端创建的 plugin token (lhdao_pk_*) */
   apiToken: string | null
+  /**
+   * 稳定的设备标识 (UUID v4),首次需要时生成并持久化。
+   *
+   * 作为 watermark 的 `did` 维度:抢单/验证请求带 `x-device-id`,后端 mint +
+   * verify 时绑定它(防 token 跨设备共享)。SW 重启不丢(存 local),换浏览器
+   * 才会重生成。详见 src/lib/watermark.ts。
+   */
+  deviceId: string | null
   /** 是否同意上报错误日志 (placeholder,后续接 Sentry) */
   optInErrorReport: boolean
   /**
