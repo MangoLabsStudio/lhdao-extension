@@ -11,6 +11,8 @@ export interface GuideOverlayProps {
   errorMsg?: string
   successReward?: number
   collapsed: boolean
+  /** 项目 logo(chrome.runtime.getURL('icon/128.png')),小球用;缺省回退文字标记。 */
+  iconUrl?: string
   onReserve: () => void
   onVerify: () => void
   onDismiss: () => void
@@ -26,7 +28,11 @@ export function GuideOverlay(props: GuideOverlayProps) {
         title="灯塔任务引导"
         onClick={props.onToggleCollapse}
       >
-        🗼
+        {props.iconUrl ? (
+          <img className="lhg-ball-img" src={props.iconUrl} alt="灯塔" />
+        ) : (
+          '🗼'
+        )}
       </button>
     )
   }

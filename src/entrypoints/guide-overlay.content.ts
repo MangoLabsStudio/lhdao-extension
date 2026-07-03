@@ -19,6 +19,8 @@ export default defineContentScript({
   world: 'ISOLATED',
   runAt: 'document_end',
   main() {
+    // 项目 logo:web_accessible_resources 已含 icon/*.png(x.com/twitter.com)。
+    const ICON_URL = chrome.runtime.getURL('icon/128.png')
     let focalTweetId: string | null = null
     let task: CampaignTaskCache | null = null
     let host: HTMLElement | null = null
@@ -73,6 +75,7 @@ export default defineContentScript({
           errorMsg,
           successReward,
           collapsed,
+          iconUrl: ICON_URL,
           onReserve: doReserve,
           onVerify: doVerify,
           onDismiss: doDismiss,
