@@ -5,6 +5,7 @@
 // bridge(capture-bridge)。**不发任何网络、不持久化、不碰 chrome.*(MAIN 无此
 // API)。** 上报后端由 background 通过 isolated bridge 完成。
 // ─────────────────────────────────────────────────────────────────────────
+import { dbg } from '@/lib/capture-debug'
 import {
   type CapturedAction,
   extractCapturedAction,
@@ -18,6 +19,7 @@ export default defineContentScript({
   world: 'MAIN',
   runAt: 'document_start',
   main() {
+    dbg('capture.content 已注入 (MAIN world)')
     function opNameFrom(url?: string, body?: string): string | null {
       if (url) {
         const m = url.match(/\/graphql\/[^/]+\/([A-Za-z0-9_]+)/)
@@ -33,6 +35,7 @@ export default defineContentScript({
 
     function post(action: CapturedAction) {
       try {
+        dbg('MAIN 捕获到动作 →', action)
         window.postMessage(
           {
             __lhcap: true,

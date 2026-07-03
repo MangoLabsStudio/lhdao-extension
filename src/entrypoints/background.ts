@@ -35,6 +35,7 @@ import {
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
   type ReportEngagementCaptureResult,
 } from '@/lib/queries'
+import { dbg } from '@/lib/capture-debug'
 import {
   type CapturedAction,
   mapCaptureToCampaigns,
@@ -744,12 +745,24 @@ async function doHandleEngagementCapture(
   capturedAt: string,
 ): Promise<void> {
   try {
+    dbg('bg 收到捕获', cap.actionType, cap.tweetId ?? cap.handle)
     const token = await localStore.get('apiToken')
-    if (!token) return
+    if (!token) {
+      dbg('bg 丢弃:无 apiToken')
+      return
+    }
     const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
     const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
     const mapped = mapCaptureToCampaigns(cap, { byTweet, byAuthor })
-    if (mapped.length === 0) return
+    if (mapped.length === 0) {
+      dbg(
+        'bg 丢弃:无匹配任务(tweet 不在快照,或该任务动作类型与捕获不符)。',
+        'tweetId=', cap.tweetId,
+        '快照该推任务=', cap.tweetId ? (byTweet[cap.tweetId] ?? []).map((t) => t.actionType) : '-',
+      )
+      return
+    }
+    dbg('bg 映射到', mapped.length, '个 campaign,开始上报')
 
     const acc = (await sessionStore.get('capturedActions')) ?? {}
     for (const m of mapped) {
@@ -768,6 +781,7 @@ async function doHandleEngagementCapture(
           },
         },
       )
+      dbg('bg 上报成功', m.campaignId, merged.map((x) => x.actionType))
     }
     // 剪枝:只留仍在当前活跃任务集(byTweet + byAuthor)里的 campaign,防
     // capturedActions 无界增长(chrome.storage.session 跨 SW 重启不清)。
