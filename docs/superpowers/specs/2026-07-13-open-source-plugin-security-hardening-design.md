@@ -16,7 +16,8 @@ operation 白名单、设备签名、防重放、限流、幂等和服务端动�
 
 ## 2. 目标
 
-1. 保持现有界面、用户操作、任务状态、奖励规则和 GraphQL 业务返回不变。
+1. 保持现有正常流程的界面、用户操作、任务状态、奖励规则和 GraphQL 业务返回
+   不变；只在评论完全未捕获时增加评论 URL 证据兜底。
 2. 正常用户升级后无须重新学习流程；旧 token 在迁移期自动绑定设备。
 3. 阻止 plugin token 调用未授权的 GraphQL operation 或扩大字段选择集。
 4. 阻止篡改 variables、复制请求、跨设备复制 token 和重复执行资金 mutation。
@@ -26,7 +27,8 @@ operation 白名单、设备签名、防重放、限流、幂等和服务端动�
 
 ## 3. 非目标
 
-1. 不修改插件 UI、任务卡片、推广弹窗、配对页面或成功提示。
+1. 不修改插件正常态 UI、任务卡片、推广弹窗、配对页面或成功提示。评论完全未
+   捕获时的 URL 证据表单是唯一新增的异常态界面。
 2. 不修改任务领取额度、奖励金额、Tier、冷却期或结算规则。
 3. 不依赖代码混淆、隐藏域名、CORS origin 或客户端内置对称密钥防作弊。
 4. 不把设备签名解释成官方插件远程证明。设备签名只证明请求来自已绑定设备，
@@ -57,6 +59,10 @@ operation 白名单、设备签名、防重放、限流、幂等和服务端动�
 
 `CompleteExtensionPairing` 和 `ReserveEngagementSlot` 继续由主站使用 Cookie/JWT
 调用，不属于插件 token 接口。
+
+主站新增 `SubmitEngagementCommentEvidence(campaignId, commentUrl)`，只接受用户
+Cookie/JWT，不接受 plugin token。它只用于评论完全未捕获时提交评论 URL，并返回
+现有验证状态形态；正常插件请求不调用该 operation。
 
 ### 4.2 清理的兼容代码
 
@@ -216,7 +222,31 @@ ID。捕获对象和 proof input 增加可选 `resultTweetId`；现有 UI 和业
 
 评论 ID 暂不可见时进入重试，不回退为仅信插件正文。
 
-### 6.3 Like、RT 和 Follow
+### 6.3 评论完全未捕获的 URL 兜底
+
+当网页通过插件桥查询不到 COMMENT 捕获，或 proof 中没有可验证的
+`resultTweetId` 时，验证区不再永久卡在“未检测到动作”，而是显示一个评论 URL
+输入框。该表单只出现在异常态，不改变正常捕获流程。
+
+用户提交后，主站用 Cookie/JWT 调用
+`SubmitEngagementCommentEvidence(campaignId, commentUrl)`。后端要求当前用户持有该
+campaign 的有效预约，不允许 plugin token 调用。后端先执行以下 URL 校验：
+
+1. 只接受 `https://x.com/<handle>/status/<tweetId>` 或
+   `https://twitter.com/<handle>/status/<tweetId>`。
+2. 拒绝其他协议、域名、路径和缺失 tweet ID 的输入。
+3. 去除 query、fragment 和 `/photo/N` 等展示后缀，保存标准 URL 和 tweet ID。
+4. URL 中的 handle 只作为提示，不作为作者身份依据。
+
+随后复用 6.2 的服务端评论核验：作者必须是用户绑定的 X 账号，父推文必须是任务
+目标，正文和时间必须符合任务要求。URL 对应评论暂未被 Twitter 数据源索引时，
+任务保持验证中并自动重试；明确不匹配时返回现有验证失败状态。
+
+服务端记录评论证据的 `campaignId + participantId + userId + tweetId + source +
+status`。`source` 为 `PLUGIN_CAPTURE` 或 `USER_URL`。同一 tweet ID 只能有一个已验证
+成功的任务归属；竞争提交在事务内判定，失败证据不能抢占或锁死真实评论。
+
+### 6.4 Like、RT 和 Follow
 
 后端继续使用现有 Twitter 验证能力核对绑定账号与目标 tweet/handle。插件提供的
 目标 ID 缩小查询范围，但不替代服务端判断。
@@ -224,7 +254,7 @@ ID。捕获对象和 proof input 增加可选 `resultTweetId`；现有 UI 和业
 Twitter API 暂时不可用或数据延迟时，participant 保持验证中，按现有队列重试。
 只有得到明确不匹配结果或超过现有验证期限后，才按现有失败流程处理。
 
-### 6.4 插件权威开关
+### 6.5 插件权威开关
 
 迁移期间，`ENGAGEMENT_VERIFY_MODE` 和 `ENGAGEMENT_FOLLOW_VERIFY_MODE` 的现有
 配置仍可读取，但发奖层不允许仅凭客户端 PASS 跳过上述核验。插件 PASS 可以触发
@@ -300,6 +330,8 @@ PLUGIN_REQUEST_REPLAY
 PLUGIN_SIGNATURE_INVALID
 PLUGIN_RATE_LIMITED
 PLUGIN_IDEMPOTENCY_CONFLICT
+COMMENT_EVIDENCE_INVALID
+COMMENT_EVIDENCE_REUSED
 ```
 
 详细失败原因写入结构化安全日志。插件将这些错误映射到现有 token、网络、验证或
@@ -364,6 +396,9 @@ latencyMs
 
 - Like、RT、Follow 目标和绑定账号匹配才通过。
 - 评论作者、父推文、正文、时间或复用任一不符都不发奖。
+- 评论 URL 只接受 X/Twitter status URL，并归一化为 tweet ID。
+- 评论完全未捕获时，Cookie/JWT 用户可提交 URL；plugin token 调用被拒绝。
+- 失败 URL 证据不会占用 tweet ID；已验证评论不能被第二个任务复用。
 - Twitter 延迟进入重试，后续可成功完成并正常发奖。
 - 客户端 proof PASS 但服务端动作不匹配时拒绝。
 - 服务端数据源异常时保持验证中，不误发奖也不误判用户失败。
@@ -373,12 +408,13 @@ latencyMs
 - 插件现有 lint、typecheck、单测和 prod/beta build 全部通过。
 - 后端相关模块单测通过。
 - 13 个现有 operation 的业务响应字段和含义保持一致。
-- 配对、任务同步、动作捕获、验证、推广和复投完成端到端测试。
+- 配对、任务同步、动作捕获、评论 URL 兜底、验证、推广和复投完成端到端测试。
 
 ## 13. 发布顺序
 
 1. 后端发布 operation 清单、设备表、验证器、审计和 `audit` 模式。
-2. 发布新版插件：生成设备密钥、自动绑定、签名请求、评论 ID 捕获和幂等键。
+2. 发布新版插件和主站异常态表单：生成设备密钥、自动绑定、签名请求、评论 ID
+   捕获、评论 URL 兜底和幂等键。
 3. 观察至少一个完整发布周期，确认新版覆盖率、签名成功率和 429 水位。
 4. 对仍活跃的旧版本给出正常升级窗口；不在插件内新增业务提示。
 5. 后端切到 `enforce`。
@@ -396,6 +432,7 @@ latencyMs
 5. 重放 proof 或 spend 请求不会重复执行。
 6. 自行构造 `window.postMessage` 捕获不能绕过服务端 X 动作核验。
 7. 评论 proof 缺少可验证评论 ID 时不能仅凭正文发奖。
-8. Twitter 延迟不造成正常用户立即失败。
-9. 推广重试不会重复扣款或重复建单。
-10. `audit`、`enforce` 和 `emergency-read-only` 均有自动化测试和可观测指标。
+8. 评论完全未捕获时，用户可以提交评论 URL，并由后端完成同等强度核验。
+9. Twitter 延迟不造成正常用户立即失败。
+10. 推广重试不会重复扣款或重复建单。
+11. `audit`、`enforce` 和 `emergency-read-only` 均有自动化测试和可观测指标。
