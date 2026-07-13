@@ -52,6 +52,8 @@ interface GqlOpts {
    * 完全靠 32-char hex code 自证。
    */
   anonymous?: boolean
+  /** 花费类操作的持久化幂等键；普通读写请求不设置。 */
+  idempotencyKey?: string
 }
 
 /**
@@ -83,6 +85,9 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
     'apollo-require-preflight': 'true',
     'X-Apollo-Operation-Name': inferOperationName(query) ?? 'unknown',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(opts?.idempotencyKey
+      ? { 'x-idempotency-key': opts.idempotencyKey }
+      : {}),
   }
 
   const operation = getPluginOperationByDocument(query)

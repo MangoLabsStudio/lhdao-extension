@@ -56,6 +56,11 @@ import {
   type VerifyEngagementResult,
 } from '@/lib/queries'
 import {
+  childSpendActionKey,
+  releaseSpendActionKey,
+  spendActionKey,
+} from '@/lib/spend-idempotency'
+import {
   type ActiveCampaignSummary,
   type CampaignTaskCache,
   localStore,
@@ -682,10 +687,15 @@ async function promoteTweetHandler(req: {
       message: '请先在插件 options 配置 plugin token',
     }
   }
+  const promoteVariables: PromoteTweetVars = {
+    input: { tweetUrl: req.tweetUrl, actions: req.actions },
+  }
+  const promoteKey = spendActionKey('promote', promoteVariables)
   try {
     const data = await gql<PromoteTweetResult, PromoteTweetVars>(
       PROMOTE_TWEET_MUTATION,
-      { input: { tweetUrl: req.tweetUrl, actions: req.actions } },
+      promoteVariables,
+      { idempotencyKey: promoteKey },
     )
     const campaignIds = data.promoteTweet.map((c) => c.id)
 
@@ -697,6 +707,7 @@ async function promoteTweetHandler(req: {
           await gql<CreateAutoReinvestResult, CreateAutoReinvestVars>(
             CREATE_AUTO_REINVEST_MUTATION,
             { input: { campaignId: id, reinvestCount: req.reinvestCount } },
+            { idempotencyKey: childSpendActionKey(promoteKey, id) },
           )
         }
         reinvested = true
@@ -705,9 +716,15 @@ async function promoteTweetHandler(req: {
       }
     }
 
+    releaseSpendActionKey('promote', promoteVariables)
     void syncTasks() // 刷新余额缓存
     return { type: 'promote-result', ok: true, campaignIds, reinvested }
   } catch (e) {
+    // 收到明确 HTTP/GraphQL 响应说明本次没有“响应丢失”歧义，下次点击用新键；
+    // 网络层失败则保留原键，重试不会再次扣款。
+    if (e instanceof GqlError && e.httpStatus !== undefined) {
+      releaseSpendActionKey('promote', promoteVariables)
+    }
     const msg = e instanceof GqlError ? e.message : String(e)
     const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
     let code = 'INTERNAL'
