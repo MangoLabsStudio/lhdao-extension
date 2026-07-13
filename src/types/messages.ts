@@ -34,6 +34,9 @@ export type MsgRequest =
    * 带来的肉眼可见延迟。
    */
   | { type: 'get-tasks-snapshot' }
+  /** [网页 gate] 查某 campaign 已捕获到的动作类型(网页验证前预检:没捕获
+   *  就直接判「未检测到动作」失败,不走异步)。tweetId 作别名兜底。 */
+  | { type: 'get-captured-actions'; campaignId: string; tweetId?: string }
   /** 抢单第一步:仅占席位 (reserveEngagementSlot)。confirmCascade 让用户
    *  在收到 cascadeWarning 后点重抢时确认降档接受 */
   | { type: 'reserve-task'; campaignId: string; confirmCascade?: boolean }
@@ -59,6 +62,16 @@ export type MsgRequest =
   | { type: 'has-token' }
   /** popup 触发立即同步 — 不等 60s alarm,等 sync 跑完再返回结果 */
   | { type: 'force-sync' }
+  /**
+   * [B3] 验证成功后:新开一个任务广场标签页并切过去(不跳转当前 X 页)。
+   * 内容脚本不能直接开标签页,委托后台 chrome.tabs.create。返回 ack。
+   */
+  | { type: 'open-task-hall' }
+  /**
+   * [profile 关注卡] 验证成功后跳回 lhdao 某 campaign 详情页(任务观察界面):
+   * 复用已开的 lhdao 标签(有则聚焦并导航,无则新建)。返回 ack。
+   */
+  | { type: 'open-campaign'; campaignId: string }
   /**
    * content script 上报推文详情页停留时长 (anti-cheat 信号)。
    *
@@ -148,7 +161,14 @@ export type MsgResponse =
       type: 'tasks-snapshot'
       byTweet: Record<string, CampaignTaskCache[]>
       byAuthor: Record<string, CampaignTaskCache[]>
+      // BG 是否至少成功同步过一次(lastSyncAt != null)。冷启动尚未同步时
+      // 为 false —— 消费方据此区分「已同步但该推文无任务」(空 = 真无任务)
+      // 与「还没同步完」(空 = 不确定,应保持加载/重试),避免把冷启空快照
+      // 误判为无任务。可选字段,老消费方忽略即可,向后兼容。
+      ready?: boolean
     }
+  /** [网页 gate] 某 campaign 已捕获的动作类型列表(get-captured-actions 的响应)。 */
+  | { type: 'captured-actions'; actions: string[] }
   | { type: 'reserve-result'; ok: true; cooldownSeconds?: number }
   | {
       type: 'reserve-result'

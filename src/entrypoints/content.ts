@@ -7,14 +7,15 @@ import { createRoot, type Root } from 'react-dom/client'
 import chipCss from '@/components/chip/chip.css?inline'
 import highlightCss from '@/components/chip/highlight.css?inline'
 import { MetadataBadge } from '@/components/chip/MetadataBadge'
-import { SidebarCard } from '@/components/sidebar/SidebarCard'
-import sidebarCss from '@/components/sidebar/sidebar.css?inline'
+import { ProfileFollowCard } from '@/components/profile/ProfileFollowCard'
 import {
   PromoteButton,
   PromoteDialog,
   promoteButtonCss,
   promoteDialogCss,
 } from '@/components/promote/PromoteDialog'
+import { CurrentTaskSection } from '@/components/sidebar/CurrentTaskSection'
+import sidebarCss from '@/components/sidebar/sidebar.css?inline'
 import { initDwellTracker, onDwellUrlChange } from '@/lib/dwell-tracker'
 import { sendMessage } from '@/lib/messaging'
 import type { LighthouseMember } from '@/lib/queries'
@@ -132,14 +133,6 @@ function bootstrapSnapshot() {
     }, delay)
   }
 }
-
-/** Sidebar 卡片单例挂载状态 (Twitter 任何页面只有一个右侧 sidebar) */
-interface SidebarMountedState {
-  host: HTMLElement
-  root: Root
-  anchor: Element
-}
-let sidebarMounted: SidebarMountedState | null = null
 
 /**
  * 扩展被 reload 后, content script 跟 BG SW 的连接断了 — chrome.runtime
@@ -333,8 +326,8 @@ function scheduleScan() {
   requestAnimationFrame(() => {
     rafScheduled = false
     scanTimeline()
-    scanSidebar()
     void scanProfilePage()
+    scanProfileFollowTask()
     scanSensitive()
     scanPromoteButtons()
     void scanMemberLogos()
@@ -622,6 +615,29 @@ function mountArticle(
       state.roots.push(root)
     }
 
+    // ②.5 Inline task card — 仅焦点推文(详情页主推文)且有任务时,把完整任务卡
+    // (检测→停留→验证发奖)内联到动作栏正下方。锚在这条推文的 DOM 上:稳定、有
+    // 上下文、不占右栏、不和其它扩展/X 布局抢位(取代旧的右栏当前任务段)。随
+    // state.hosts/roots 在 unmountArticle 一并清理;focal 变化时 scanTimeline 会
+    // unmount 重挂到新焦点推文。
+    if (isFocal && tasks.length > 0) {
+      const actionRow = article.querySelector('[role="group"]')
+      if (actionRow?.parentElement) {
+        const taskHost = createShadowHost('lhdao-inline-task', 'inline')
+        taskHost.style.display = 'block'
+        taskHost.style.width = '100%'
+        taskHost.style.margin = '8px 0 4px'
+        actionRow.parentElement.insertBefore(taskHost, actionRow.nextSibling)
+        const taskRoot = renderInto(
+          taskHost,
+          createElement(CurrentTaskSection),
+          sidebarCss,
+        )
+        state.hosts.push(taskHost)
+        state.roots.push(taskRoot)
+      }
+    }
+
     // ③ Action button glow — 高亮 Twitter 原生 like/retweet/reply 按钮。
     // FOLLOW 在 ACTION_TYPE_TO_SELECTOR 是空数组,不参与 glow。
     for (const t of nonFollowTasks) {
@@ -715,7 +731,7 @@ function unmountAll() {
   }
   mounted.clear()
   inFlight.clear()
-  unmountSidebar()
+  unmountFollowCard()
   // 兜底:清理 stale 标记(article 可能已离开 DOM)+ 拖延 host(若有)
   for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
     a.removeAttribute(ARTICLE_FLAG)
@@ -726,107 +742,6 @@ function unmountAll() {
   for (const h of document.querySelectorAll('[data-lhdao-host="1"]')) {
     h.remove()
   }
-}
-
-// ── Sidebar card injection ──────────────────────────────────────────
-
-/**
- * 找 Twitter 右侧 sidebar 的"订阅 Premium"卡片(或 "Subscribe to
- * Premium"英文版),作为 anchor 插我们卡片到它**上方**。
- *
- * 探测策略(任一命中即返回):
- *   1. [data-testid="sidebarColumn"] 内含 "订阅 Premium"/"Premium"/
- *      "Subscribe" 文本的最近 section/div
- *   2. [aria-label*="Premium"] 元素 (升级 banner 自身)
- *   3. 兜底:sidebarColumn 内第一个 section
- */
-function findSidebarPremiumAnchor(): {
-  anchor: Element
-  parent: Element
-} | null {
-  const sidebar = document.querySelector('[data-testid="sidebarColumn"]')
-  if (!sidebar) return null
-
-  // 候选 1: aria-label
-  const premiumByAria = sidebar.querySelector(
-    'aside[aria-label*="Premium" i], section[aria-label*="Premium" i]',
-  )
-  if (premiumByAria?.parentElement) {
-    return { anchor: premiumByAria, parent: premiumByAria.parentElement }
-  }
-
-  // 候选 2: 找 sidebar 内含有"Premium"文本的最外层卡片块
-  // Twitter sidebar 内部结构通常是嵌套 div,卡片之间是 flex column sibling。
-  // 找文本节点再向上爬到 parent of "search box section"
-  const candidates = sidebar.querySelectorAll('section, aside, div')
-  for (const el of candidates) {
-    if (
-      el.children.length > 0 &&
-      el.parentElement &&
-      /订阅\s*Premium|Subscribe to Premium|Subscribe\s*$/i.test(
-        el.textContent?.slice(0, 100) ?? '',
-      )
-    ) {
-      // 向上找到 sidebar 下"卡片级"的容器 — 通常是 sidebar 的孙子级
-      let card: Element = el
-      while (
-        card.parentElement &&
-        card.parentElement !== sidebar &&
-        !card.parentElement.matches('[data-testid="sidebarColumn"] > div')
-      ) {
-        card = card.parentElement
-        // 不向上超过 5 层防越界
-        if (card.parentElement === sidebar) break
-      }
-      if (card.parentElement) {
-        return { anchor: card, parent: card.parentElement }
-      }
-    }
-  }
-
-  // 候选 3 (兜底):sidebar 内第一个 section
-  const firstSection = sidebar.querySelector('section')
-  if (firstSection?.parentElement) {
-    return { anchor: firstSection, parent: firstSection.parentElement }
-  }
-
-  return null
-}
-
-function scanSidebar() {
-  if (contextDead) return
-
-  // 已经挂好且 anchor 仍在 DOM → 不动
-  if (sidebarMounted?.host.isConnected && sidebarMounted?.anchor.isConnected) {
-    return
-  }
-
-  // 老 host 失效 → 拆掉
-  if (sidebarMounted && !sidebarMounted.host.isConnected) {
-    unmountSidebar()
-  }
-
-  // 找新 anchor
-  const found = findSidebarPremiumAnchor()
-  if (!found) return // sidebar 还没渲染出来,下一轮 scan 再来
-
-  const host = createShadowHost('lhdao-sidebar', 'inline')
-  host.style.display = 'block'
-  host.style.width = '100%'
-  found.parent.insertBefore(host, found.anchor)
-  const root = renderInto(host, createElement(SidebarCard), sidebarCss)
-  sidebarMounted = { host, root, anchor: found.anchor }
-}
-
-function unmountSidebar() {
-  if (!sidebarMounted) return
-  try {
-    sidebarMounted.root.unmount()
-  } catch {
-    // ignore
-  }
-  sidebarMounted.host.remove()
-  sidebarMounted = null
 }
 
 // ── shadow DOM helpers ──────────────────────────────────────────────
@@ -976,10 +891,31 @@ function openPromoteDialog(tweetUrl: string): void {
 // BG SW 维护 LRU cache(5min TTL),content 这边不缓存。
 
 const RESERVED_TWITTER_PATHS = new Set([
-  'home', 'explore', 'notifications', 'messages', 'bookmarks', 'lists',
-  'profile', 'settings', 'login', 'logout', 'signup', 'search', 'compose',
-  'i', 'about', 'tos', 'privacy', 'jobs', 'help', 'communities', 'topics',
-  'verified-followers', 'connect_people', 'following', 'followers',
+  'home',
+  'explore',
+  'notifications',
+  'messages',
+  'bookmarks',
+  'lists',
+  'profile',
+  'settings',
+  'login',
+  'logout',
+  'signup',
+  'search',
+  'compose',
+  'i',
+  'about',
+  'tos',
+  'privacy',
+  'jobs',
+  'help',
+  'communities',
+  'topics',
+  'verified-followers',
+  'connect_people',
+  'following',
+  'followers',
 ])
 
 // ── Profile page badge ──────────────────────────────────────────────
@@ -1036,7 +972,7 @@ async function scanProfilePage(): Promise<void> {
 
   // 找 bio anchor
   const bio = document.querySelector('[data-testid="UserDescription"]')
-  if (!bio || !bio.parentElement) {
+  if (!bio?.parentElement) {
     // bio 可能还没渲染,下次 rAF 再试
     return
   }
@@ -1055,6 +991,111 @@ function extractProfileHandleFromUrl(pathname: string): string | null {
   const handle = m[1].toLowerCase()
   if (RESERVED_TWITTER_PATHS.has(handle)) return null
   return handle
+}
+
+// ── [profile 关注任务卡] 被关注目标的主页:高亮原生「关注」按钮 + 注入任务卡 ──
+let followCardState: {
+  host: HTMLElement
+  root: Root
+  handle: string
+} | null = null
+let glowedFollowBtn: Element | null = null
+
+/** 找 profile 头部的原生「关注」按钮(testid 以 -follow 结尾;已关注是 -unfollow)。
+ *  限定在 primaryColumn 内,避开「谁值得关注」侧栏。 */
+function findFollowButton(): HTMLElement | null {
+  const scope =
+    document.querySelector('[data-testid="primaryColumn"]') ?? document
+  return (
+    scope.querySelector<HTMLElement>('[data-testid$="-follow"]') ??
+    scope.querySelector<HTMLElement>('button[aria-label^="Follow @"]') ??
+    scope.querySelector<HTMLElement>('button[aria-label^="关注 @"]')
+  )
+}
+
+/** 给关注按钮贴 glow 属性(CSS 在 highlight.css);换按钮/消失时清旧的。 */
+function glowFollowButton(): boolean {
+  const btn = findFollowButton()
+  if (glowedFollowBtn && glowedFollowBtn !== btn) {
+    glowedFollowBtn.removeAttribute('data-lhdao-follow-glow')
+    glowedFollowBtn = null
+  }
+  if (btn && !btn.hasAttribute('data-lhdao-follow-glow')) {
+    btn.setAttribute('data-lhdao-follow-glow', '1')
+    glowedFollowBtn = btn
+  }
+  return !!btn
+}
+
+function unmountFollowCard(): void {
+  if (glowedFollowBtn) {
+    glowedFollowBtn.removeAttribute('data-lhdao-follow-glow')
+    glowedFollowBtn = null
+  }
+  if (followCardState) {
+    try {
+      followCardState.root.unmount()
+    } catch {
+      // ignore
+    }
+    followCardState.host.remove()
+    followCardState = null
+  }
+  document.querySelectorAll('[data-lhdao-follow-card]').forEach((el) => {
+    el.remove()
+  })
+}
+
+function scanProfileFollowTask(): void {
+  if (contextDead) return
+  const handle = extractProfileHandleFromUrl(location.pathname)
+  const followTask =
+    handle && tasksSnapshot
+      ? (tasksSnapshot.byAuthor[handle] ?? []).find(
+          (t) => t.actionType === 'FOLLOW',
+        )
+      : undefined
+
+  // 不是 profile 页 / 该主页无关注任务 / 换了目标 → 清理旧卡
+  if (!handle || !followTask) {
+    unmountFollowCard()
+    return
+  }
+  if (followCardState && followCardState.handle !== handle) {
+    unmountFollowCard()
+  }
+
+  // 每次 scan 都兜底高亮(X 会重渲染按钮)
+  const btnPresent = glowFollowButton()
+
+  // 已挂且卡还在 DOM 里 → 不重复挂
+  if (followCardState?.host.isConnected) return
+  // 状态残留但节点被 X 重渲染冲掉 → 卸载后重挂
+  if (followCardState) unmountFollowCard()
+
+  // 锚点:UserName 区块(profile 头部,始终存在);未渲染则下轮 rAF 再试
+  const anchor = document.querySelector('[data-testid="UserName"]')
+  if (!anchor?.parentElement) return
+  if (document.querySelector('[data-lhdao-follow-card]')) return
+
+  const host = createShadowHost('lhdao-follow-card', 'inline-block')
+  host.style.display = 'block'
+  host.style.width = '100%'
+  host.setAttribute('data-lhdao-follow-card', '1')
+  anchor.parentElement.insertBefore(host, anchor.nextSibling)
+  const root = renderInto(
+    host,
+    createElement(ProfileFollowCard, {
+      campaignId: followTask.campaignId,
+      targetHandle: handle,
+      reward: followTask.expectedReward,
+      reserved: followTask.reserved === true,
+      followButtonPresent: btnPresent,
+    }),
+    // 隔离页面 CSS 继承(font/color 等),但保 block 让卡片占满宽度
+    ':host{all:initial;display:block}',
+  )
+  followCardState = { host, root, handle }
 }
 
 function attachProfileBadge(bioEl: Element, member: LighthouseMember): void {

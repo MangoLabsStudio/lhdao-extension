@@ -86,8 +86,7 @@ export function App() {
   }, [readData])
 
   const openOptions = () => chrome.runtime.openOptionsPage()
-  const openWeb = () =>
-    chrome.tabs.create({ url: `${WEB_ENDPOINT}/campaigns` })
+  const openWeb = () => chrome.tabs.create({ url: `${WEB_ENDPOINT}/campaigns` })
 
   const startPair = React.useCallback(async () => {
     const r = await sendMessage({ type: 'start-pairing' })
@@ -128,7 +127,13 @@ export function App() {
 
 // ── ① Header ─────────────────────────────────────────────────────────
 
-function Header({ connected, hasData }: { connected: boolean; hasData: boolean }) {
+function Header({
+  connected,
+  hasData,
+}: {
+  connected: boolean
+  hasData: boolean
+}) {
   return (
     <header className="flex items-center gap-2.5 border-b border-slate-200/70 px-4 pt-3.5 pb-3 dark:border-slate-800">
       <BrandPlate />
@@ -182,10 +187,7 @@ function ConnectedBlock({
   return (
     <>
       <IdentityRow profile={data.profile} />
-      <TokenRow
-        masked={data.tokenMasked ?? '—'}
-        onManage={onOpenOptions}
-      />
+      <TokenRow masked={data.tokenMasked ?? '—'} onManage={onOpenOptions} />
       <StatsSplit
         balance={data.profile?.newLux ?? null}
         today={data.profile?.todayEarnings ?? null}
@@ -464,8 +466,8 @@ function SignInBlock({
           等待主站授权…
         </p>
         <p className="mx-auto mt-1.5 max-w-[240px] text-[11.5px] leading-relaxed text-slate-500 dark:text-slate-400">
-          已打开授权页。在那里点 <span className="font-semibold">Allow</span> 后,
-          插件会自动接管。
+          已打开授权页。在那里点 <span className="font-semibold">Allow</span>{' '}
+          后, 插件会自动接管。
         </p>
         <CountdownBar startedAt={pairing.startedAt} />
         <button
@@ -484,7 +486,17 @@ function SignInBlock({
     return (
       <div className="px-4 py-5 text-center">
         <div className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
             <title>connected</title>
             <path d="M5 12l5 5L20 7" />
           </svg>
@@ -500,7 +512,11 @@ function SignInBlock({
   }
 
   // Timeout / error / cancelled — 短暂提示 + 重试按钮
-  if (pairing.kind === 'timeout' || pairing.kind === 'error' || pairing.kind === 'cancelled') {
+  if (
+    pairing.kind === 'timeout' ||
+    pairing.kind === 'error' ||
+    pairing.kind === 'cancelled'
+  ) {
     const reason =
       pairing.kind === 'timeout'
         ? '授权超时(60 秒未完成)'
@@ -510,7 +526,15 @@ function SignInBlock({
     return (
       <div className="px-4 py-5 text-center">
         <div className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-full bg-rose-50 text-rose-500 dark:bg-rose-950/40 dark:text-rose-400">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden
+          >
             <title>error</title>
             <path d="M12 8v5" strokeLinecap="round" />
             <circle cx="12" cy="16.5" r="0.6" fill="currentColor" />
@@ -552,7 +576,17 @@ function SignInBlock({
         className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-teal-600 to-cyan-500 px-4 py-2 text-[13px] font-bold text-white shadow-[0_1px_0_rgba(255,255,255,0.3)_inset,0_4px_10px_-2px_rgba(13,148,136,0.4)] transition hover:brightness-105"
       >
         立即登录
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
           <title>arrow</title>
           <path d="M5 12h14M13 6l6 6-6 6" />
         </svg>
@@ -594,9 +628,24 @@ function CountdownBar({ startedAt }: { startedAt: number }) {
 
 function Spinner() {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden className="animate-spin text-teal-600 dark:text-teal-400">
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      aria-hidden
+      className="animate-spin text-teal-600 dark:text-teal-400"
+    >
       <title>loading</title>
-      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2.5" strokeDasharray="40 18" strokeLinecap="round" />
+      <circle
+        cx="12"
+        cy="12"
+        r="9"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeDasharray="40 18"
+        strokeLinecap="round"
+      />
     </svg>
   )
 }

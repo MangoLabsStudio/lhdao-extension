@@ -1,3 +1,9 @@
+import { dbg } from '@/lib/capture-debug'
+import {
+  type CapturedAction,
+  mapCaptureToCampaigns,
+  mergeAction,
+} from '@/lib/engagement-capture'
 import {
   SYNC_INTERVAL_SECONDS,
   VERIFY_RETRY_DELAY_MS,
@@ -6,12 +12,20 @@ import {
 import { GqlError, gql } from '@/lib/gql'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
+  buildProofCanonical,
+  hmacSignProof,
+  randomProofNonce,
+} from '@/lib/proof'
+import {
   AVAILABLE_ENGAGEMENTS_QUERY,
   AVAILABLE_TWEETS_QUERY,
   type AvailableEngagementsResult,
   type AvailableTweet,
   type AvailableTweetsResult,
+  CREATE_AUTO_REINVEST_MUTATION,
   CREATE_EXTENSION_PAIRING_MUTATION,
+  type CreateAutoReinvestResult,
+  type CreateAutoReinvestVars,
   type CreateExtensionPairingResult,
   type EngagementActionType,
   LIGHTHOUSE_MEMBERS_QUERY,
@@ -19,32 +33,30 @@ import {
   type LighthouseMembersResult,
   ME_QUERY,
   type MeResult,
+  MINT_ENGAGEMENT_TICKET_MUTATION,
+  type MintEngagementTicketResult,
+  MY_RESERVED_ENGAGEMENTS_QUERY,
+  type MyReservedEngagementsResult,
   POLL_EXTENSION_PAIRING_QUERY,
   type PollExtensionPairingResult,
-  RECORD_TWEET_DWELL_MUTATION,
-  RESERVE_SLOT_MUTATION,
-  type ReserveSlotResult,
-  VERIFY_ENGAGEMENT_MUTATION,
-  type VerifyEngagementResult,
   PROMOTE_TWEET_MUTATION,
   type PromoteTweetResult,
   type PromoteTweetVars,
-  CREATE_AUTO_REINVEST_MUTATION,
-  type CreateAutoReinvestResult,
-  type CreateAutoReinvestVars,
+  RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
+  RESERVE_SLOT_MUTATION,
   type ReportEngagementCaptureResult,
+  type ReserveSlotResult,
+  SUBMIT_ENGAGEMENT_PROOF_MUTATION,
+  type SubmitEngagementProofResult,
+  VERIFY_ENGAGEMENT_MUTATION,
+  type VerifyEngagementResult,
 } from '@/lib/queries'
-import { dbg } from '@/lib/capture-debug'
-import {
-  type CapturedAction,
-  mapCaptureToCampaigns,
-  mergeAction,
-} from '@/lib/engagement-capture'
 import {
   type ActiveCampaignSummary,
   type CampaignTaskCache,
   localStore,
+  type RawCapturedAction,
   sessionStore,
   type TweetCampaignSummary,
   type UserProfile,
@@ -57,6 +69,8 @@ import type {
 } from '@/types/messages'
 
 const ALARM_NAME = 'lhdao-sync'
+const RAW_CAPTURE_TTL_MS = 10 * 60 * 1000
+const MAX_RAW_CAPTURES = 80
 const SUPPORTED_ACTIONS = new Set<EngagementActionType>([
   'LIKE',
   'RT',
@@ -64,6 +78,13 @@ const SUPPORTED_ACTIONS = new Set<EngagementActionType>([
   'COMMENT_LIKE',
   'FOLLOW',
 ])
+
+function engagementReward(c: {
+  myExpectedReward?: number | null
+  expectedReward?: number | null
+}): number | null {
+  return c.myExpectedReward ?? c.expectedReward ?? null
+}
 
 /**
  * 把 plugin token 脱敏成 popup 展示用的形式:
@@ -114,7 +135,43 @@ export default defineBackground(() => {
       // 后 scan 直接同步查,避免 per-article RPC 串行 await 的肉眼延迟。
       const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
       const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
-      return { type: 'tasks-snapshot', byTweet, byAuthor }
+      // ready = 是否至少同步成功过一次。消费方(CurrentTaskSection)用它区分
+      // 「冷启未同步的空快照」与「已同步的真·无任务」,避免把前者误判成后者。
+      const ready = (await sessionStore.get('lastSyncAt')) != null
+      return { type: 'tasks-snapshot', byTweet, byAuthor, ready }
+    }
+    if (req.type === 'get-captured-actions') {
+      // [网页 gate] 返回某 campaign 已捕获的动作类型。网页验证前预检:没捕获就
+      // 直接判「未检测到动作」失败,不走异步乐观提交。tweetId 作别名兜底(捕获
+      // 可能挂在另一 campaign 键上,按推文 id 扫一遍)。
+      const cap = (await sessionStore.get('capturedActions')) ?? {}
+      const types = new Set<string>()
+      for (const a of cap[req.campaignId] ?? []) types.add(a.actionType)
+      if (req.tweetId) {
+        for (const acts of Object.values(cap)) {
+          for (const a of acts) {
+            if (a.tweetId === req.tweetId) types.add(a.actionType)
+          }
+        }
+      }
+      const pending = await getRawCapturedActions()
+      if (pending.length > 0) {
+        const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
+        const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
+        for (const raw of pending) {
+          const mapped = mapCaptureToCampaigns(raw, { byTweet, byAuthor })
+          if (mapped.some((m) => m.campaignId === req.campaignId)) {
+            types.add(raw.actionType)
+            continue
+          }
+          // 如果任务快照仍然慢半拍,网页 gate 至少能通过同 tweetId 的
+          // tweet-level 动作预检;真正发奖仍会在 proof/worker 层按 campaign 校验。
+          if (req.tweetId && raw.tweetId === req.tweetId) {
+            types.add(raw.actionType)
+          }
+        }
+      }
+      return { type: 'captured-actions', actions: Array.from(types) }
     }
     if (req.type === 'submit-task') {
       return submitTask(req.campaignId)
@@ -193,6 +250,22 @@ export default defineBackground(() => {
           (await sessionStore.get('lastSyncHttpStatus')) ?? null,
       }
     }
+    if (req.type === 'open-task-hall') {
+      // [B3] 验证成功后去任务广场:先查已开的本站标签页——
+      //   已在任务广场(/campaigns)→ 直接聚焦(不 reload);
+      //   有本站其它页 → 复用该标签,聚焦并导航到 /campaigns;
+      //   都没有 → 才新建标签。避免每次验证都堆一个新标签。
+      // URL 由后台自算(不接收 content 传入的任意 url)。查标签 URL 依赖
+      // WEB_ENDPOINT 的 host_permission(见 wxt.config)。
+      await openTaskHall()
+      return { type: 'ack' }
+    }
+    if (req.type === 'open-campaign') {
+      // [profile 关注卡] 验证成功后跳该 campaign 详情页(任务观察界面)。同
+      // openTaskHall 的复用逻辑,只是 URL 带上 campaignId。
+      await openCampaignDetail(req.campaignId)
+      return { type: 'ack' }
+    }
     if (req.type === 'force-sync') {
       // popup "刷新" 按钮的入口 — 等 sync 跑完再 return,UI 可以即时
       // 看到错误或最新计数,不用等下一个 60s alarm。
@@ -270,21 +343,34 @@ async function syncTasks(): Promise<void> {
     return
   }
 
-  // 三个 query 并行拉,allSettled 让部分失败不阻塞其他成功的结果。
-  // engagements → chip 高亮用;tweets → sidebar 列表用;me → sidebar 个人面板用。
-  const [engRes, tweetsRes, meRes] = await Promise.allSettled([
+  // 并行拉,allSettled 让部分失败不阻塞其他成功的结果。
+  // engagements(可参与)+ reserved(我已预约)→ chip / 卡片当前任务;
+  // tweets → sidebar 列表;me → sidebar 个人面板。
+  // reserved 是关键:预约后该单会从 availableEngagements 消失,但卡片"当前任务"
+  // 段需要它(打开推文=已预约)。两者合并进 tasksByTweetId。
+  const [engRes, reservedRes, tweetsRes, meRes] = await Promise.allSettled([
     gql<AvailableEngagementsResult>(AVAILABLE_ENGAGEMENTS_QUERY),
+    gql<MyReservedEngagementsResult>(MY_RESERVED_ENGAGEMENTS_QUERY),
     gql<AvailableTweetsResult>(AVAILABLE_TWEETS_QUERY),
     gql<MeResult>(ME_QUERY),
   ])
 
-  // —— engagement → chip / activeCampaigns ——
+  // —— engagement(available + 我已预约)→ chip / card / activeCampaigns ——
   if (engRes.status === 'fulfilled') {
-    const data = engRes.value
-    const { byTweet, byAuthor } = flattenTasks(data.availableEngagements)
-    const activeCampaigns = buildActiveCampaignSummaries(
-      data.availableEngagements,
-    )
+    const available = engRes.value.availableEngagements
+    const reserved =
+      reservedRes.status === 'fulfilled'
+        ? reservedRes.value.myReservedEngagements
+        : []
+    if (reservedRes.status !== 'fulfilled') {
+      console.warn('[lhdao] myReservedEngagements failed', reservedRes.reason)
+    }
+    const merged = [...available, ...reserved]
+    // 已预约的 campaignId 集合 → flattenTasks 标进 task.reserved,让同推文多单时
+    // 「当前任务」优先显示用户实际预约的那个(修 NO_ACTIVE_RESERVATION)。
+    const reservedIds = new Set<string>(reserved.map((c) => c.id))
+    const { byTweet, byAuthor } = flattenTasks(merged, reservedIds)
+    const activeCampaigns = buildActiveCampaignSummaries(merged)
     await sessionStore.set('tasksByTweetId', byTweet)
     await sessionStore.set('tasksByAuthorHandle', byAuthor)
     await sessionStore.set('activeCampaigns', activeCampaigns)
@@ -334,6 +420,7 @@ async function syncTasks(): Promise<void> {
     await sessionStore.set('lastSyncAt', Date.now())
     await sessionStore.set('lastSyncError', null)
     await sessionStore.set('lastSyncHttpStatus', null)
+    queueRawCaptureReconcile()
     broadcastToContent({ type: 'tasks-updated' })
   } else {
     const reason = engRes.reason
@@ -438,7 +525,7 @@ function buildActiveCampaignSummaries(
     result.push({
       campaignId: c.id,
       rewardLux:
-        c.expectedReward ??
+        engagementReward(c) ??
         supportedActions.reduce((acc, a) => acc + a.baseReward, 0),
       actionTypes,
       tweetId,
@@ -470,6 +557,9 @@ function buildActiveCampaignSummaries(
  */
 function flattenTasks(
   engagements: AvailableEngagementsResult['availableEngagements'],
+  /** 当前用户已预约(RESERVED)的 campaignId 集合(来自 myReservedEngagements)。
+   *  标进 task.reserved,让「当前任务」在同推文多单时优先显示已预约的那个。 */
+  reservedIds: Set<string> = new Set(),
 ): {
   byTweet: Record<string, CampaignTaskCache[]>
   byAuthor: Record<string, CampaignTaskCache[]>
@@ -489,7 +579,7 @@ function flattenTasks(
     )
     if (supportedActions.length === 0) continue
 
-    const effectiveTotal = c.expectedReward
+    const effectiveTotal = engagementReward(c)
     const perAction =
       effectiveTotal != null ? effectiveTotal / supportedActions.length : null
 
@@ -509,6 +599,9 @@ function flattenTasks(
         expectedReward: perAction ?? a.baseReward,
         commentKeyword: isCommentish ? firstKeyword : null,
         targetUsername: isFollow ? targetUsername : null,
+        authorName: c.tweetAuthorName ?? null,
+        authorHandle: c.tweetAuthorHandle ?? null,
+        reserved: reservedIds.has(c.id),
       }
 
       // —— byTweet 索引 ——
@@ -725,10 +818,184 @@ async function recordDwell(
  */
 let captureChain: Promise<void> = Promise.resolve()
 
+function rawCaptureKey(cap: {
+  actionType: string
+  tweetId?: string
+  handle?: string
+  commentText?: string
+  capturedAt: string
+}): string {
+  return [
+    cap.actionType,
+    cap.tweetId ?? '',
+    cap.handle?.toLowerCase() ?? '',
+    cap.commentText ?? '',
+    cap.capturedAt,
+  ].join('|')
+}
+
+function toRawCapturedAction(
+  cap: CapturedAction,
+  capturedAt: string,
+): RawCapturedAction {
+  return {
+    actionType: cap.actionType,
+    ...(cap.tweetId ? { tweetId: cap.tweetId } : {}),
+    ...(cap.handle ? { handle: cap.handle.toLowerCase() } : {}),
+    ...(cap.commentText ? { commentText: cap.commentText } : {}),
+    capturedAt,
+    expiresAt: Date.now() + RAW_CAPTURE_TTL_MS,
+  }
+}
+
+async function getRawCapturedActions(): Promise<RawCapturedAction[]> {
+  const now = Date.now()
+  const raw = (await sessionStore.get('rawCapturedActions')) ?? []
+  const alive = raw.filter((a) => a.expiresAt > now).slice(-MAX_RAW_CAPTURES)
+  if (alive.length !== raw.length) {
+    await sessionStore.set('rawCapturedActions', alive)
+  }
+  return alive
+}
+
+async function saveRawCapturedAction(
+  cap: CapturedAction,
+  capturedAt: string,
+): Promise<RawCapturedAction> {
+  const raw = toRawCapturedAction(cap, capturedAt)
+  const pending = await getRawCapturedActions()
+  const key = rawCaptureKey(raw)
+  const next = pending.filter((a) => rawCaptureKey(a) !== key)
+  next.push(raw)
+  await sessionStore.set('rawCapturedActions', next.slice(-MAX_RAW_CAPTURES))
+  return raw
+}
+
+async function removeRawCapturedAction(raw: RawCapturedAction): Promise<void> {
+  const key = rawCaptureKey(raw)
+  const pending = await getRawCapturedActions()
+  await sessionStore.set(
+    'rawCapturedActions',
+    pending.filter((a) => rawCaptureKey(a) !== key),
+  )
+}
+
+function queueRawCaptureReconcile(): void {
+  captureChain = captureChain
+    .then(() => reconcileRawCapturedActions())
+    .catch(() => {})
+}
+
+async function reportMappedCaptures(
+  mapped: ReturnType<typeof mapCaptureToCampaigns>,
+  capturedAt: string,
+  snapshot: {
+    byTweet: Record<string, CampaignTaskCache[]>
+    byAuthor: Record<string, CampaignTaskCache[]>
+  },
+): Promise<void> {
+  if (mapped.length === 0) return
+
+  dbg('bg 映射到', mapped.length, '个 campaign,开始上报')
+  const acc = (await sessionStore.get('capturedActions')) ?? {}
+  for (const m of mapped) {
+    const next =
+      m.actionType === 'FOLLOW' && m.handle
+        ? {
+            actionType: m.actionType,
+            handle: m.handle.toLowerCase(),
+            capturedAt,
+          }
+        : m.tweetId
+          ? {
+              actionType: m.actionType,
+              tweetId: m.tweetId,
+              // COMMENT/COMMENT_LIKE 持久化评论正文,供 verifyOnly 随签名提交
+              ...(m.commentText ? { commentText: m.commentText } : {}),
+              capturedAt,
+            }
+          : { actionType: m.actionType, capturedAt }
+    const merged = mergeAction(acc[m.campaignId], next)
+    acc[m.campaignId] = merged // session 保留 commentText,供 verifyOnly 随签名提交
+    await gql<ReportEngagementCaptureResult>(
+      REPORT_ENGAGEMENT_CAPTURE_MUTATION,
+      {
+        input: {
+          campaignId: m.campaignId,
+          // 后端 CapturedActionInput 不接受每动作 commentText —— 剥掉,只发它认的
+          // 字段;评论正文走下面顶层 input.commentText(否则 GraphQL 校验整条上报被拒,
+          // 导致捕获没落库、验证提交 0 动作被拒)。
+          actions: merged.map((a) => ({
+            actionType: a.actionType,
+            ...(a.tweetId ? { tweetId: a.tweetId } : {}),
+            ...(a.handle ? { handle: a.handle } : {}),
+            capturedAt: a.capturedAt,
+          })),
+          ...(m.commentText ? { commentText: m.commentText } : {}),
+        },
+      },
+    )
+    dbg(
+      'bg 上报成功',
+      m.campaignId,
+      merged.map((x) => x.actionType),
+    )
+  }
+
+  // 剪枝:只留仍在当前活跃任务集(byTweet + byAuthor)里的 campaign,防
+  // capturedActions 无界增长(chrome.storage.session 跨 SW 重启不清)。
+  const activeIds = new Set<string>()
+  for (const tasks of Object.values(snapshot.byTweet)) {
+    for (const t of tasks) activeIds.add(t.campaignId)
+  }
+  for (const tasks of Object.values(snapshot.byAuthor)) {
+    for (const t of tasks) activeIds.add(t.campaignId)
+  }
+  const pruned: typeof acc = {}
+  for (const id of Object.keys(acc)) {
+    if (activeIds.has(id)) pruned[id] = acc[id]
+  }
+  await sessionStore.set('capturedActions', pruned)
+}
+
+async function reconcileRawCapturedActions(): Promise<void> {
+  const token = await localStore.get('apiToken')
+  if (!token) return
+
+  const pending = await getRawCapturedActions()
+  if (pending.length === 0) return
+
+  const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
+  const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
+  const keep: RawCapturedAction[] = []
+  let replayed = 0
+
+  for (const raw of pending) {
+    const mapped = mapCaptureToCampaigns(raw, { byTweet, byAuthor })
+    if (mapped.length === 0) {
+      keep.push(raw)
+      continue
+    }
+    try {
+      await reportMappedCaptures(mapped, raw.capturedAt, { byTweet, byAuthor })
+      replayed += 1
+    } catch (e) {
+      console.warn('[lhdao] replay raw engagement capture failed', e)
+      keep.push(raw)
+    }
+  }
+
+  if (replayed > 0) {
+    dbg('bg 重放原始捕获成功', replayed, '条')
+  }
+  await sessionStore.set('rawCapturedActions', keep.slice(-MAX_RAW_CAPTURES))
+}
+
 /**
  * [shadow 捕获] 把插件捕获到的一个互动动作映射到命中的 campaign 并上报后端。
- * 无 token → 静默(同 dwell);该 tweet 无匹配任务 → 不上报。多动作累积上报
- * (session capturedActions),避免后端 latest-wins 覆盖漏判。fire-and-forget,串行。
+ * 无 token → 静默(同 dwell);该 tweet 暂无匹配任务 → 先暂存原始动作并强制
+ * sync,等 RESERVED campaign 进入快照后重放。多动作累积上报(session
+ * capturedActions),避免后端 latest-wins 覆盖漏判。fire-and-forget,串行。
  */
 function handleEngagementCapture(
   cap: CapturedAction,
@@ -751,52 +1018,25 @@ async function doHandleEngagementCapture(
       dbg('bg 丢弃:无 apiToken')
       return
     }
+    const raw = await saveRawCapturedAction(cap, capturedAt)
     const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
     const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
     const mapped = mapCaptureToCampaigns(cap, { byTweet, byAuthor })
     if (mapped.length === 0) {
       dbg(
-        'bg 丢弃:无匹配任务(tweet 不在快照,或该任务动作类型与捕获不符)。',
-        'tweetId=', cap.tweetId,
-        '快照该推任务=', cap.tweetId ? (byTweet[cap.tweetId] ?? []).map((t) => t.actionType) : '-',
+        'bg 暂存:无匹配任务(tweet 不在快照,或该任务动作类型与捕获不符),触发同步后重放。',
+        'tweetId=',
+        cap.tweetId,
+        '快照该推任务=',
+        cap.tweetId
+          ? (byTweet[cap.tweetId] ?? []).map((t) => t.actionType)
+          : '-',
       )
+      await syncTasks()
       return
     }
-    dbg('bg 映射到', mapped.length, '个 campaign,开始上报')
-
-    const acc = (await sessionStore.get('capturedActions')) ?? {}
-    for (const m of mapped) {
-      const next = m.tweetId
-        ? { actionType: m.actionType, tweetId: m.tweetId, capturedAt }
-        : { actionType: m.actionType, capturedAt }
-      const merged = mergeAction(acc[m.campaignId], next)
-      acc[m.campaignId] = merged
-      await gql<ReportEngagementCaptureResult>(
-        REPORT_ENGAGEMENT_CAPTURE_MUTATION,
-        {
-          input: {
-            campaignId: m.campaignId,
-            actions: merged,
-            ...(m.commentText ? { commentText: m.commentText } : {}),
-          },
-        },
-      )
-      dbg('bg 上报成功', m.campaignId, merged.map((x) => x.actionType))
-    }
-    // 剪枝:只留仍在当前活跃任务集(byTweet + byAuthor)里的 campaign,防
-    // capturedActions 无界增长(chrome.storage.session 跨 SW 重启不清)。
-    const activeIds = new Set<string>()
-    for (const tasks of Object.values(byTweet)) {
-      for (const t of tasks) activeIds.add(t.campaignId)
-    }
-    for (const tasks of Object.values(byAuthor)) {
-      for (const t of tasks) activeIds.add(t.campaignId)
-    }
-    const pruned: typeof acc = {}
-    for (const id of Object.keys(acc)) {
-      if (activeIds.has(id)) pruned[id] = acc[id]
-    }
-    await sessionStore.set('capturedActions', pruned)
+    await reportMappedCaptures(mapped, capturedAt, { byTweet, byAuthor })
+    await removeRawCapturedAction(raw)
   } catch (e) {
     console.warn('[lhdao] report engagement capture failed', e)
   }
@@ -881,34 +1121,165 @@ async function reserveOnly(
 }
 
 /**
- * 只调 verifyEngagement (1 次 5s 重试)。前提是用户已经 reserve 过且
- * 已经去 Twitter 完成动作。返回 actualReward。
+ * [B3] 插件专用验证:mint 票据 → 组装捕获证明(actions + nonce + ts + HMAC 签名)
+ * → submitEngagementProof。取代对 plugin token 403 的 verifyEngagement。
+ *
+ * 前提:用户已在**网页**预约该 campaign(mint 要求 RESERVED)且已去 Twitter 做动作。
+ * 发奖仍在后端 worker(Phase3 Twitter 权威 / Phase4 插件权威),故 submit 只回
+ * accepted/status,不返 reward —— UI 显"已提交,发放中",余额由 syncTasks 稍后刷新。
  */
 async function verifyOnly(campaignId: string): Promise<MsgResponse> {
-  for (let i = 0; i < 2; i++) {
-    try {
-      const data = await gql<VerifyEngagementResult>(
-        VERIFY_ENGAGEMENT_MUTATION,
-        { campaignId },
-      )
-      const reward = Number(data.verifyEngagement?.actualReward ?? 0)
-      void syncTasks()
-      return { type: 'verify-result', ok: true, reward }
-    } catch (e) {
-      if (i === 1) {
-        const msg = e instanceof Error ? e.message : String(e)
-        const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
-        const { code, message } = verifyErrorCode(msg, httpStatus)
-        return { type: 'verify-result', ok: false, code, message }
+  try {
+    // 验证前先尝试把短缓存里的原始捕获重放一次,避免"刚完成动作但
+    // capturedActions 还没落 campaignId"时提交空 proof。
+    queueRawCaptureReconcile()
+    await captureChain
+
+    // 1) mint 票据(要求已 RESERVED;返回 ticket + 一次性 macKey)
+    const mint = await gql<MintEngagementTicketResult>(
+      MINT_ENGAGEMENT_TICKET_MUTATION,
+      { campaignId },
+    )
+    const { ticket, macKey } = mint.mintEngagementTicket
+
+    // 2) 该 campaign 已捕获的动作(session 累积,来自 __lhcap)
+    const capMap = (await sessionStore.get('capturedActions')) ?? {}
+    const actions = (capMap[campaignId] ?? []).map((a) => ({
+      actionType: a.actionType,
+      tweetId: a.tweetId,
+      handle: a.handle, // FOLLOW 被关注 handle,后端 recordCapture + canonical 需要
+      capturedAt: a.capturedAt,
+    }))
+    if (actions.length === 0) {
+      return {
+        type: 'verify-result',
+        ok: false,
+        code: 'ACTION_NOT_DETECTED',
+        message:
+          '插件还没有检测到你的动作。请确认 X 页面已完成点赞/转发/评论/关注,等待几秒或点击插件刷新后再验证。',
       }
-      await sleep(VERIFY_RETRY_DELAY_MS)
     }
+    // 评论正文:取本 campaign 捕获里第一个带 commentText 的动作。随签名提交,后端
+    // 插件权威路径落库 / auto-title 才拿得到(否则发奖后评论正文丢失)。commentText
+    // 也进 canonical(sha256),故两端必须一致带上。
+    const commentText = (capMap[campaignId] ?? []).find(
+      (a) => a.commentText,
+    )?.commentText
+
+    // 3) 组装证明 + 签名(canonical 与后端逐字节一致)
+    const ts = Math.floor(Date.now() / 1000)
+    const nonce = randomProofNonce()
+    const canonical = await buildProofCanonical({
+      campaignId,
+      ts,
+      nonce,
+      actions: actions.map((a) => ({
+        actionType: a.actionType,
+        tweetId: a.tweetId ?? null,
+        handle: a.handle ?? null,
+      })),
+      commentText,
+    })
+    const sig = await hmacSignProof(macKey, canonical)
+
+    // 4) 提交证明(commentText 随签名一并提交,后端 recordCapture 落库供权威路径读)
+    const res = await gql<SubmitEngagementProofResult>(
+      SUBMIT_ENGAGEMENT_PROOF_MUTATION,
+      {
+        input: {
+          campaignId,
+          ticket,
+          sig,
+          nonce,
+          ts,
+          actions,
+          ...(commentText ? { commentText } : {}),
+        },
+      },
+    )
+    const r = res.submitEngagementProof
+    if (r.accepted) {
+      void syncTasks()
+      // reward 异步发放,submit 不返金额 → reward:0,UI 回退显示预期奖励/发放中。
+      return { type: 'verify-result', ok: true, reward: 0 }
+    }
+    const { code, message } = verifyErrorCode(
+      r.reason ?? r.status ?? 'VERIFY_FAILED',
+      undefined,
+    )
+    return { type: 'verify-result', ok: false, code, message }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
+    const { code, message } = verifyErrorCode(msg, httpStatus)
+    return { type: 'verify-result', ok: false, code, message }
   }
-  return {
-    type: 'verify-result',
-    ok: false,
-    code: 'INTERNAL',
-    message: 'unreachable',
+}
+
+/**
+ * [B3] 去任务广场:优先复用已开的本站标签页,避免每次验证堆新标签。
+ *   - 已在 /campaigns → 只聚焦(不 reload)
+ *   - 有本站其它页 → 复用该标签,聚焦并导航到 /campaigns
+ *   - 都没有 → 新建标签
+ * 任何查询/聚焦失败一律兜底为直接新建。查标签 URL 依赖 WEB_ENDPOINT 的
+ * host_permission(见 wxt.config)。
+ */
+async function openTaskHall(): Promise<void> {
+  const origin = new URL(WEB_ENDPOINT).origin
+  const url = `${WEB_ENDPOINT}/campaigns`
+  try {
+    const tabs = await chrome.tabs.query({ url: `${origin}/*` })
+    const onHall = tabs.find(
+      (t) => t.id != null && (t.url ?? '').startsWith(url),
+    )
+    const target = onHall ?? tabs.find((t) => t.id != null)
+    if (target?.id != null) {
+      await chrome.tabs.update(
+        target.id,
+        onHall ? { active: true } : { active: true, url },
+      )
+      if (target.windowId != null) {
+        await chrome.windows.update(target.windowId, { focused: true })
+      }
+      return
+    }
+  } catch {
+    // 查询/聚焦失败 → 落到新建
+  }
+  try {
+    await chrome.tabs.create({ url, active: true })
+  } catch {
+    // ignore — 开标签失败不影响主流程
+  }
+}
+
+/** 跳该 campaign 详情页(任务观察界面)。复用 openTaskHall 的「复用已开标签」逻辑。 */
+async function openCampaignDetail(campaignId: string): Promise<void> {
+  const origin = new URL(WEB_ENDPOINT).origin
+  const url = `${WEB_ENDPOINT}/campaigns/${encodeURIComponent(campaignId)}`
+  try {
+    const tabs = await chrome.tabs.query({ url: `${origin}/*` })
+    const onDetail = tabs.find(
+      (t) => t.id != null && (t.url ?? '').startsWith(url),
+    )
+    const target = onDetail ?? tabs.find((t) => t.id != null)
+    if (target?.id != null) {
+      await chrome.tabs.update(
+        target.id,
+        onDetail ? { active: true } : { active: true, url },
+      )
+      if (target.windowId != null) {
+        await chrome.windows.update(target.windowId, { focused: true })
+      }
+      return
+    }
+  } catch {
+    // 查询/聚焦失败 → 落到新建
+  }
+  try {
+    await chrome.tabs.create({ url, active: true })
+  } catch {
+    // ignore
   }
 }
 

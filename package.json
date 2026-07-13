@@ -1,6 +1,6 @@
 {
   "name": "lhdao-extension",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Lighthouse browser extension — highlight engagement tasks on X timeline + 1-click claim",
   "private": true,
   "type": "module",

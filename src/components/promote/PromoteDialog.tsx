@@ -112,26 +112,47 @@ function CheckIcon() {
 function ActionGlyph({ kind }: { kind: PromoteAction }) {
   if (kind === 'LIKE') {
     return (
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
-        stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-        strokeLinejoin="round" aria-hidden="true">
+      <svg
+        viewBox="0 0 24 24"
+        width="15"
+        height="15"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
         <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
       </svg>
     )
   }
   if (kind === 'RT') {
     return (
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"
-        aria-hidden="true">
+      <svg
+        viewBox="0 0 24 24"
+        width="15"
+        height="15"
+        fill="currentColor"
+        aria-hidden="true"
+      >
         <path d="M4.5 3.88l4.43 4.14-1.36 1.46L5.5 7.55V16c0 .55.45 1 1 1H13v2H6.5c-1.65 0-3-1.35-3-3V7.55L1.43 9.48.07 8.02 4.5 3.88zM16 7h-6V5h6.5c1.65 0 3 1.35 3 3v8.45l2.07-1.93 1.36 1.46L18.5 20.12l-4.43-4.14 1.36-1.46L17.5 16.45V8c0-.55-.45-1-1-1z" />
       </svg>
     )
   }
   // COMMENT
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
-      stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-      strokeLinejoin="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
     </svg>
   )
@@ -181,7 +202,9 @@ export function PromoteDialog({
 
   const totalSlots = ALL_TIERS.reduce((s, t) => s + (slots[t] ?? 0), 0)
   const perAction = actions.map((a) => ({ a, cost: actionCost(a, slots) }))
-  const belowMin = perAction.filter((p) => p.cost > 0 && p.cost < MIN_PER_ACTION)
+  const belowMin = perAction.filter(
+    (p) => p.cost > 0 && p.cost < MIN_PER_ACTION,
+  )
   const rewardSum = perAction.reduce((s, p) => s + p.cost, 0)
   const totalCost = rewardSum * (1 + FEE_RATE)
   const overBudget = balance != null && totalCost > balance
@@ -226,10 +249,21 @@ export function PromoteDialog({
   }
 
   return (
-    <div className="lh-overlay" onClick={onClose}>
-      <div className="lh-modal" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="lh-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="lh-promote-title"
+    >
+      <button
+        type="button"
+        className="lh-overlay-dismiss"
+        aria-label="关闭推广窗口"
+        onClick={onClose}
+      />
+      <div className="lh-modal">
         <div className="lh-head">
-          <span className="lh-title">
+          <span id="lh-promote-title" className="lh-title">
             <RocketIcon />
             一键推广这条推文
           </span>
@@ -306,18 +340,24 @@ export function PromoteDialog({
                   value={reinvestCount}
                   onChange={(e) =>
                     setReinvestCount(
-                      Math.max(1, Math.trunc(Number(e.currentTarget.value)) || 1),
+                      Math.max(
+                        1,
+                        Math.trunc(Number(e.currentTarget.value)) || 1,
+                      ),
                     )
                   }
                 />
               )}
             </label>
             {reinvest && (
-              <div className="lh-fine">作者发新推文时自动复投 {reinvestCount} 次</div>
+              <div className="lh-fine">
+                作者发新推文时自动复投 {reinvestCount} 次
+              </div>
             )}
 
             <div className="lh-est">
-              预估总花费 <b>~{totalCost.toFixed(1)}</b> LUX(含 {FEE_PCT}% 手续费)
+              预估总花费 <b>~{totalCost.toFixed(1)}</b> LUX(含 {FEE_PCT}%
+              手续费)
               {balance != null && (
                 <span className="lh-bal"> · 余额 {balance.toFixed(1)}</span>
               )}
@@ -387,12 +427,16 @@ export const promoteDialogCss = `
   @keyframes lh-pop { from { transform: translateY(10px) scale(.97); opacity: 0 } to { transform: none; opacity: 1 } }
   .lh-overlay {
     position: fixed; inset: 0; z-index: 2147483647;
-    background: rgba(8,12,18,0.64);
-    -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
     display: flex; align-items: center; justify-content: center;
     animation: lh-fade .15s ease;
   }
+  .lh-overlay-dismiss {
+    position: absolute; inset: 0; width: 100%; height: 100%; padding: 0;
+    border: 0; background: rgba(8,12,18,0.64); cursor: default;
+    -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  }
   .lh-modal {
+    position: relative;
     width: 374px; max-width: calc(100vw - 32px); max-height: calc(100vh - 48px); overflow-y: auto;
     background: linear-gradient(180deg, #141d27 0%, #0c131b 100%);
     color: #e6ecf3;

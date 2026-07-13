@@ -22,11 +22,45 @@ export const CAPTURE_OPS = [
   'FavoriteTweet',
   'CreateRetweet',
   'CreateTweet',
+  // 长评论 / X Premium 用户发评论走 CreateNoteTweet(不是 CreateTweet)。
+  // 不覆盖它 → 这类评论捕获不到 → 验证判 COMMENT 未完成、不发奖。
+  'CreateNoteTweet',
 ] as const
+
+/**
+ * 有界深度搜索:在对象任意层级找到 keys 里第一个「标量值」的键,返回其 String。
+ * 用于 X 在不同入口/版本把 in_reply_to_tweet_id / tweet_id 嵌在不同路径时不漏。
+ * 深度上限防环 + 防超大 payload 卡顿。
+ */
+function deepFindScalar(
+  obj: unknown,
+  keys: readonly string[],
+  depth = 0,
+): string | undefined {
+  if (!obj || typeof obj !== 'object' || depth > 6) return undefined
+  const rec = obj as Record<string, unknown>
+  for (const k of keys) {
+    const v = rec[k]
+    if ((typeof v === 'string' || typeof v === 'number') && String(v)) {
+      return String(v)
+    }
+  }
+  for (const v of Object.values(rec)) {
+    if (v && typeof v === 'object') {
+      const found = deepFindScalar(v, keys, depth + 1)
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
+const REPLY_ID_KEYS = ['in_reply_to_tweet_id', 'in_reply_to_status_id'] as const
 
 /**
  * 从 X mutation 的请求体抽取一个互动动作(LIKE/RT/COMMENT)。返回 null = 不是
  * 我们关心的动作(未知 op / 原创推文而非评论 / 缺 tweet_id / body 解析失败)。
+ * 健壮性:tweet_id / in_reply_to 都先走显式路径、再有界深查兜底,X 改嵌套也不漏;
+ * 但「无 reply id = 原创推文」严格返回 null,绝不把原创误判成评论。
  */
 export function extractCapturedAction(
   op: string | null | undefined,
@@ -42,18 +76,34 @@ export function extractCapturedAction(
   }
 
   if (op === 'FavoriteTweet') {
-    const tweetId = variables.tweet_id
+    const tweetId =
+      variables.tweet_id ?? deepFindScalar(variables, ['tweet_id'])
     return tweetId ? { actionType: 'LIKE', tweetId: String(tweetId) } : null
   }
   if (op === 'CreateRetweet') {
-    const tweetId = variables.tweet_id
+    const tweetId =
+      variables.tweet_id ?? deepFindScalar(variables, ['tweet_id'])
     return tweetId ? { actionType: 'RT', tweetId: String(tweetId) } : null
   }
-  if (op === 'CreateTweet') {
+  if (op === 'CreateTweet' || op === 'CreateNoteTweet') {
     // 评论 = 带 in_reply_to;原创推文没有 → 不是任务动作,忽略。
-    const inReplyTo = variables.reply?.in_reply_to_tweet_id
+    // CreateNoteTweet(长评论 / X Premium)与 CreateTweet reply 结构一致;X 在不同
+    // 入口(详情页内联框 / 弹窗 / 引用)可能把 reply 嵌在不同路径,故先走显式常见
+    // 路径,再有界深查该键 —— 只要 variables 里任何层级有 in_reply_to 就判评论,
+    // X 改结构也不漏;深查找不到 = 真原创,返回 null 不误判。
+    const inReplyTo =
+      variables.reply?.in_reply_to_tweet_id ??
+      variables.note_tweet?.reply?.in_reply_to_tweet_id ??
+      deepFindScalar(variables, REPLY_ID_KEYS)
     if (!inReplyTo) return null
-    const text = variables.tweet_text ?? variables.text ?? undefined
+    const text =
+      (typeof variables.tweet_text === 'string'
+        ? variables.tweet_text
+        : undefined) ??
+      variables.note_tweet?.text ??
+      variables.note_tweet?.tweet_text ??
+      (typeof variables.text === 'string' ? variables.text : undefined) ??
+      deepFindScalar(variables, ['tweet_text', 'text'])
     return {
       actionType: 'COMMENT',
       tweetId: String(inReplyTo),
@@ -150,6 +200,11 @@ export interface ReportedAction {
   actionType: string
   /** FOLLOW 无 tweetId(按 handle 匹配),故可选。 */
   tweetId?: string
+  /** FOLLOW 被关注 handle(无 @,小写)。绑进签名 + 供后端权威验关注。 */
+  handle?: string
+  /** COMMENT/COMMENT_LIKE 的评论正文。持久化到 session,verifyOnly 随签名提交带上,
+   *  供插件权威路径落库 / auto-title(否则发奖后评论正文丢失)。 */
+  commentText?: string
   capturedAt: string
 }
 

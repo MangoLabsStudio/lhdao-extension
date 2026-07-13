@@ -1,8 +1,8 @@
 import * as React from 'react'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
-import { ME_QUERY, type MeResult } from '@/lib/queries'
 import { sendMessage } from '@/lib/messaging'
+import { ME_QUERY, type MeResult } from '@/lib/queries'
 import { localStore } from '@/lib/storage'
 import type { PairingState } from '@/types/messages'
 
@@ -616,7 +616,15 @@ function PrimaryPairCard({
       <section className="mt-8 rounded-2xl border border-rose-200 bg-rose-50 p-6 dark:border-rose-900/40 dark:bg-rose-950/30">
         <div className="flex items-center gap-3">
           <span className="grid h-10 w-10 place-items-center rounded-full bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden
+            >
               <title>error</title>
               <path d="M12 8v5" strokeLinecap="round" />
               <circle cx="12" cy="16.5" r="0.6" fill="currentColor" />
@@ -663,7 +671,17 @@ function PrimaryPairCard({
         className="mt-5 inline-flex items-center gap-2 rounded-lg bg-gradient-to-br from-teal-600 to-cyan-500 px-5 py-2.5 text-[13.5px] font-bold text-white shadow-[0_1px_0_rgba(255,255,255,0.3)_inset,0_4px_10px_-2px_rgba(13,148,136,0.4)] transition hover:brightness-105"
       >
         立即登录
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
           <title>arrow</title>
           <path d="M5 12h14M13 6l6 6-6 6" />
         </svg>
@@ -779,7 +797,11 @@ function SensitiveToggleCard() {
               d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
               strokeLinejoin="round"
             />
-            <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d="M9 12l2 2 4-4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </div>
         <div className="min-w-0 flex-1">

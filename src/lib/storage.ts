@@ -59,8 +59,23 @@ interface SessionSchema {
    */
   capturedActions: Record<
     string,
-    { actionType: string; tweetId?: string; capturedAt: string }[]
+    {
+      actionType: string
+      tweetId?: string
+      handle?: string
+      commentText?: string
+      capturedAt: string
+    }[]
   >
+  /**
+   * [shadow 捕获] 原始动作短暂暂存区。
+   *
+   * 用户在网页刚预约成功后马上去 X 完成动作时,background 里的任务快照可能
+   * 还没同步到那条 RESERVED campaign。旧逻辑在这种情况下会因为"无匹配任务"
+   * 直接丢弃动作,导致后续验证永远卡在"未检测到动作"。这里先把原始动作存
+   * 10 分钟,等 syncTasks 拉到最新任务快照后再重放映射。
+   */
+  rawCapturedActions: RawCapturedAction[]
   /** 上次 background SW 拉取任务的时间戳 (ms since epoch) */
   lastSyncAt: number
   /** 上次同步的错误信息;成功时为 null */
@@ -91,6 +106,15 @@ export interface UserProfile {
   newLux: number | null
   /** 今日新增 newLux — sidebar 小字显示 */
   todayEarnings: number | null
+}
+
+export interface RawCapturedAction {
+  actionType: 'LIKE' | 'RT' | 'COMMENT' | 'FOLLOW'
+  tweetId?: string
+  handle?: string
+  commentText?: string
+  capturedAt: string
+  expiresAt: number
 }
 
 /** Sidebar v2 列表行数据 — TWEET 类型 campaign 精简摘要 */
@@ -155,6 +179,20 @@ export interface CampaignTaskCache {
   commentKeyword?: string | null
   /** FOLLOW 任务的目标账户 handle(小写)。non-FOLLOW 为 null */
   targetUsername?: string | null
+  /**
+   * 目标推文作者显示名(availableEngagements.tweetAuthorName)。
+   * sidebar「当前任务」段的标题用,可能 null(hourly cron 未抓到)。
+   */
+  authorName?: string | null
+  /** 目标推文作者 handle(无 @)。sidebar「当前任务」段副标题 fallback。可能 null。 */
+  authorHandle?: string | null
+  /**
+   * 该 campaign 是否是当前用户**已预约(RESERVED)**的(来自 myReservedEngagements)。
+   * 同一推文挂多个 campaign(评论/转发/点赞各一单)时,「当前任务」必须优先显示
+   * 已预约的那个 —— 否则会显示奖励最高的可参与单,验证时用错 campaignId 触发
+   * NO_ACTIVE_RESERVATION(用户预约了评论、卡片却显示转发)。
+   */
+  reserved?: boolean
 }
 
 // ── Stores ────────────────────────────────────────────────────────────

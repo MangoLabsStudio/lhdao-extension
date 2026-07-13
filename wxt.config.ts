@@ -14,13 +14,16 @@ import { defineConfig } from 'wxt'
 // host_permissions 必须跟 API_ENDPOINT 一致 — 否则 fetch 被 CSP 拦,sync
 // 静默失败。这里从 API_ENDPOINT origin 自动派生,避免手动维护两份配置漂移。
 //
-// WEB_ENDPOINT 不需要 host_permission(只 navigation,不 fetch),所以不算
-// 进列表 — 维持 "least permission" 原则,Web Store 审核也更顺。
+// WEB_ENDPOINT 现在需要 host_permission:验证成功后要"检测已开的任务广场标签页,
+// 有就聚焦、没有才新建"——chrome.tabs.query({url}) 读标签 URL 必须有对应域名的
+// host 权限(否则 tab.url 被抹掉,查不到)。只加自己的 web 域,维持最小权限。
+// (beta 构建自动是 app.lhdaobeta.top,prod 是 app.lhdao.top。)
 const API_ENDPOINT =
   process.env.WXT_API_ENDPOINT ?? 'https://service.lhdao.top/graphql'
 const WEB_ENDPOINT = process.env.WXT_WEB_ENDPOINT ?? 'https://app.lhdao.top'
 
 const API_HOST_PATTERN = `${new URL(API_ENDPOINT).origin}/*`
+const WEB_HOST_PATTERN = `${new URL(WEB_ENDPOINT).origin}/*`
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -37,6 +40,7 @@ export default defineConfig({
       'https://x.com/*',
       'https://twitter.com/*',
       API_HOST_PATTERN,
+      WEB_HOST_PATTERN,
     ],
     action: {
       default_title: 'Lighthouse',

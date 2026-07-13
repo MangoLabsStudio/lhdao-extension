@@ -39,8 +39,81 @@ describe('extractCapturedAction', () => {
       extractCapturedAction('CreateTweet', body({ tweet_text: 'hello' })),
     ).toBeNull()
   })
+  it('CreateNoteTweet(长评论/Premium)带 in_reply_to → COMMENT + 正文', () => {
+    expect(
+      extractCapturedAction(
+        'CreateNoteTweet',
+        body({
+          reply: { in_reply_to_tweet_id: '789' },
+          tweet_text: '长评论...',
+        }),
+      ),
+    ).toEqual({
+      actionType: 'COMMENT',
+      tweetId: '789',
+      commentText: '长评论...',
+    })
+  })
+  it('CreateNoteTweet 结构变体:reply/正文嵌在 note_tweet 下 → 仍能抽出', () => {
+    expect(
+      extractCapturedAction(
+        'CreateNoteTweet',
+        body({
+          note_tweet: {
+            reply: { in_reply_to_tweet_id: '999' },
+            text: 'gm long',
+          },
+        }),
+      ),
+    ).toEqual({ actionType: 'COMMENT', tweetId: '999', commentText: 'gm long' })
+  })
+  it('CreateNoteTweet 原创(无 in_reply_to)→ null', () => {
+    expect(
+      extractCapturedAction('CreateNoteTweet', body({ tweet_text: 'hi' })),
+    ).toBeNull()
+  })
   it('FavoriteTweet 缺 tweet_id → null', () => {
     expect(extractCapturedAction('FavoriteTweet', body({}))).toBeNull()
+  })
+  it('CreateTweet:in_reply_to 深埋在别的路径 → 深查兜底仍判 COMMENT', () => {
+    expect(
+      extractCapturedAction(
+        'CreateTweet',
+        body({ tweet: { reply: { in_reply_to_tweet_id: '555' } }, text: 'hi' }),
+      ),
+    ).toEqual({ actionType: 'COMMENT', tweetId: '555', commentText: 'hi' })
+  })
+  it('CreateTweet:顶层扁平 in_reply_to_tweet_id → COMMENT', () => {
+    expect(
+      extractCapturedAction(
+        'CreateTweet',
+        body({ in_reply_to_tweet_id: 777, tweet_text: 'gm' }),
+      ),
+    ).toEqual({ actionType: 'COMMENT', tweetId: '777', commentText: 'gm' })
+  })
+  it('CreateTweet:老键名 in_reply_to_status_id → COMMENT', () => {
+    expect(
+      extractCapturedAction(
+        'CreateTweet',
+        body({ reply: { in_reply_to_status_id: '888' }, tweet_text: 'ok' }),
+      ),
+    ).toEqual({ actionType: 'COMMENT', tweetId: '888', commentText: 'ok' })
+  })
+  it('CreateTweet:任何层级都没 reply id(真原创)→ 仍 null,不误判', () => {
+    expect(
+      extractCapturedAction(
+        'CreateTweet',
+        body({ tweet: { text: 'brand new', extra: { a: 1 } } }),
+      ),
+    ).toBeNull()
+  })
+  it('FavoriteTweet:tweet_id 嵌在深层 → 深查兜底仍判 LIKE', () => {
+    expect(
+      extractCapturedAction(
+        'FavoriteTweet',
+        body({ input: { tweet_id: '42' } }),
+      ),
+    ).toEqual({ actionType: 'LIKE', tweetId: '42' })
   })
   it('未知 op / 无 body / 坏 JSON → null', () => {
     expect(
@@ -63,15 +136,22 @@ describe('extractFollowFromResponse', () => {
   })
   it('非 friendships/create URL → null', () => {
     expect(
-      extractFollowFromResponse('https://x.com/i/api/1.1/friendships/destroy.json', {
-        screen_name: 'bob',
-      }),
+      extractFollowFromResponse(
+        'https://x.com/i/api/1.1/friendships/destroy.json',
+        {
+          screen_name: 'bob',
+        },
+      ),
     ).toBeNull()
-    expect(extractFollowFromResponse(undefined, { screen_name: 'bob' })).toBeNull()
+    expect(
+      extractFollowFromResponse(undefined, { screen_name: 'bob' }),
+    ).toBeNull()
   })
   it('响应无 screen_name → null', () => {
     expect(
-      extractFollowFromResponse('/i/api/1.1/friendships/create.json', { id: 1 }),
+      extractFollowFromResponse('/i/api/1.1/friendships/create.json', {
+        id: 1,
+      }),
     ).toBeNull()
     expect(
       extractFollowFromResponse('/i/api/1.1/friendships/create.json', null),
@@ -132,7 +212,10 @@ describe('mapCaptureToCampaigns', () => {
   })
   it('FOLLOW 走 byAuthor(handle 大小写不敏感)', () => {
     expect(
-      mapCaptureToCampaigns({ actionType: 'FOLLOW', handle: 'AliceKOL' }, snapshot),
+      mapCaptureToCampaigns(
+        { actionType: 'FOLLOW', handle: 'AliceKOL' },
+        snapshot,
+      ),
     ).toEqual([{ campaignId: 'cF', actionType: 'FOLLOW', handle: 'AliceKOL' }])
   })
   it('无匹配 / 缺 tweetId 或 handle → 空', () => {
@@ -140,9 +223,14 @@ describe('mapCaptureToCampaigns', () => {
       mapCaptureToCampaigns({ actionType: 'RT', tweetId: 't2' }, snapshot),
     ).toEqual([])
     expect(mapCaptureToCampaigns({ actionType: 'LIKE' }, snapshot)).toEqual([])
-    expect(mapCaptureToCampaigns({ actionType: 'FOLLOW' }, snapshot)).toEqual([])
+    expect(mapCaptureToCampaigns({ actionType: 'FOLLOW' }, snapshot)).toEqual(
+      [],
+    )
     expect(
-      mapCaptureToCampaigns({ actionType: 'FOLLOW', handle: 'nobody' }, snapshot),
+      mapCaptureToCampaigns(
+        { actionType: 'FOLLOW', handle: 'nobody' },
+        snapshot,
+      ),
     ).toEqual([])
   })
 })
