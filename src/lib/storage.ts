@@ -68,6 +68,7 @@ interface SessionSchema {
       tweetId?: string
       handle?: string
       commentText?: string
+      resultTweetId?: string
       capturedAt: string
     }[]
   >
@@ -117,6 +118,7 @@ export interface RawCapturedAction {
   tweetId?: string
   handle?: string
   commentText?: string
+  resultTweetId?: string
   capturedAt: string
   expiresAt: number
 }

@@ -15,6 +15,8 @@ export interface CapturedAction {
   handle?: string
   /** 仅 COMMENT 带:发布的评论正文(用于后续评论审计 / 交付)。 */
   commentText?: string
+  /** COMMENT: X 成功响应返回的新回复 tweet id。 */
+  resultTweetId?: string
 }
 
 /** 我们关心的 X GraphQL op(看请求体即可判定动作,无需读响应)。 */
@@ -113,6 +115,26 @@ export function extractCapturedAction(
   return null
 }
 
+export function extractCreatedCommentTweetId(
+  op: string | null | undefined,
+  responseJson: unknown,
+): string | null {
+  if (op !== 'CreateTweet' && op !== 'CreateNoteTweet') return null
+  const data = asRecord(asRecord(responseJson).data)
+  const roots =
+    op === 'CreateTweet'
+      ? [data.create_tweet]
+      : [data.notetweet_create, data.create_note_tweet, data.create_tweet]
+  for (const root of roots) {
+    const result = asRecord(asRecord(root).tweet_results).result
+    const direct = scalarId(asRecord(result).rest_id)
+    if (direct) return direct
+    const nested = scalarId(asRecord(asRecord(result).tweet).rest_id)
+    if (nested) return nested
+  }
+  return null
+}
+
 /**
  * FOLLOW:REST `/1.1/friendships/create.json` 的**响应体**就是被关注的用户对象
  * (v1.1 顶层带 screen_name)→ 直接拿 handle,无需 user_id→handle 反查。
@@ -162,6 +184,7 @@ export interface MappedReport {
   tweetId?: string
   handle?: string
   commentText?: string
+  resultTweetId?: string
 }
 
 /**
@@ -192,6 +215,7 @@ export function mapCaptureToCampaigns(
       actionType: cap.actionType,
       tweetId: cap.tweetId,
       ...(cap.commentText ? { commentText: cap.commentText } : {}),
+      ...(cap.resultTweetId ? { resultTweetId: cap.resultTweetId } : {}),
     }))
 }
 
@@ -205,7 +229,18 @@ export interface ReportedAction {
   /** COMMENT/COMMENT_LIKE 的评论正文。持久化到 session,verifyOnly 随签名提交带上,
    *  供插件权威路径落库 / auto-title(否则发奖后评论正文丢失)。 */
   commentText?: string
+  resultTweetId?: string
   capturedAt: string
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function scalarId(value: unknown): string | null {
+  return typeof value === 'string' && /^\d+$/u.test(value) ? value : null
 }
 
 /**

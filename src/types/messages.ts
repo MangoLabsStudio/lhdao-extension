@@ -98,6 +98,7 @@ export type MsgRequest =
       tweetId?: string
       handle?: string
       commentText?: string
+      resultTweetId?: string
       capturedAt: string
     }
   /** [legacy] sidebar 卡片询问当前可抢 ENGAGEMENT campaign 列表 */

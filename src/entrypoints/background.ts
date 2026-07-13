@@ -848,6 +848,7 @@ function rawCaptureKey(cap: {
   tweetId?: string
   handle?: string
   commentText?: string
+  resultTweetId?: string
   capturedAt: string
 }): string {
   return [
@@ -855,6 +856,7 @@ function rawCaptureKey(cap: {
     cap.tweetId ?? '',
     cap.handle?.toLowerCase() ?? '',
     cap.commentText ?? '',
+    cap.resultTweetId ?? '',
     cap.capturedAt,
   ].join('|')
 }
@@ -868,6 +870,7 @@ function toRawCapturedAction(
     ...(cap.tweetId ? { tweetId: cap.tweetId } : {}),
     ...(cap.handle ? { handle: cap.handle.toLowerCase() } : {}),
     ...(cap.commentText ? { commentText: cap.commentText } : {}),
+    ...(cap.resultTweetId ? { resultTweetId: cap.resultTweetId } : {}),
     capturedAt,
     expiresAt: Date.now() + RAW_CAPTURE_TTL_MS,
   }
@@ -937,6 +940,7 @@ async function reportMappedCaptures(
               tweetId: m.tweetId,
               // COMMENT/COMMENT_LIKE 持久化评论正文,供 verifyOnly 随签名提交
               ...(m.commentText ? { commentText: m.commentText } : {}),
+              ...(m.resultTweetId ? { resultTweetId: m.resultTweetId } : {}),
               capturedAt,
             }
           : { actionType: m.actionType, capturedAt }
@@ -954,6 +958,7 @@ async function reportMappedCaptures(
             actionType: a.actionType,
             ...(a.tweetId ? { tweetId: a.tweetId } : {}),
             ...(a.handle ? { handle: a.handle } : {}),
+            ...(a.resultTweetId ? { resultTweetId: a.resultTweetId } : {}),
             capturedAt: a.capturedAt,
           })),
           ...(m.commentText ? { commentText: m.commentText } : {}),
@@ -1173,6 +1178,7 @@ async function verifyOnly(campaignId: string): Promise<MsgResponse> {
       actionType: a.actionType,
       tweetId: a.tweetId,
       handle: a.handle, // FOLLOW 被关注 handle,后端 recordCapture + canonical 需要
+      resultTweetId: a.resultTweetId,
       capturedAt: a.capturedAt,
     }))
     if (actions.length === 0) {
@@ -1202,6 +1208,7 @@ async function verifyOnly(campaignId: string): Promise<MsgResponse> {
         actionType: a.actionType,
         tweetId: a.tweetId ?? null,
         handle: a.handle ?? null,
+        resultTweetId: a.resultTweetId ?? null,
       })),
       commentText,
     })

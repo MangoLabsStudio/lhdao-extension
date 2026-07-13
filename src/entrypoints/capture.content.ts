@@ -10,6 +10,7 @@ import {
   CAPTURE_OPS,
   type CapturedAction,
   extractCapturedAction,
+  extractCreatedCommentTweetId,
   extractFollowFromResponse,
 } from '@/lib/engagement-capture'
 
@@ -86,11 +87,16 @@ export default defineContentScript({
 
     // LIKE/RT/COMMENT:看请求体即可判定。相关 op 却抽不出动作 → 打诊断日志
     // (beta 才输出),便于定位「评论了没捕获」到底断在哪一步。
-    const emitAction = (url: string, body: string | undefined): void => {
+    const emitAction = (
+      url: string,
+      body: string | undefined,
+      responseJson?: unknown,
+    ): void => {
       const op = opFromUrl(url)
       const action = extractCapturedAction(op, body)
       if (action) {
-        post(action)
+        const resultTweetId = extractCreatedCommentTweetId(op, responseJson)
+        post(resultTweetId ? { ...action, resultTweetId } : action)
         return
       }
       if (op && CAPTURE_OP_SET.has(op)) {
@@ -131,7 +137,11 @@ export default defineContentScript({
         p.then(async (res) => {
           if (!res.ok) return
           const body = bodyP ? await bodyP : undefined
-          emitAction(url, body)
+          const responseJson = await res
+            .clone()
+            .json()
+            .catch(() => undefined)
+          emitAction(url, body, responseJson)
           if (FOLLOW_RE.test(url)) {
             res
               .clone()
@@ -163,7 +173,11 @@ export default defineContentScript({
               if (self.status < 200 || self.status >= 300) return
               const body = await bodyP
               if (!url) return
-              emitAction(url, body)
+              let responseJson: unknown
+              try {
+                responseJson = JSON.parse(self.responseText)
+              } catch {}
+              emitAction(url, body, responseJson)
               if (FOLLOW_RE.test(url)) {
                 emitFollow(url, JSON.parse(self.responseText))
               }

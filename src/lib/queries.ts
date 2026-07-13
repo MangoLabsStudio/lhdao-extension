@@ -340,6 +340,7 @@ export interface ReportEngagementCaptureVars {
       actionType: string
       tweetId?: string
       handle?: string
+      resultTweetId?: string
       capturedAt?: string
     }[]
     commentText?: string

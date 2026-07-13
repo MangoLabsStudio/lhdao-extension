@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   actionMatchesTask,
   extractCapturedAction,
+  extractCreatedCommentTweetId,
   extractFollowFromResponse,
   mapCaptureToCampaigns,
   mergeAction,
@@ -122,6 +123,38 @@ describe('extractCapturedAction', () => {
     expect(extractCapturedAction('FavoriteTweet', undefined)).toBeNull()
     expect(extractCapturedAction(null, body({ tweet_id: '1' }))).toBeNull()
     expect(extractCapturedAction('FavoriteTweet', 'not-json')).toBeNull()
+  })
+})
+
+describe('extractCreatedCommentTweetId', () => {
+  it('extracts CreateTweet response rest_id', () => {
+    expect(
+      extractCreatedCommentTweetId('CreateTweet', {
+        data: {
+          create_tweet: { tweet_results: { result: { rest_id: '19001' } } },
+        },
+      }),
+    ).toBe('19001')
+  })
+
+  it('extracts CreateNoteTweet response variants', () => {
+    expect(
+      extractCreatedCommentTweetId('CreateNoteTweet', {
+        data: {
+          notetweet_create: {
+            tweet_results: { result: { tweet: { rest_id: '19002' } } },
+          },
+        },
+      }),
+    ).toBe('19002')
+  })
+
+  it('does not infer a result ID from unrelated response fields', () => {
+    expect(
+      extractCreatedCommentTweetId('CreateTweet', {
+        data: { target_tweet: { rest_id: 'parent-id' } },
+      }),
+    ).toBeNull()
   })
 })
 

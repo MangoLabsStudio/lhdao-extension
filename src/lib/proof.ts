@@ -13,6 +13,8 @@ export interface ProofAction {
   tweetId?: string | null
   /** FOLLOW 的被关注 handle(无 @,小写)。绑进 canonical 让后端权威验「关注了谁」。 */
   handle?: string | null
+  /** COMMENT 成功响应里的新回复 tweet ID。存在时一并绑入 HMAC。 */
+  resultTweetId?: string | null
 }
 
 function b64urlToBytes(s: string): Uint8Array {
@@ -59,7 +61,10 @@ export async function buildProofCanonical(args: {
   // 动作段:非 FOLLOW 用 tweetId;FOLLOW 无 tweetId,用被关注 handle —— 把
   // 「关注了谁」也绑进签名。必须与后端 proof-canonical.ts 逐字节一致。
   const actionsPart = (args.actions ?? [])
-    .map((a) => `${a.actionType}:${a.tweetId ?? a.handle ?? ''}`)
+    .map((a) => {
+      const base = `${a.actionType}:${a.tweetId ?? a.handle ?? ''}`
+      return a.resultTweetId ? `${base}>${a.resultTweetId}` : base
+    })
     .sort()
     .join(',')
   const commentHash = await sha256hex(args.commentText ?? '')

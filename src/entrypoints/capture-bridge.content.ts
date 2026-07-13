@@ -35,6 +35,8 @@ export default defineContentScript({
         handle,
         commentText:
           typeof a.commentText === 'string' ? a.commentText : undefined,
+        resultTweetId:
+          typeof a.resultTweetId === 'string' ? a.resultTweetId : undefined,
         capturedAt:
           typeof a.capturedAt === 'string'
             ? a.capturedAt
