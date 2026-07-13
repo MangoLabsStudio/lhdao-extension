@@ -11,6 +11,7 @@ import {
   WEB_ENDPOINT,
 } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
+import { withBackoffJitter } from '@/lib/gql-backoff'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
   buildProofCanonical,
@@ -331,7 +332,18 @@ export default defineBackground(() => {
 
 // ── sync ─────────────────────────────────────────────────────────────
 
-async function syncTasks(): Promise<void> {
+let syncInFlight: Promise<void> | null = null
+let syncRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+function syncTasks(): Promise<void> {
+  if (syncInFlight) return syncInFlight
+  syncInFlight = performSyncTasks().finally(() => {
+    syncInFlight = null
+  })
+  return syncInFlight
+}
+
+async function performSyncTasks(): Promise<void> {
   const token = await localStore.get('apiToken')
   if (!token) {
     // 没 token 就清空所有缓存,避免遗留旧任务/旧余额误导
@@ -431,7 +443,18 @@ async function syncTasks(): Promise<void> {
       reason instanceof GqlError ? (reason.httpStatus ?? null) : null
     await sessionStore.set('lastSyncError', msg)
     await sessionStore.set('lastSyncHttpStatus', httpStatus)
+    if (reason instanceof GqlError && reason.retryAfterMs !== undefined) {
+      scheduleSyncRetry(reason.retryAfterMs)
+    }
   }
+}
+
+function scheduleSyncRetry(retryAfterMs: number): void {
+  if (syncRetryTimer) clearTimeout(syncRetryTimer)
+  syncRetryTimer = setTimeout(() => {
+    syncRetryTimer = null
+    void syncTasks()
+  }, withBackoffJitter(retryAfterMs))
 }
 
 /**

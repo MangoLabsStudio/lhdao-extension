@@ -1,6 +1,7 @@
 import { getOrCreateDeviceIdentity } from './device-key'
 import { ensureLegacyDeviceRegistered } from './device-registration'
 import { API_ENDPOINT } from './env'
+import { parseRetryAfterMs } from './gql-backoff'
 import { getPluginOperationByDocument } from './plugin-operations'
 import { signPluginRequest } from './request-signing'
 import { localStore } from './storage'
@@ -23,6 +24,7 @@ export class GqlError extends Error {
     msg: string,
     public readonly graphqlErrors?: GqlErrorEntry[],
     public readonly httpStatus?: number,
+    public readonly retryAfterMs?: number,
   ) {
     super(msg)
     this.name = 'GqlError'
@@ -126,6 +128,7 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
   }
 
   let json: GqlResponse<TResult> | null = null
+  const retryAfterMs = parseRetryAfterMs(res.headers.get('Retry-After'))
   if (bodyText) {
     try {
       json = JSON.parse(bodyText) as GqlResponse<TResult>
@@ -153,13 +156,18 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
       }
     }
     const head = code ? `${code}: ${message}` : message
-    throw new GqlError(head + detailStr, json.errors, res.status)
+    throw new GqlError(head + detailStr, json.errors, res.status, retryAfterMs)
   }
 
   // 没 errors 但 HTTP 状态非 2xx → 真的是 transport 层失败
   if (!res.ok) {
     const snippet = bodyText.slice(0, 200) || '(empty body)'
-    throw new GqlError(`HTTP ${res.status}: ${snippet}`, undefined, res.status)
+    throw new GqlError(
+      `HTTP ${res.status}: ${snippet}`,
+      undefined,
+      res.status,
+      retryAfterMs,
+    )
   }
 
   if (!json || json.data === undefined) {
