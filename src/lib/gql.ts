@@ -1,4 +1,8 @@
+import { getOrCreateDeviceIdentity } from './device-key'
+import { ensureLegacyDeviceRegistered } from './device-registration'
 import { API_ENDPOINT } from './env'
+import { getPluginOperationByDocument } from './plugin-operations'
+import { signPluginRequest } from './request-signing'
 import { localStore } from './storage'
 import { getDeviceId, maybeAttachWatermark } from './watermark'
 
@@ -77,6 +81,19 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
     'apollo-require-preflight': 'true',
     'X-Apollo-Operation-Name': inferOperationName(query) ?? 'unknown',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+
+  const operation = getPluginOperationByDocument(query)
+  if (operation) {
+    const identity = await getOrCreateDeviceIdentity()
+    if (token) await ensureLegacyDeviceRegistered(token, identity)
+    const signed = await signPluginRequest({
+      operation,
+      variables: variables ?? {},
+      deviceId: identity.deviceId,
+      privateKey: identity.privateKey,
+    })
+    Object.assign(headers, signed.headers)
   }
 
   // —— Watermark(抢单接口防护)————————————————————————————————

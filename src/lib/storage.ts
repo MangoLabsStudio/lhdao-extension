@@ -24,6 +24,8 @@ interface LocalSchema {
   deviceId: string | null
   /** 配对时登记到后端的 P-256 公钥；对应私钥只保存在 IndexedDB。 */
   devicePublicKeyJwk: JsonWebKey | null
+  /** 已完成一次性旧 token 设备迁移的 token SHA-256。 */
+  deviceRegisteredTokenHash: string | null
   /** 是否同意上报错误日志 (placeholder,后续接 Sentry) */
   optInErrorReport: boolean
   /**
