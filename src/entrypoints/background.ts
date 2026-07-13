@@ -1,4 +1,5 @@
 import { dbg } from '@/lib/capture-debug'
+import { getOrCreateDeviceIdentity } from '@/lib/device-key'
 import {
   type CapturedAction,
   mapCaptureToCampaigns,
@@ -27,6 +28,7 @@ import {
   type CreateAutoReinvestResult,
   type CreateAutoReinvestVars,
   type CreateExtensionPairingResult,
+  type CreateExtensionPairingVars,
   type EngagementActionType,
   LIGHTHOUSE_MEMBERS_QUERY,
   type LighthouseMember,
@@ -1377,14 +1379,19 @@ async function startPairing(): Promise<
   }
 
   // 注册 code,极小概率冲突重试 3 次
+  const identity = await getOrCreateDeviceIdentity()
   let code = ''
   let createOk = false
   for (let i = 0; i < 3; i++) {
     code = generatePairingCode()
     try {
-      await gql<CreateExtensionPairingResult>(
+      await gql<CreateExtensionPairingResult, CreateExtensionPairingVars>(
         CREATE_EXTENSION_PAIRING_MUTATION,
-        { code },
+        {
+          code,
+          deviceId: identity.deviceId,
+          publicKeyJwk: identity.publicKeyJwk,
+        },
         { anonymous: true },
       )
       createOk = true

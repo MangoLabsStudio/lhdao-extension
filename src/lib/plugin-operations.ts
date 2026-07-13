@@ -35,7 +35,7 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'pairing.create.v1',
     'CreateExtensionPairing',
     CREATE_EXTENSION_PAIRING_MUTATION,
-    'bba5e980cbb572c0773b443ab12e14de606681dd31188e844d364930a6d8fdde',
+    '1e66a6973dc91f550e917f5bd7f32ffa8c53b84e1a86ae7208f14de06e99476f',
     'public',
   ),
   operation(

@@ -1,3 +1,4 @@
+import { getDeviceId } from './device-key'
 import { API_ENDPOINT } from './env'
 import { solvePow } from './pow'
 import {
@@ -42,16 +43,7 @@ function inferOpType(query: string): 'QUERY' | 'MUTATION' {
  * 取(或首次生成并持久化)稳定 deviceId。watermark 的 `did` 维度,reserve/verify
  * 请求与 mint 请求必须带同一个值,否则 verify 时 binding 不匹配。
  */
-export async function getDeviceId(): Promise<string> {
-  const existing = await localStore.get('deviceId')
-  if (existing) return existing
-  const created =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `ext-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
-  await localStore.set('deviceId', created)
-  return created
-}
+export { getDeviceId } from './device-key'
 
 interface MintResult {
   token: string

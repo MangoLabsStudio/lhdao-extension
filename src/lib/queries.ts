@@ -400,13 +400,19 @@ export interface LighthouseMembersResult {
 // 不调,所以不在这里。
 
 export const CREATE_EXTENSION_PAIRING_MUTATION = `
-  mutation CreateExtensionPairing($code: String!) {
-    createExtensionPairing(code: $code)
+  mutation CreateExtensionPairing($code: String!, $deviceId: String!, $publicKeyJwk: JSON!) {
+    createExtensionPairing(code: $code, deviceId: $deviceId, publicKeyJwk: $publicKeyJwk)
   }
 `
 
 export interface CreateExtensionPairingResult {
   createExtensionPairing: boolean
+}
+
+export interface CreateExtensionPairingVars {
+  code: string
+  deviceId: string
+  publicKeyJwk: JsonWebKey
 }
 
 export const POLL_EXTENSION_PAIRING_QUERY = `

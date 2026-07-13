@@ -22,6 +22,8 @@ interface LocalSchema {
    * 才会重生成。详见 src/lib/watermark.ts。
    */
   deviceId: string | null
+  /** 配对时登记到后端的 P-256 公钥；对应私钥只保存在 IndexedDB。 */
+  devicePublicKeyJwk: JsonWebKey | null
   /** 是否同意上报错误日志 (placeholder,后续接 Sentry) */
   optInErrorReport: boolean
   /**
