@@ -6,13 +6,20 @@ import {
   LIGHTHOUSE_MEMBERS_QUERY,
   ME_QUERY,
   MINT_ENGAGEMENT_TICKET_MUTATION,
+  MintProductExperienceTestTicketOperationName,
+  MintProductExperienceTicketOperationName,
   MY_RESERVED_ENGAGEMENTS_QUERY,
   POLL_EXTENSION_PAIRING_QUERY,
+  PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
   RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
   SUBMIT_ENGAGEMENT_PROOF_MUTATION,
+  SubmitProductExperienceProofOperationName,
 } from './queries'
+
+const PRODUCT_EXPERIENCE_DOCUMENT_SHA256 =
+  'f602c90062cf19a9bfaa28061fcfcde181b572ffb7af72ac99c13dd351115715'
 
 export type PluginOperationPermission =
   | 'public'
@@ -122,16 +129,46 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'a0c6556c6b608b355ef18f961fe8733e1ee59b2e89bc8c319422568a742bf855',
     'spend',
   ),
+  operation(
+    'verify.product-experience.ticket.v1',
+    MintProductExperienceTicketOperationName,
+    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+    'verify',
+  ),
+  operation(
+    'verify.product-experience.test-ticket.v1',
+    MintProductExperienceTestTicketOperationName,
+    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+    'verify',
+  ),
+  operation(
+    'verify.product-experience.proof.v1',
+    SubmitProductExperienceProofOperationName,
+    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+    'verify',
+  ),
 ]
 
-const operationsByDocument = new Map(
-  PLUGIN_OPERATIONS.map((definition) => [definition.document, definition]),
-)
+const operationsByDocument = new Map<
+  string,
+  Map<string, PluginOperationDefinition>
+>()
+for (const definition of PLUGIN_OPERATIONS) {
+  const operationsByName =
+    operationsByDocument.get(definition.document) ??
+    new Map<string, PluginOperationDefinition>()
+  operationsByName.set(definition.operationName, definition)
+  operationsByDocument.set(definition.document, operationsByName)
+}
 
 export function getPluginOperationByDocument(
   document: string,
+  operationName: string,
 ): PluginOperationDefinition | undefined {
-  return operationsByDocument.get(document)
+  return operationsByDocument.get(document)?.get(operationName)
 }
 
 function operation(

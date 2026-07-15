@@ -9,6 +9,9 @@
  * 直接 TS 编译期就报错。
  */
 
+import type { ProductExperienceTaskRef } from '../types/product-experience'
+import type { ProductExperienceSession } from './product-experience-controller'
+
 // ── Schemas ───────────────────────────────────────────────────────────
 
 interface LocalSchema {
@@ -42,6 +45,10 @@ interface LocalSchema {
 }
 
 interface SessionSchema {
+  /** Lighthouse 页面保存的脱敏产品任务引用，不含规则或凭据。 */
+  activeProductExperienceTask: ProductExperienceTaskRef
+  /** L2 当前验证会话；凭据只允许保存在 chrome.storage.session。 */
+  productExperienceSession: ProductExperienceSession
   /**
    * key = tweetId, value = 这条推文上挂着的"推文级"任务(LIKE/RT/COMMENT)。
    * content script 拿到 tweetId 时 O(1) 查询。
@@ -228,7 +235,29 @@ export const sessionStore = {
   async set<K extends keyof SessionSchema>(key: K, val: SessionSchema[K]) {
     await chrome.storage.session.set({ [key]: val })
   },
+  async remove(keys: (keyof SessionSchema)[]) {
+    await chrome.storage.session.remove(keys)
+  },
   async clear() {
     await chrome.storage.session.clear()
   },
+}
+
+const PRODUCT_EXPERIENCE_SESSION_KEYS = [
+  'activeProductExperienceTask',
+  'productExperienceSession',
+] as const satisfies readonly (keyof SessionSchema)[]
+
+export async function clearProductExperienceStorage(): Promise<void> {
+  await chrome.storage.session.remove([...PRODUCT_EXPERIENCE_SESSION_KEYS])
+}
+
+export const productExperienceStore = {
+  getTask: () => sessionStore.get('activeProductExperienceTask'),
+  setTask: (task: ProductExperienceTaskRef) =>
+    sessionStore.set('activeProductExperienceTask', task),
+  getSession: () => sessionStore.get('productExperienceSession'),
+  setSession: (session: ProductExperienceSession) =>
+    sessionStore.set('productExperienceSession', session),
+  clearProduct: clearProductExperienceStorage,
 }

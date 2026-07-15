@@ -4,6 +4,7 @@
  */
 declare const __API_ENDPOINT__: string
 declare const __WEB_ENDPOINT__: string
+declare const __WEB_MATCH_PATTERN__: string
 
 /**
  * GraphQL 端点 (compile-time inject)。
@@ -25,6 +26,9 @@ export const API_ENDPOINT: string = __API_ENDPOINT__
  * env var 应该一起切。
  */
 export const WEB_ENDPOINT: string = __WEB_ENDPOINT__
+
+/** 唯一允许注入 Lighthouse page bridge 的编译时 Web origin pattern。 */
+export const WEB_MATCH_PATTERN: string = __WEB_MATCH_PATTERN__
 
 /** 后台 alarm 拉取任务的间隔 (秒)。chrome.alarms 下限 60s;这里设 5 分钟。 */
 export const SYNC_INTERVAL_SECONDS = 300

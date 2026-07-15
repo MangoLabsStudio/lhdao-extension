@@ -62,7 +62,7 @@ describe('plugin request signing', () => {
       false,
       ['verify'],
     )
-    const operation = getPluginOperationByDocument(ME_QUERY)
+    const operation = getPluginOperationByDocument(ME_QUERY, 'Me')
 
     const signed = await signPluginRequest({
       operation: operation!,

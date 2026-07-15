@@ -11,13 +11,17 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      WXT_API_ENDPOINT: https://service.lhdao.top/graphql
+      WXT_WEB_ENDPOINT: https://app.lhdao.top
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # pnpm version 由 package.json 的 packageManager 字段决定 (pnpm@10.8.1)
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
@@ -27,26 +31,66 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      - name: Install deps
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: WXT prepare
+      - name: Require tag to match package version
+        id: package
+        shell: bash
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED_TAG="v${PACKAGE_VERSION}"
+          if [ "$GITHUB_REF_NAME" != "$EXPECTED_TAG" ]; then
+            echo "Release tag $GITHUB_REF_NAME must equal $EXPECTED_TAG" >&2
+            exit 1
+          fi
+          TAG_TYPE="$(git cat-file -t "$GITHUB_REF_NAME" 2>/dev/null || true)"
+          if [ "$TAG_TYPE" != "tag" ]; then
+            echo "Release tag $GITHUB_REF_NAME must be an annotated tag" >&2
+            exit 1
+          fi
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare WXT types
         run: pnpm run compile
 
-      - name: Build + zip (Chrome MV3)
+      - name: Test
+        run: pnpm run test
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Build and zip Chrome MV3
         run: pnpm run zip
 
-      - name: Build + zip (Firefox MV2)
-        run: pnpm run zip -- -b firefox
-        continue-on-error: true
+      - name: Build and zip Edge MV3
+        run: pnpm run zip:edge
 
-      - name: List built zips
-        run: ls -lah .output/*.zip || true
+      - name: Build and zip Firefox MV3
+        run: pnpm run zip:firefox
+
+      - name: Extract and verify final store zips
+        shell: bash
+        run: |
+          mkdir -p release/unpacked/chrome release/unpacked/edge release/unpacked/firefox
+          unzip -q ".output/lhdao-extension-${PACKAGE_VERSION}-chrome.zip" -d release/unpacked/chrome
+          unzip -q ".output/lhdao-extension-${PACKAGE_VERSION}-edge.zip" -d release/unpacked/edge
+          unzip -q ".output/lhdao-extension-${PACKAGE_VERSION}-firefox.zip" -d release/unpacked/firefox
+          node scripts/verify-product-manifests.mjs \
+            --chrome-dir release/unpacked/chrome \
+            --edge-dir release/unpacked/edge \
+            --firefox-dir release/unpacked/firefox
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           files: |
-            .output/*.zip
+            .output/lhdao-extension-${{ steps.package.outputs.version }}-chrome.zip
+            .output/lhdao-extension-${{ steps.package.outputs.version }}-edge.zip
+            .output/lhdao-extension-${{ steps.package.outputs.version }}-firefox.zip

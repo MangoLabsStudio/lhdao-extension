@@ -1,69 +1,81 @@
-# lhdao-extension
+# Lighthouse browser extension
 
-Lighthouse 浏览器插件 — 自动在 X (Twitter) timeline 上高亮可参与的
-engagement 任务,点击一键预约 + 验证 + 结算 LUX。
-
-> Browser extension that highlights Lighthouse engagement tasks on the X
-> (Twitter) timeline and lets KOLs reserve / verify / claim with one click.
-
----
+Lighthouse 浏览器扩展让用户在 X (Twitter) 上完成 engagement 任务，并在用户主动
+授权的客户网站上验证 Product Experience 任务。
 
 ## 开发
 
 ```bash
 pnpm install
-pnpm run dev          # WXT dev mode (prod endpoints,Chrome 自动加载)
-pnpm run dev:beta     # 同上,但连 lhdaobeta.top + service.lhdaobeta.top
-pnpm run dev:firefox  # Firefox 调试
+pnpm run dev
+pnpm run dev:firefox
+pnpm run test
+pnpm run typecheck
+pnpm run lint
 ```
 
-构建:
+生产构建与发布包：
 
 ```bash
-pnpm run build         # → .output/chrome-mv3/ (prod 端点)
-pnpm run build:beta    # → .output/chrome-mv3/ (beta 端点)
-pnpm run build:firefox # → .output/firefox-mv2/
-pnpm run zip           # 生成发布包 (prod)
-pnpm run zip:beta      # 生成发布包 (beta)
+pnpm run build          # .output/chrome-mv3/
+pnpm run build:edge     # .output/edge-mv3/
+pnpm run build:firefox  # .output/firefox-mv3/
+
+pnpm run zip
+pnpm run zip:edge
+pnpm run zip:firefox
+node scripts/verify-product-manifests.mjs
 ```
 
-> **注意**:plugin token 数据库 per-env 不通用 — 在 lhdaobeta 创建的
-> token 只能配合 `:beta` 构建的扩展使用,反之亦然。两个端点必须一起切,
-> 上面的 `:beta` script 已经做好这件事。
+默认端点为 `https://service.lhdao.top/graphql` 和 `https://app.lhdao.top`。生产构建拒绝 HTTP
+和 loopback 端点。本地联调必须同时使用两个 loopback 端点并显式开启 local mode：
 
-## 安装(内测)
+```bash
+WXT_LOCAL_BUILD=true \
+WXT_API_ENDPOINT=http://127.0.0.1:4000/graphql \
+WXT_WEB_ENDPOINT=http://localhost:3000 \
+pnpm run build
+```
 
-1. 下载最新 [Release](https://github.com/MangoLabsStudio/lhdao-extension/releases)
-   的 `.zip` 文件
-2. 解压到任意目录
-3. Chrome → `chrome://extensions` → 打开右上角 "开发者模式"
-4. 点击 "加载已解压的扩展程序" → 选中解压目录
+`localhost`、`127.0.0.1` 和 `[::1]` 是唯一允许的本地 host；不允许本地与生产端点混用。
 
-## 配置
+## 产品验证的权限边界
 
-1. 在 [https://lhdao.top/settings/plugin-tokens](https://lhdao.top/settings/plugin-tokens)
-   创建一个 plugin token,**复制明文(只显示一次)**
-2. 点击浏览器右上角 Lighthouse 插件图标 → "Options" → 粘贴 token
+- Manifest 只有 `storage`、`alarms`、`activeTab` 和 `scripting` 权限。
+- Manifest 不包含 `<all_urls>` 或客户网站 host permission。
+- 只有当用户打开扩展 Popup 并点击“开始验证”后，扩展才在当前标签页临时注入
+  Product Experience evaluator。
+- 跨 Origin 导航会立即进入“需要重新授权”，必须由用户再次点击；已命中的规则
+  ID 进度会保留。
+- `TEXT_CONTAINS` 只在内存中比对。Product Experience proof 不上传页面正文、DOM、
+  Cookie 或表单值。
+
+详细数据边界见 [PRIVACY.md](./PRIVACY.md)。
 
 ## 架构
 
 | 模块 | 职责 |
 |---|---|
-| `entrypoints/background.ts` | service worker,60s alarm 同步任务,所有网络请求出口 |
-| `entrypoints/content/` | 注入 X timeline,DOM 监听 + 高亮 chip |
-| `entrypoints/popup/` | 浏览器图标弹窗,显示概览 + 跳转到 web |
-| `entrypoints/options/` | token 录入 + 调试开关 |
-| `lib/` | 纯工具(tweetId 提取 / GraphQL fetcher / messaging RPC) |
-| `components/chip/` | Shadow DOM React component,timeline 上的高亮按钮 |
+| `src/entrypoints/background.ts` | MV3 service worker、任务同步、验证 controller 和网络请求 |
+| `src/entrypoints/content.ts` | X timeline 的 engagement UI |
+| `src/entrypoints/product-experience.content.ts` | 仅由 runtime injection 启动的声明式规则 evaluator |
+| `src/entrypoints/web-presence.content.ts` | Lighthouse 页面与扩展的脱敏 bridge |
+| `src/entrypoints/popup/` | 账号概览与 Product Experience 临时授权入口 |
+| `src/entrypoints/options/` | Plugin token 配置 |
+| `src/lib/` | GraphQL、storage、proof、watcher 和强类型 messaging |
 
-详细设计:[docs/plans/2026-05-10-lighthouse-extension-design.md](https://github.com/MangoLabsStudio/lhdaov3/blob/main/docs/plans/2026-05-10-lighthouse-extension-design.md)
-(主仓内部)。
+## 浏览器状态
 
-## 浏览器支持
+- Chrome / Edge：MV3 构建与发布包验证。
+- Firefox：MV3 构建与发布包验证。AMO 提交前仍需发布方确认稳定 Gecko ID 和数据
+  收集分类；当前产物不宣称 AMO-ready。
+- Safari：暂不支持。
 
-- ✅ Chromium 系(Chrome / Edge / Brave / Arc / Opera)
-- ⚠️ Firefox 实验性(MV2 build,未做主流回归)
-- ❌ Safari(暂不支持)
+## 安装与发布
+
+- 本地安装：[INSTALL.md](./INSTALL.md)
+- 人工 E2E：[docs/E2E.md](./docs/E2E.md)
+- 发布检查：[docs/PUBLISHING.md](./docs/PUBLISHING.md)
 
 ## License
 

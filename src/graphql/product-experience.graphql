@@ -1,0 +1,58 @@
+mutation MintProductExperienceTicket($campaignId: String!) {
+  mintProductExperienceTicket(campaignId: $campaignId) {
+    ticket
+    macKey
+    expiresAt
+    ruleSetVersion
+    allowedOrigins
+    completionMode
+    rules {
+      id
+      title
+      urlPattern
+      selector
+      condition {
+        type
+        expected
+        attributeName
+        minimumCount
+      }
+    }
+  }
+}
+
+mutation MintProductExperienceTestTicket($campaignId: String!) {
+  mintProductExperienceTestTicket(campaignId: $campaignId) {
+    ticket
+    macKey
+    expiresAt
+    ruleSetVersion
+    allowedOrigins
+    completionMode
+    rules {
+      id
+      title
+      urlPattern
+      selector
+      condition {
+        type
+        expected
+        attributeName
+        minimumCount
+      }
+    }
+  }
+}
+
+mutation SubmitProductExperienceProof(
+  $input: SubmitProductExperienceProofInput!
+) {
+  submitProductExperienceProof(input: $input) {
+    accepted
+    code
+    campaignId
+    configVersion
+    verificationKind
+    verifiedAt
+  }
+}

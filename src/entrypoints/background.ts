@@ -14,6 +14,13 @@ import { GqlError, gql } from '@/lib/gql'
 import { withBackoffJitter } from '@/lib/gql-backoff'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
+  controllerStateToPublicSource,
+  ProductExperienceController,
+  type ProductExperienceRuntimeSender,
+} from '@/lib/product-experience-controller'
+import { signProductExperienceProof } from '@/lib/product-experience-proof'
+import { projectPublicProductExperienceState } from '@/lib/product-experience-task-bridge'
+import {
   buildProofCanonical,
   hmacSignProof,
   randomProofNonce,
@@ -38,13 +45,21 @@ import {
   type MeResult,
   MINT_ENGAGEMENT_TICKET_MUTATION,
   type MintEngagementTicketResult,
+  MintProductExperienceTestTicketOperationName,
+  type MintProductExperienceTestTicketVariables,
+  MintProductExperienceTicketOperationName,
+  type MintProductExperienceTicketVariables,
   MY_RESERVED_ENGAGEMENTS_QUERY,
   type MyReservedEngagementsResult,
   POLL_EXTENSION_PAIRING_QUERY,
   type PollExtensionPairingResult,
+  PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
   type PromoteTweetResult,
   type PromoteTweetVars,
+  parseMintProductExperienceTestTicketResult,
+  parseMintProductExperienceTicketResult,
+  parseSubmitProductExperienceProofResult,
   RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
   RESERVE_SLOT_MUTATION,
@@ -52,18 +67,22 @@ import {
   type ReserveSlotResult,
   SUBMIT_ENGAGEMENT_PROOF_MUTATION,
   type SubmitEngagementProofResult,
+  SubmitProductExperienceProofOperationName,
+  type SubmitProductExperienceProofVariables,
   VERIFY_ENGAGEMENT_MUTATION,
   type VerifyEngagementResult,
 } from '@/lib/queries'
 import {
   childSpendActionKey,
   releaseSpendActionKey,
+  releaseSpendActionKeyAfterDefiniteFailure,
   spendActionKey,
 } from '@/lib/spend-idempotency'
 import {
   type ActiveCampaignSummary,
   type CampaignTaskCache,
   localStore,
+  productExperienceStore,
   type RawCapturedAction,
   sessionStore,
   type TweetCampaignSummary,
@@ -109,6 +128,88 @@ function maskToken(token: string): string {
   return `${prefix}••••••••${suffix}`
 }
 
+function productRuntimeSender(
+  sender: chrome.runtime.MessageSender,
+): ProductExperienceRuntimeSender {
+  let origin = sender.origin
+  if (!origin && sender.url) {
+    try {
+      origin = new URL(sender.url).origin
+    } catch {
+      origin = undefined
+    }
+  }
+  return {
+    extensionId: sender.id,
+    tabId: sender.tab?.id,
+    frameId: sender.frameId,
+    origin,
+  }
+}
+
+function createProductExperienceController(): ProductExperienceController {
+  return new ProductExperienceController({
+    storage: productExperienceStore,
+    async getActiveTab() {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      })
+      return tab?.id != null && typeof tab.url === 'string'
+        ? { id: tab.id, url: tab.url }
+        : null
+    },
+    async inject(tabId) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content-scripts/product-experience.js'],
+      })
+    },
+    async mintParticipant(campaignId) {
+      const result = await gql<unknown, MintProductExperienceTicketVariables>(
+        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+        { campaignId },
+        { operationName: MintProductExperienceTicketOperationName },
+      )
+      return parseMintProductExperienceTicketResult(result)
+        .mintProductExperienceTicket
+    },
+    async mintTest(campaignId) {
+      const result = await gql<
+        unknown,
+        MintProductExperienceTestTicketVariables
+      >(
+        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+        { campaignId },
+        { operationName: MintProductExperienceTestTicketOperationName },
+      )
+      return parseMintProductExperienceTestTicketResult(result)
+        .mintProductExperienceTestTicket
+    },
+    async submit(input: SubmitProductExperienceProofVariables) {
+      const result = await gql<unknown, SubmitProductExperienceProofVariables>(
+        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+        input,
+        { operationName: SubmitProductExperienceProofOperationName },
+      )
+      return parseSubmitProductExperienceProofResult(result)
+    },
+    now: () => Date.now(),
+    randomNonce: randomProofNonce,
+    randomSessionId: () => crypto.randomUUID(),
+    runtimeId: () => chrome.runtime.id,
+    sign: signProductExperienceProof,
+    notifyStateChanged: async () => {
+      broadcastToContent({ type: 'product-experience-state-changed' })
+      await chrome.runtime
+        .sendMessage({ type: 'product-experience-state-changed' })
+        .catch(() => {
+          // Popup and Lighthouse pages are usually closed.
+        })
+    },
+  })
+}
+
 /**
  * Background service worker.
  *
@@ -119,6 +220,19 @@ function maskToken(token: string): string {
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
+  const productExperienceController = createProductExperienceController()
+  void productExperienceController.resumePendingSubmit()
+
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    void productExperienceController.handleTabUpdated(tabId, {
+      status: changeInfo.status,
+      url: changeInfo.url ?? tab.url,
+    })
+  })
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    void productExperienceController.handleTabRemoved(tabId)
+  })
+
   // 启动立刻 sync 一次,然后每 60s
   void syncTasks()
   chrome.alarms.create(ALARM_NAME, {
@@ -128,7 +242,73 @@ export default defineBackground(() => {
     if (a.name === ALARM_NAME) void syncTasks()
   })
 
-  onMessage(async (req): Promise<MsgResponse> => {
+  onMessage(async (req, sender): Promise<MsgResponse> => {
+    if (req.type === 'save-product-experience-task') {
+      const result = await productExperienceController.saveTask(req.task)
+      if (!result.saved) {
+        return {
+          type: 'save-product-experience-task-result',
+          ok: false,
+          correlationId: req.correlationId,
+          error: 'SUBMISSION_PENDING',
+          state: result.state,
+        }
+      }
+      return {
+        type: 'save-product-experience-task-result',
+        ok: true,
+        correlationId: req.correlationId,
+        state: result.state,
+      }
+    }
+    if (req.type === 'get-product-experience-state') {
+      return {
+        type: 'product-experience-state-result',
+        state: await productExperienceController.getState(),
+      }
+    }
+    if (req.type === 'get-public-product-experience-state') {
+      const state = await productExperienceController.getState()
+      return {
+        type: 'public-product-experience-state-result',
+        correlationId: req.correlationId,
+        state: projectPublicProductExperienceState(
+          req.campaignId,
+          controllerStateToPublicSource(state),
+          chrome.runtime.getManifest().version,
+        ),
+      }
+    }
+    if (req.type === 'start-product-experience') {
+      return {
+        type: 'product-experience-state-result',
+        state: await productExperienceController.start(),
+      }
+    }
+    if (req.type === 'product-experience-bootstrap') {
+      const response = await productExperienceController.bootstrap(
+        productRuntimeSender(sender),
+      )
+      return { type: 'product-experience-bootstrap-result', ...response }
+    }
+    if (req.type === 'product-experience-ready') {
+      await productExperienceController.ready(
+        productRuntimeSender(sender),
+        req.sessionId,
+      )
+      return { type: 'product-experience-ack' }
+    }
+    if (req.type === 'product-experience-evidence') {
+      await productExperienceController.handleEvidence(
+        productRuntimeSender(sender),
+        req.sessionId,
+        req.matches,
+      )
+      return { type: 'product-experience-ack' }
+    }
+    if (req.type === 'product-experience-state-changed') {
+      return { type: 'product-experience-ack' }
+    }
     if (req.type === 'get-tasks-for-tweet') {
       const map = (await sessionStore.get('tasksByTweetId')) ?? {}
       return { type: 'tasks', tasks: map[req.tweetId] ?? [] }
@@ -720,10 +900,10 @@ async function promoteTweetHandler(req: {
     void syncTasks() // 刷新余额缓存
     return { type: 'promote-result', ok: true, campaignIds, reinvested }
   } catch (e) {
-    // 收到明确 HTTP/GraphQL 响应说明本次没有“响应丢失”歧义，下次点击用新键；
-    // 网络层失败则保留原键，重试不会再次扣款。
-    if (e instanceof GqlError && e.httpStatus !== undefined) {
-      releaseSpendActionKey('promote', promoteVariables)
+    // 只有确定性失败才换新键。5xx / internal / network / abort 可能发生在
+    // 服务端已扣款建单、但成功响应丢失之后，必须保留原键供安全重试。
+    if (e instanceof GqlError) {
+      releaseSpendActionKeyAfterDefiniteFailure('promote', promoteVariables, e)
     }
     const msg = e instanceof GqlError ? e.message : String(e)
     const httpStatus = e instanceof GqlError ? e.httpStatus : undefined

@@ -1,3 +1,10 @@
+import productExperienceGraphql from '../graphql/product-experience.graphql?raw'
+import type {
+  ProductExperienceCondition,
+  ProductExperienceTicket,
+  ProductRuleMatch,
+} from '../types/product-experience'
+
 /**
  * 灯塔 backend GraphQL queries / mutations + 对应 TS 类型。
  *
@@ -522,4 +529,312 @@ export interface CreateAutoReinvestVars {
 
 export interface CreateAutoReinvestResult {
   createAutoReinvestTask: { id: string }
+}
+
+// ── Product experience L2 ticket + proof ─────────────────────────────
+//
+// GraphQL document 的唯一来源是 product-experience.graphql。三个 operation
+// 共享同一份 raw document，调用 gql() 时通过 operationName 选择，避免 TS 与
+// contract-validation 文件出现两份可能漂移的 query。
+
+export const PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT = productExperienceGraphql
+export const MintProductExperienceTicketOperationName =
+  'MintProductExperienceTicket'
+export const MintProductExperienceTestTicketOperationName =
+  'MintProductExperienceTestTicket'
+export const SubmitProductExperienceProofOperationName =
+  'SubmitProductExperienceProof'
+
+export interface MintProductExperienceTicketVariables {
+  campaignId: string
+}
+
+export interface MintProductExperienceTestTicketVariables {
+  campaignId: string
+}
+
+export type ProductExperienceConditionWireType =
+  | 'ATTRIBUTE_EQUALS'
+  | 'COUNT_AT_LEAST'
+  | 'ELEMENT_EXISTS'
+  | 'TEXT_CONTAINS'
+
+/** GraphQL nullable output shape before fail-closed discriminated parsing. */
+export interface ProductExperienceConditionWire {
+  type: ProductExperienceConditionWireType
+  expected: string | null
+  attributeName: string | null
+  minimumCount: number | null
+}
+
+export interface MintProductExperienceTicketResult {
+  mintProductExperienceTicket: ProductExperienceTicket
+}
+
+export interface MintProductExperienceTestTicketResult {
+  mintProductExperienceTestTicket: ProductExperienceTicket
+}
+
+export interface SubmitProductExperienceProofVariables {
+  input: {
+    version: 'product-experience-v1'
+    campaignId: string
+    ticket: string
+    ruleSetVersion: number
+    nonce: string
+    ts: number
+    ruleMatches: ProductRuleMatch[]
+    sig: string
+  }
+}
+
+export type ProductVerificationKind = 'EXPERIENCE' | 'REGISTRATION'
+
+export interface SubmitProductExperienceProofResult {
+  submitProductExperienceProof: {
+    accepted: boolean
+    code: string
+    campaignId: string
+    configVersion: number | null
+    verificationKind: ProductVerificationKind
+    verifiedAt: string | null
+  }
+}
+
+const INVALID_PRODUCT_EXPERIENCE_RESPONSE =
+  'Invalid product experience GraphQL response'
+
+function invalidProductExperienceResponse(): never {
+  throw new Error(INVALID_PRODUCT_EXPERIENCE_RESPONSE)
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return invalidProductExperienceResponse()
+  }
+  return value as Record<string, unknown>
+}
+
+function requireString(record: Record<string, unknown>, key: string): string {
+  const value = record[key]
+  if (typeof value !== 'string' || value.length === 0) {
+    return invalidProductExperienceResponse()
+  }
+  return value
+}
+
+function requirePositiveInteger(
+  record: Record<string, unknown>,
+  key: string,
+): number {
+  const value = record[key]
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    return invalidProductExperienceResponse()
+  }
+  return value as number
+}
+
+function requireNullablePositiveInteger(
+  record: Record<string, unknown>,
+  key: string,
+): number | null {
+  const value = record[key]
+  if (value === null) return null
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    return invalidProductExperienceResponse()
+  }
+  return value as number
+}
+
+function requireNullableDateTime(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = record[key]
+  if (value === null) return null
+  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+    return invalidProductExperienceResponse()
+  }
+  return value
+}
+
+function requireDateTime(record: Record<string, unknown>, key: string): string {
+  const value = requireNullableDateTime(record, key)
+  if (value === null) return invalidProductExperienceResponse()
+  return value
+}
+
+function hasOnlyNullFields(
+  record: Record<string, unknown>,
+  keys: string[],
+): boolean {
+  return keys.every((key) => record[key] === null)
+}
+
+function isAllowedAttributeName(attributeName: string): boolean {
+  return (
+    attributeName === 'class' ||
+    (attributeName.startsWith('aria-') && attributeName.length > 5) ||
+    (attributeName.startsWith('data-') && attributeName.length > 5)
+  )
+}
+
+/**
+ * GraphQL input union 不存在，所以 Backend 用 enum + nullable fields 传输。
+ * 这里必须重新建立 discriminated union；任何缺字段或多余字段都拒绝。
+ */
+export function parseProductExperienceCondition(
+  value: unknown,
+): ProductExperienceCondition {
+  const condition = requireRecord(value)
+
+  switch (condition.type) {
+    case 'ELEMENT_EXISTS':
+      if (
+        !hasOnlyNullFields(condition, [
+          'expected',
+          'attributeName',
+          'minimumCount',
+        ])
+      ) {
+        return invalidProductExperienceResponse()
+      }
+      return { type: 'ELEMENT_EXISTS' }
+
+    case 'TEXT_CONTAINS': {
+      const expected = condition.expected
+      if (
+        typeof expected !== 'string' ||
+        !hasOnlyNullFields(condition, ['attributeName', 'minimumCount'])
+      ) {
+        return invalidProductExperienceResponse()
+      }
+      return { type: 'TEXT_CONTAINS', expected }
+    }
+
+    case 'ATTRIBUTE_EQUALS': {
+      const attributeName = condition.attributeName
+      const expected = condition.expected
+      if (
+        typeof attributeName !== 'string' ||
+        !isAllowedAttributeName(attributeName) ||
+        typeof expected !== 'string' ||
+        condition.minimumCount !== null
+      ) {
+        return invalidProductExperienceResponse()
+      }
+      return { type: 'ATTRIBUTE_EQUALS', attributeName, expected }
+    }
+
+    case 'COUNT_AT_LEAST': {
+      const minimumCount = condition.minimumCount
+      if (
+        !Number.isInteger(minimumCount) ||
+        (minimumCount as number) <= 0 ||
+        !hasOnlyNullFields(condition, ['expected', 'attributeName'])
+      ) {
+        return invalidProductExperienceResponse()
+      }
+      return { type: 'COUNT_AT_LEAST', minimumCount: minimumCount as number }
+    }
+
+    default:
+      return invalidProductExperienceResponse()
+  }
+}
+
+function parseProductExperienceTicket(value: unknown): ProductExperienceTicket {
+  const ticket = requireRecord(value)
+  const rawAllowedOrigins = ticket.allowedOrigins
+  const rawRules = ticket.rules
+  if (!Array.isArray(rawAllowedOrigins) || rawAllowedOrigins.length === 0) {
+    return invalidProductExperienceResponse()
+  }
+  if (!Array.isArray(rawRules) || rawRules.length === 0) {
+    return invalidProductExperienceResponse()
+  }
+  if (ticket.completionMode !== 'ALL') {
+    return invalidProductExperienceResponse()
+  }
+
+  const allowedOrigins = rawAllowedOrigins.map((origin) => {
+    if (typeof origin !== 'string' || origin.length === 0) {
+      return invalidProductExperienceResponse()
+    }
+    return origin
+  })
+
+  const ruleIds = new Set<string>()
+  const rules = rawRules.map((value) => {
+    const rule = requireRecord(value)
+    const id = requireString(rule, 'id')
+    if (ruleIds.has(id)) return invalidProductExperienceResponse()
+    ruleIds.add(id)
+    return {
+      id,
+      title: requireString(rule, 'title'),
+      urlPattern: requireString(rule, 'urlPattern'),
+      selector: requireString(rule, 'selector'),
+      condition: parseProductExperienceCondition(rule.condition),
+    }
+  })
+
+  return {
+    ticket: requireString(ticket, 'ticket'),
+    macKey: requireString(ticket, 'macKey'),
+    expiresAt: requireDateTime(ticket, 'expiresAt'),
+    ruleSetVersion: requirePositiveInteger(ticket, 'ruleSetVersion'),
+    allowedOrigins,
+    completionMode: 'ALL',
+    rules,
+  }
+}
+
+export function parseMintProductExperienceTicketResult(
+  value: unknown,
+): MintProductExperienceTicketResult {
+  const result = requireRecord(value)
+  return {
+    mintProductExperienceTicket: parseProductExperienceTicket(
+      result.mintProductExperienceTicket,
+    ),
+  }
+}
+
+export function parseMintProductExperienceTestTicketResult(
+  value: unknown,
+): MintProductExperienceTestTicketResult {
+  const result = requireRecord(value)
+  return {
+    mintProductExperienceTestTicket: parseProductExperienceTicket(
+      result.mintProductExperienceTestTicket,
+    ),
+  }
+}
+
+export function parseSubmitProductExperienceProofResult(
+  value: unknown,
+): SubmitProductExperienceProofResult {
+  const result = requireRecord(value)
+  const proof = requireRecord(result.submitProductExperienceProof)
+  if (typeof proof.accepted !== 'boolean') {
+    return invalidProductExperienceResponse()
+  }
+  if (
+    proof.verificationKind !== 'EXPERIENCE' &&
+    proof.verificationKind !== 'REGISTRATION'
+  ) {
+    return invalidProductExperienceResponse()
+  }
+
+  return {
+    submitProductExperienceProof: {
+      accepted: proof.accepted,
+      code: requireString(proof, 'code'),
+      campaignId: requireString(proof, 'campaignId'),
+      configVersion: requireNullablePositiveInteger(proof, 'configVersion'),
+      verificationKind: proof.verificationKind,
+      verifiedAt: requireNullableDateTime(proof, 'verifiedAt'),
+    },
+  }
 }

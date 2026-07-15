@@ -1,0 +1,26 @@
+{
+  "input": {
+    "version": "product-experience-v1",
+    "campaignId": "campaign-product-001",
+    "ruleSetVersion": 3,
+    "nonce": "00112233445566778899aabbccddeeff",
+    "ts": 1783936800,
+    "ruleMatches": [
+      {
+        "ruleId": "rule-b",
+        "matchedAt": "2026-07-13T10:00:02.000Z",
+        "origin": "https://client.example",
+        "urlPathHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      {
+        "ruleId": "rule-a",
+        "matchedAt": "2026-07-13T10:00:01.000Z",
+        "origin": "https://client.example",
+        "urlPathHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "macKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "canonical": "{\"version\":\"product-experience-v1\",\"campaignId\":\"campaign-product-001\",\"ruleSetVersion\":3,\"nonce\":\"00112233445566778899aabbccddeeff\",\"ts\":1783936800,\"ruleMatches\":[{\"ruleId\":\"rule-a\",\"matchedAt\":\"2026-07-13T10:00:01.000Z\",\"origin\":\"https://client.example\",\"urlPathHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"ruleId\":\"rule-b\",\"matchedAt\":\"2026-07-13T10:00:02.000Z\",\"origin\":\"https://client.example\",\"urlPathHash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}",
+  "signature": "7nWOEGmTstvkkP7rrkfxzsU70gtshNBYw6NAJcElHNo"
+}

@@ -16,15 +16,25 @@ type PublicDeviceIdentity = Pick<DeviceIdentity, 'deviceId' | 'publicKeyJwk'>
 export async function ensureLegacyDeviceRegistered(
   token: string,
   identity: PublicDeviceIdentity,
+  signal?: AbortSignal,
 ): Promise<void> {
   const tokenHash = await sha256Hex(token)
   if ((await localStore.get('deviceRegisteredTokenHash')) === tokenHash) return
 
+  const register = () =>
+    registerLegacyPluginDevice(token, identity, fetch, signal).then(() =>
+      localStore.set('deviceRegisteredTokenHash', tokenHash),
+    )
+
+  // Each gql call owns its AbortSignal. Sharing a signal-bound request would
+  // let one caller's timeout cancel another caller's registration.
+  if (signal) return register()
+
   const pending = registrationsInFlight.get(tokenHash)
   if (pending) return pending
-  const registration = registerLegacyPluginDevice(token, identity)
-    .then(() => localStore.set('deviceRegisteredTokenHash', tokenHash))
-    .finally(() => registrationsInFlight.delete(tokenHash))
+  const registration = register().finally(() =>
+    registrationsInFlight.delete(tokenHash),
+  )
   registrationsInFlight.set(tokenHash, registration)
   return registration
 }
@@ -33,9 +43,11 @@ export async function registerLegacyPluginDevice(
   token: string,
   identity: PublicDeviceIdentity,
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetcher(API_ENDPOINT, {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json',
       'apollo-require-preflight': 'true',

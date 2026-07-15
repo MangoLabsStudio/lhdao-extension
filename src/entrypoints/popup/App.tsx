@@ -1,6 +1,8 @@
 import * as React from 'react'
+import { ProductExperienceCard } from '@/components/product-experience/ProductExperienceCard'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { sendMessage } from '@/lib/messaging'
+import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
 import type { UserProfile } from '@/lib/storage'
 import type { PairingState } from '@/types/messages'
 
@@ -33,6 +35,9 @@ export function App() {
   const [data, setData] = React.useState<PopupData | null>(null)
   const [syncing, setSyncing] = React.useState(false)
   const [pairing, setPairing] = React.useState<PairingState>({ kind: 'idle' })
+  const [productState, setProductState] =
+    React.useState<ProductExperienceControllerState | null>(null)
+  const [startingProduct, setStartingProduct] = React.useState(false)
 
   const readData = React.useCallback(async () => {
     const r = await sendMessage({ type: 'get-popup-data' })
@@ -47,6 +52,20 @@ export function App() {
         lastSyncError: r.lastSyncError,
         lastSyncHttpStatus: r.lastSyncHttpStatus,
       })
+    }
+  }, [])
+
+  const readProductState = React.useCallback(async () => {
+    try {
+      const response = await sendMessage({
+        type: 'get-product-experience-state',
+      })
+      if (response.type === 'product-experience-state-result') {
+        setProductState(response.state)
+      }
+    } catch {
+      // Background can be restarting while the popup opens. Its durable state
+      // will be requested again by the next broadcast or popup open.
     }
   }, [])
 
@@ -67,6 +86,17 @@ export function App() {
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
   }, [readData])
+
+  React.useEffect(() => {
+    void readProductState()
+    const listener = (message: { type?: string }) => {
+      if (message?.type === 'product-experience-state-changed') {
+        void readProductState()
+      }
+    }
+    chrome.runtime.onMessage.addListener(listener)
+    return () => chrome.runtime.onMessage.removeListener(listener)
+  }, [readProductState])
 
   const forceSync = React.useCallback(async () => {
     if (syncing) return
@@ -100,9 +130,35 @@ export function App() {
     await sendMessage({ type: 'cancel-pairing' })
   }, [])
 
+  const startProductExperience = React.useCallback(async () => {
+    if (startingProduct) return
+    setStartingProduct(true)
+    try {
+      const response = await sendMessage({ type: 'start-product-experience' })
+      if (response.type === 'product-experience-state-result') {
+        setProductState(response.state)
+      }
+    } catch {
+      setProductState((current) =>
+        current
+          ? { ...current, status: 'error', error: 'EXTENSION_ERROR' }
+          : current,
+      )
+    } finally {
+      setStartingProduct(false)
+    }
+  }, [startingProduct])
+
   return (
     <div className="bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <Header connected={!!data?.hasToken} hasData={!!data} />
+      {productState && productState.status !== 'idle' && (
+        <ProductExperienceCard
+          state={productState}
+          busy={startingProduct}
+          onStart={startProductExperience}
+        />
+      )}
       {data === null ? (
         <SkeletonBlock />
       ) : !data.hasToken ? (

@@ -8,6 +8,12 @@
 // macKey 是后端 mintEngagementTicket 随票下发的一次性密钥(base64url)。SW 里用
 // WebCrypto 做 HMAC-SHA256,结果 base64url。
 
+import {
+  randomProofNonce as createRandomProofNonce,
+  hmacSha256Base64Url,
+  sha256Hex,
+} from './proof-crypto'
+
 export interface ProofAction {
   actionType: string
   tweetId?: string | null
@@ -17,37 +23,9 @@ export interface ProofAction {
   resultTweetId?: string | null
 }
 
-function b64urlToBytes(s: string): Uint8Array {
-  const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
-  const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4))
-  const bin = atob(b64 + pad)
-  const out = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-  return out
-}
-
-function bytesToB64url(buf: ArrayBuffer): string {
-  const u = new Uint8Array(buf)
-  let bin = ''
-  for (let i = 0; i < u.length; i++) bin += String.fromCharCode(u[i])
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-async function sha256hex(s: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(s),
-  )
-  return [...new Uint8Array(digest)]
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
-}
-
 /** 32-hex 随机 nonce(单次防重放)。 */
 export function randomProofNonce(): string {
-  const b = new Uint8Array(16)
-  crypto.getRandomValues(b)
-  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return createRandomProofNonce()
 }
 
 export async function buildProofCanonical(args: {
@@ -67,7 +45,7 @@ export async function buildProofCanonical(args: {
     })
     .sort()
     .join(',')
-  const commentHash = await sha256hex(args.commentText ?? '')
+  const commentHash = await sha256Hex(args.commentText ?? '')
   const dwell =
     typeof args.dwellMs === 'number' && Number.isFinite(args.dwellMs)
       ? Math.floor(args.dwellMs)
@@ -87,17 +65,5 @@ export async function hmacSignProof(
   macKeyB64url: string,
   canonical: string,
 ): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    b64urlToBytes(macKeyB64url) as BufferSource,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const sig = await crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(canonical) as BufferSource,
-  )
-  return bytesToB64url(sig)
+  return hmacSha256Base64Url(macKeyB64url, canonical)
 }

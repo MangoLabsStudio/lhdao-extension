@@ -1,6 +1,6 @@
 # E2E Manual Test Checklist
 
-灯塔 (Lighthouse) 浏览器插件端到端手动验收清单。**首次发布 v0.1.0 前必跑一遍。**
+灯塔 (Lighthouse) 浏览器扩展端到端手动验收清单。**发布 v0.2.0 前必须完整执行。**
 
 ---
 
@@ -11,18 +11,28 @@
   - `availableEngagements` query 返回非空(dev DB 至少 1 个 active ENGAGEMENT campaign)
   - campaign 的 `targetUrl` 指向一条**当前测试账号的 timeline 上能看到**的真实推文
 - [ ] **Web** 已部署到 dev (Railway: `MangoLabsStudio/lhdao-app` `dev` 分支)
-  - `lhdaobeta.top/settings/plugin-tokens` 可访问
+  - `https://app.lhdaobeta.top/settings/plugin-tokens` 可访问
 - [ ] **测试账号**:
   - 在 lhdao 已登录
   - 已绑定的 X 账号是当前 Chrome 浏览器登录的同一账号
   - tier 不是 D/E(避免 reward = 0 干扰判断)
+- [ ] **扩展端点**同时指向同一环境。本地 HTTP 联调必须设置
+  `WXT_LOCAL_BUILD=true`，且 API/Web 都使用 `localhost`、`127.0.0.1` 或 `[::1]`；
+  不得混用生产与本地 host。
+- [ ] **Beta 扩展构建**使用完整的 API/Web 端点：
+
+  ```bash
+  WXT_API_ENDPOINT=https://service.lhdaobeta.top/graphql \
+  WXT_WEB_ENDPOINT=https://app.lhdaobeta.top \
+  pnpm run build
+  ```
 
 ---
 
 ## 1. Token 创建 + 插件绑定
 
 - [ ] 浏览器登录 lhdao 测试账号
-- [ ] 访问 `lhdaobeta.top/settings/plugin-tokens`
+- [ ] 访问 `https://app.lhdaobeta.top/settings/plugin-tokens`
 - [ ] 点击 **"创建 token"** → 弹出输入 label 弹窗 → 输入 "E2E Mac" → 创建
 - [ ] **明文 token 弹窗** 出现 → 点击 "复制" → toast "已复制"
 - [ ] 关闭弹窗 → 列表里出现新 token,prefix 8 字符显示
@@ -97,23 +107,53 @@
 
 ---
 
-## 6. 跨浏览器(可选,内测可后置)
+## 6. Product Experience / activeTab 验收
 
-- [ ] **Edge**:`pnpm build:edge` → `chrome://extensions` 加载,流程同 Chrome
-- [ ] **Brave / Arc**:Chromium 系应该免改动,基本流程过即可
+使用 Buyer 发布的 TEST ticket 和可控的客户页面。页面至少包含两个声明式规则，其中一个
+为 `TEXT_CONTAINS` 或 `ATTRIBUTE_EQUALS`。
 
----
+- [ ] 在 Lighthouse 页保存 Product Experience TEST 任务后，Popup 显示 campaign title、
+  `0 / N` 与“准备验证”。
+- [ ] 按钮旁精确显示“只在本次授权的当前网站读取 Buyer 配置的完成标记”；不宣称浏览器
+  会弹权限警告。
+- [ ] 点击前，客户页没有运行 `product-experience.js`；manifest 也没有客户 host permission
+  或静态 evaluator。
+- [ ] 在允许的客户页点击“开始验证”，状态依次进入授权/检查，完成数随页面标记变化。
+- [ ] 完整 reload 与同 Origin 第二页会自动重新注入，不重新 mint ticket。
+- [ ] 导航到不同 Origin 后立即进入“需要重新授权”，保留已命中数，且不自动注入。
+- [ ] 重新打开 Popup 并点击“重新授权”后才继续。
+- [ ] 所有规则完成后只提交一次 proof，最终显示“验证通过”。
+- [ ] 重启 extension service worker / 重开 Popup 后，不确定网络结果使用同一份已签名 payload
+  重试，不生成新 nonce。
 
-## 7. 发布 v0.1.0
+## 7. Product Experience 隐私检查
 
-全部步骤通过后:
+- [ ] DevTools 确认 proof 只含 rule ID、时间、origin、path hash 与防重放字段。
+- [ ] `TEXT_CONTAINS` 的 matched text 没有出现在 message、storage、request 或 log 中。
+- [ ] 验证过程不读 Cookie、input value、整页 HTML、iframe document 或表单数据。
+- [ ] Popup 和 Lighthouse page bridge 不显示 ticket、MAC key、selector、matched text 或 device ID。
+
+## 8. Chrome / Edge / Firefox MV3
+
+- [ ] `pnpm run build`、`pnpm run build:edge`、`pnpm run build:firefox` 均退出 0。
+- [ ] `node scripts/verify-product-manifests.mjs` 通过。
+- [ ] Chrome 完整执行 engagement 和 Product Experience 正常/跨 Origin 流程。
+- [ ] Edge 使用新 TEST ticket 重复 Product Experience 授权、pending → done 与 proof accepted。
+- [ ] Firefox 使用新 TEST ticket 重复同一流程，不得出现 MV2 API/permission 错误。
+
+Firefox 这一步只验证 MV3 runtime artifact。提交 AMO 前还必须完成
+[PUBLISHING.md](./PUBLISHING.md) 中的 Gecko ID 与 data collection permission 门禁。
+
+## 9. 发布 v0.2.0
+
+三个生产 zip 构建、解压并通过 manifest verifier 后，先记录 tested commit SHA 和三份
+zip 的 SHA-256，再停止，不得自行打 tag。将这些证据提交给 release owner；只有取得
+明确批准后，才可执行：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag -a v0.2.0 -m "release: extension v0.2.0"
+git push origin v0.2.0
 ```
 
-→ `.github/workflows/release.yml` 自动跑,在
-`MangoLabsStudio/lhdao-extension/releases/v0.1.0` 上传 `.zip`。
-
-把 GitHub Release 链接发给内测用户即可。
+Release workflow 会重新执行 test/typecheck/lint，构建三个生产 zip，解压后运行同一 manifest
+verifier，然后只上传 Chrome、Edge 和 Firefox 三个已验证包。

@@ -91,6 +91,26 @@ describe('buildProofCanonical', () => {
 })
 
 describe('hmacSignProof', () => {
+  it('keeps the engagement canonical and signature byte-for-byte stable', async () => {
+    const canonical = await buildProofCanonical({
+      campaignId: 'c1',
+      ts: 100,
+      nonce: 'n',
+      actions: [
+        { actionType: 'RT', tweetId: 't1' },
+        { actionType: 'LIKE', tweetId: 't1' },
+      ],
+    })
+
+    expect(canonical).toBe(`c1|100|n|LIKE:t1,RT:t1|${SHA256_EMPTY}|0`)
+    expect(
+      await hmacSignProof(
+        'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8',
+        canonical,
+      ),
+    ).toBe('JZ25tXoHYMC_jqWz5oZt6K5_g9wa31S2Btj6YqkO9Uk')
+  })
+
   it('同 key+canonical 稳定,不同 canonical 不同', async () => {
     // macKey 是 base64url 的原始字节(43 字符 = 32 字节,合法 base64url)
     const macKey = 'a'.repeat(43)

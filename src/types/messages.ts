@@ -7,6 +7,8 @@
  *   - 单向广播(BG → CS)用 `tasks-updated`,响应永远是 `ack`
  */
 
+import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
+import type { PublicProductExperienceState } from '@/lib/product-experience-task-bridge'
 import type { LighthouseMember } from '@/lib/queries'
 import type {
   ActiveCampaignSummary,
@@ -14,6 +16,11 @@ import type {
   TweetCampaignSummary,
   UserProfile,
 } from '@/lib/storage'
+import type {
+  ProductExperienceRule,
+  ProductExperienceTaskRef,
+  ProductRuleMatch,
+} from './product-experience'
 
 // ── Requests (CS → BG, 偶尔反向) ─────────────────────────────────────
 
@@ -21,6 +28,26 @@ import type {
 export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
 
 export type MsgRequest =
+  | {
+      type: 'save-product-experience-task'
+      task: ProductExperienceTaskRef
+      correlationId: string
+    }
+  | { type: 'get-product-experience-state' }
+  | {
+      type: 'get-public-product-experience-state'
+      campaignId: string
+      correlationId: string
+    }
+  | { type: 'start-product-experience' }
+  | { type: 'product-experience-bootstrap' }
+  | { type: 'product-experience-ready'; sessionId: string }
+  | {
+      type: 'product-experience-evidence'
+      sessionId: string
+      matches: ProductRuleMatch[]
+    }
+  | { type: 'product-experience-state-changed' }
   /** content script 询问某条推文上挂着哪些任务(LIKE/RT/COMMENT 等 tweet-level)*/
   | { type: 'get-tasks-for-tweet'; tweetId: string }
   /**
@@ -157,6 +184,43 @@ export type MsgRequest =
 // ── Responses ────────────────────────────────────────────────────────
 
 export type MsgResponse =
+  | {
+      type: 'save-product-experience-task-result'
+      ok: true
+      correlationId: string
+      state: ProductExperienceControllerState
+    }
+  | {
+      type: 'save-product-experience-task-result'
+      ok: false
+      correlationId: string
+      error: 'SUBMISSION_PENDING'
+      state: ProductExperienceControllerState
+    }
+  | {
+      type: 'product-experience-state-result'
+      state: ProductExperienceControllerState
+    }
+  | {
+      type: 'public-product-experience-state-result'
+      correlationId: string
+      state: PublicProductExperienceState
+    }
+  | {
+      type: 'product-experience-bootstrap-result'
+      ok: true
+      sessionId: string
+      ruleSetVersion: number
+      allowedOrigins: string[]
+      completionMode: 'ALL'
+      rules: ProductExperienceRule[]
+    }
+  | {
+      type: 'product-experience-bootstrap-result'
+      ok: false
+      error: 'INVALID_SENDER' | 'NO_ACTIVE_SESSION'
+    }
+  | { type: 'product-experience-ack' }
   | { type: 'tasks'; tasks: CampaignTaskCache[] }
   | {
       type: 'tasks-snapshot'

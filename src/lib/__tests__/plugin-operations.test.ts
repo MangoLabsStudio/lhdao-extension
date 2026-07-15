@@ -4,9 +4,33 @@ import {
   getPluginOperationByDocument,
   PLUGIN_OPERATIONS,
 } from '../plugin-operations'
+import {
+  MintProductExperienceTestTicketOperationName,
+  MintProductExperienceTicketOperationName,
+  PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+  SubmitProductExperienceProofOperationName,
+} from '../queries'
+
+const PRODUCT_EXPERIENCE_DOCUMENT_SHA256 =
+  'f602c90062cf19a9bfaa28061fcfcde181b572ffb7af72ac99c13dd351115715'
+
+const PRODUCT_EXPERIENCE_OPERATIONS = [
+  {
+    id: 'verify.product-experience.ticket.v1',
+    operationName: MintProductExperienceTicketOperationName,
+  },
+  {
+    id: 'verify.product-experience.test-ticket.v1',
+    operationName: MintProductExperienceTestTicketOperationName,
+  },
+  {
+    id: 'verify.product-experience.proof.v1',
+    operationName: SubmitProductExperienceProofOperationName,
+  },
+] as const
 
 describe('PLUGIN_OPERATIONS', () => {
-  it('contains exactly the approved 13 plugin operations', () => {
+  it('contains exactly the approved 16 plugin operations', () => {
     expect(
       PLUGIN_OPERATIONS.map((operation) => operation.operationName),
     ).toEqual([
@@ -23,6 +47,9 @@ describe('PLUGIN_OPERATIONS', () => {
       'SubmitEngagementProof',
       'PromoteTweet',
       'CreateAutoReinvestTask',
+      'MintProductExperienceTicket',
+      'MintProductExperienceTestTicket',
+      'SubmitProductExperienceProof',
     ])
   })
 
@@ -31,15 +58,50 @@ describe('PLUGIN_OPERATIONS', () => {
       await expect(sha256Hex(operation.document)).resolves.toBe(
         operation.documentSha256,
       )
-      expect(getPluginOperationByDocument(operation.document)?.id).toBe(
-        operation.id,
-      )
+      expect(
+        getPluginOperationByDocument(
+          operation.document,
+          operation.operationName,
+        )?.id,
+      ).toBe(operation.id)
     }
   })
 
   it('does not match a document with an added field or alias', () => {
     expect(
-      getPluginOperationByDocument('query Me { viewer: me { id username } }'),
+      getPluginOperationByDocument(
+        'query Me { viewer: me { id username } }',
+        'Me',
+      ),
+    ).toBeUndefined()
+  })
+
+  it('matches all three operations sharing the product document', async () => {
+    await expect(sha256Hex(PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT)).resolves.toBe(
+      PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+    )
+
+    for (const expected of PRODUCT_EXPERIENCE_OPERATIONS) {
+      expect(
+        getPluginOperationByDocument(
+          PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+          expected.operationName,
+        ),
+      ).toMatchObject({
+        ...expected,
+        documentSha256: PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+        permission: 'verify',
+        version: 1,
+      })
+    }
+  })
+
+  it('rejects an unknown operation name for the product document', () => {
+    expect(
+      getPluginOperationByDocument(
+        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+        'SubmitProductExperienceProofTypo',
+      ),
     ).toBeUndefined()
   })
 })

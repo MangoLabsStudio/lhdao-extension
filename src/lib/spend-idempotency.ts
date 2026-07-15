@@ -15,6 +15,16 @@ export function releaseSpendActionKey(scope: string, variables: unknown): void {
   pendingSpendKeys.delete(`${scope}:${canonicalJson(variables ?? {})}`)
 }
 
+export function releaseSpendActionKeyAfterDefiniteFailure(
+  scope: string,
+  variables: unknown,
+  error: { httpStatus?: number; uncertain: boolean },
+): boolean {
+  if (error.httpStatus === undefined || error.uncertain) return false
+  releaseSpendActionKey(scope, variables)
+  return true
+}
+
 export function childSpendActionKey(
   parentKey: string,
   childId: string,

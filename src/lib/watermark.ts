@@ -62,56 +62,107 @@ async function mint(
   operationName: string,
   opType: 'QUERY' | 'MUTATION',
   deviceId: string,
+  signal?: AbortSignal,
 ): Promise<MintResult> {
-  const token = await localStore.get('apiToken')
-  if (!token) throw new Error('No API token configured')
-
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), MINT_TIMEOUT_MS)
+  let timedOut = false
+  const abortFromCaller = () => controller.abort()
+  if (signal?.aborted) abortFromCaller()
+  else signal?.addEventListener('abort', abortFromCaller, { once: true })
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, MINT_TIMEOUT_MS)
 
-  let res: Response
   try {
-    res = await fetch(API_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apollo-require-preflight': 'true',
-        'X-Apollo-Operation-Name': 'MintWatermarkToken',
-        Authorization: `Bearer ${token}`,
-        'x-device-id': deviceId,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        query: MINT_WATERMARK_TOKEN_QUERY,
-        variables: { operationName, opType },
-      }),
-    })
+    const token = await runWithAbort(
+      () => localStore.get('apiToken'),
+      controller.signal,
+    )
+    if (!token) throw new Error('No API token configured')
+
+    const res = await runWithAbort(
+      () =>
+        fetch(API_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apollo-require-preflight': 'true',
+            'X-Apollo-Operation-Name': 'MintWatermarkToken',
+            Authorization: `Bearer ${token}`,
+            'x-device-id': deviceId,
+          },
+          signal: controller.signal,
+          body: JSON.stringify({
+            query: MINT_WATERMARK_TOKEN_QUERY,
+            variables: { operationName, opType },
+          }),
+        }),
+      controller.signal,
+    )
+
+    if (!res.ok) throw new Error(`WATERMARK_MINT_HTTP_${res.status}`)
+
+    const json = (await runWithAbort(() => res.json(), controller.signal)) as {
+      data?: MintWatermarkTokenResult
+      errors?: { message: string }[]
+    }
+    if (json.errors?.length) {
+      throw new Error(`WATERMARK_MINT_FAILED: ${json.errors[0]?.message ?? ''}`)
+    }
+    const result = json.data?.mintWatermarkToken
+    if (!result?.token) throw new Error('WATERMARK_MINT_FAILED')
+
+    return {
+      token: result.token,
+      expiresAt: result.expiresAt,
+      powChallenge: result.powChallenge,
+      powDifficulty: result.powDifficulty,
+    }
   } catch (e) {
-    throw e instanceof DOMException && e.name === 'AbortError'
-      ? new Error('WATERMARK_MINT_TIMEOUT')
-      : e
+    if (signal?.aborted) throw e
+    throw timedOut ? new Error('WATERMARK_MINT_TIMEOUT') : e
   } finally {
     clearTimeout(timer)
+    signal?.removeEventListener('abort', abortFromCaller)
   }
+}
 
-  if (!res.ok) throw new Error(`WATERMARK_MINT_HTTP_${res.status}`)
+function runWithAbort<T>(
+  operation: () => Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', onAbort)
+    const onAbort = () => {
+      cleanup()
+      reject(new DOMException('The operation was aborted', 'AbortError'))
+    }
 
-  const json = (await res.json()) as {
-    data?: MintWatermarkTokenResult
-    errors?: { message: string }[]
-  }
-  if (json.errors?.length) {
-    throw new Error(`WATERMARK_MINT_FAILED: ${json.errors[0]?.message ?? ''}`)
-  }
-  const r = json.data?.mintWatermarkToken
-  if (!r?.token) throw new Error('WATERMARK_MINT_FAILED')
-
-  return {
-    token: r.token,
-    expiresAt: r.expiresAt,
-    powChallenge: r.powChallenge,
-    powDifficulty: r.powDifficulty,
-  }
+    if (signal.aborted) {
+      reject(new DOMException('The operation was aborted', 'AbortError'))
+      return
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    let promise: Promise<T>
+    try {
+      promise = Promise.resolve(operation())
+    } catch (error) {
+      cleanup()
+      reject(error)
+      return
+    }
+    promise.then(
+      (value) => {
+        cleanup()
+        resolve(value)
+      },
+      (error) => {
+        cleanup()
+        reject(error)
+      },
+    )
+  })
 }
 
 // ── 进程内 token 缓存(非 PoW 操作复用,降低 mint 频率)─────────────────
@@ -141,6 +192,7 @@ function cacheKey(op: string, deviceId: string): string {
 export async function maybeAttachWatermark(
   headers: Record<string, string>,
   query: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const op = extractOperationName(query)
   if (!op || !PROTECTED_OPS.has(op)) return
@@ -163,16 +215,23 @@ export async function maybeAttachWatermark(
   }
 
   try {
-    // 请求去重:同一 (op, device) 并发时只 mint 一次
-    let p = pendingMints.get(key)
-    if (!p) {
-      p = mint(op, inferOpType(query), deviceId).finally(() => {
-        pendingMints.delete(key)
-      })
-      pendingMints.set(key, p)
+    if (signal) {
+      // 每个 gql 调用有独立 deadline，不能让一个调用的 abort 取消其他
+      // 调用正在共享的 mint。带 signal 时不复用 pending promise。
+      result = await mint(op, inferOpType(query), deviceId, signal)
+    } else {
+      // 无调用方 signal 的旧路径仍按 (op, device) 去重。
+      let p = pendingMints.get(key)
+      if (!p) {
+        p = mint(op, inferOpType(query), deviceId).finally(() => {
+          pendingMints.delete(key)
+        })
+        pendingMints.set(key, p)
+      }
+      result = await p
     }
-    result = await p
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error
     // 降级:mint 不成就让后端按 enforcement 模式决定收不收
     headers['x-wm-status'] = 'mint-failed'
     return
