@@ -126,6 +126,34 @@ function isAllowedAttributeName(attributeName: string): boolean {
   )
 }
 
+function parseVisibleNumericValue(text: string): number | null {
+  const match = text
+    .replaceAll(',', '')
+    .match(/[-+]?\d+(?:\.\d+)?\s*(?:[kKmMbB]|万|亿)?/u)
+  if (!match) return null
+
+  const [, rawValue, rawUnit = ''] =
+    /^([-+]?\d+(?:\.\d+)?)\s*([kKmMbB]|万|亿)?$/u.exec(match[0].trim()) ?? []
+  const value = Number(rawValue)
+  if (!Number.isFinite(value)) return null
+
+  const unit = rawUnit.toLowerCase()
+  const multiplier =
+    unit === 'k'
+      ? 1_000
+      : unit === 'm'
+        ? 1_000_000
+        : unit === 'b'
+          ? 1_000_000_000
+          : rawUnit === '万'
+            ? 10_000
+            : rawUnit === '亿'
+              ? 100_000_000
+              : 1
+
+  return value * multiplier
+}
+
 function conditionMatches(
   condition: ProductExperienceCondition,
   visibleElements: Element[],
@@ -156,6 +184,16 @@ function conditionMatches(
         Number.isInteger(condition.minimumCount) &&
         condition.minimumCount > 0 &&
         visibleElements.length >= condition.minimumCount
+      )
+    case 'NUMERIC_AT_LEAST':
+      return (
+        typeof condition.minimumValue === 'number' &&
+        Number.isFinite(condition.minimumValue) &&
+        condition.minimumValue > 0 &&
+        visibleElements.some((element) => {
+          const value = parseVisibleNumericValue(element.textContent ?? '')
+          return value !== null && value >= condition.minimumValue
+        })
       )
     default:
       return false

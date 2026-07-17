@@ -46,6 +46,15 @@ function parseCondition(value: unknown): ProductExperienceCondition | null {
             minimumCount: value.minimumCount as number,
           }
         : null
+    case 'NUMERIC_AT_LEAST':
+      return typeof value.minimumValue === 'number' &&
+        Number.isFinite(value.minimumValue) &&
+        value.minimumValue > 0
+        ? {
+            type: 'NUMERIC_AT_LEAST',
+            minimumValue: value.minimumValue,
+          }
+        : null
     default:
       return null
   }

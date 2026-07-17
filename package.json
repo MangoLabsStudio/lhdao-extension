@@ -1,6 +1,6 @@
 {
   "name": "lhdao-extension",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lighthouse browser extension — complete engagement and product-experience tasks",
   "private": true,
   "type": "module",

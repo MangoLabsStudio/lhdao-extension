@@ -16,6 +16,7 @@ mutation MintProductExperienceTicket($campaignId: String!) {
         expected
         attributeName
         minimumCount
+        minimumValue
       }
     }
   }
@@ -39,6 +40,7 @@ mutation MintProductExperienceTestTicket($campaignId: String!) {
         expected
         attributeName
         minimumCount
+        minimumValue
       }
     }
   }

@@ -150,6 +150,47 @@ describe('evaluateProductRule', () => {
   })
 
   it.each([
+    ['$128,430', 100000],
+    ['100K', 100000],
+    ['1.2M', 1000000],
+    ['10万', 100000],
+  ])('matches numeric threshold text %s', async (text, minimumValue) => {
+    element({ id: 'trading-volume' }, text)
+
+    expect(
+      await evaluateProductRule(
+        rule(
+          {
+            type: 'NUMERIC_AT_LEAST',
+            minimumValue,
+          },
+          { selector: '#trading-volume' },
+        ),
+        document,
+        CLIENT_URL,
+      ),
+    ).not.toBeNull()
+  })
+
+  it('rejects numeric threshold text below the configured value', async () => {
+    element({ id: 'trading-volume' }, '$99,999')
+
+    expect(
+      await evaluateProductRule(
+        rule(
+          {
+            type: 'NUMERIC_AT_LEAST',
+            minimumValue: 100000,
+          },
+          { selector: '#trading-volume' },
+        ),
+        document,
+        CLIENT_URL,
+      ),
+    ).toBeNull()
+  })
+
+  it.each([
     ['class', 'complete'],
     ['aria-current', 'step'],
     ['data-state', 'done'],

@@ -661,6 +661,7 @@ describe('product experience GraphQL document and response parsers', () => {
           expected: null,
           attributeName: null,
           minimumCount: null,
+          minimumValue: null,
         },
       },
       {
@@ -673,6 +674,7 @@ describe('product experience GraphQL document and response parsers', () => {
           expected: 'Complete',
           attributeName: null,
           minimumCount: null,
+          minimumValue: null,
         },
       },
       {
@@ -685,6 +687,7 @@ describe('product experience GraphQL document and response parsers', () => {
           expected: 'done',
           attributeName: 'data-state',
           minimumCount: null,
+          minimumValue: null,
         },
       },
       {
@@ -697,6 +700,20 @@ describe('product experience GraphQL document and response parsers', () => {
           expected: null,
           attributeName: null,
           minimumCount: 2,
+          minimumValue: null,
+        },
+      },
+      {
+        id: 'volume',
+        title: 'Volume',
+        urlPattern: 'https://client.example/onboarding/*',
+        selector: '#trading-volume',
+        condition: {
+          type: 'NUMERIC_AT_LEAST',
+          expected: null,
+          attributeName: null,
+          minimumCount: null,
+          minimumValue: 100000,
         },
       },
     ],
@@ -747,6 +764,7 @@ describe('product experience GraphQL document and response parsers', () => {
         expected: null,
         attributeName: null,
         minimumCount: null,
+        minimumValue: null,
       },
       { type: 'ELEMENT_EXISTS' },
     ],
@@ -756,6 +774,7 @@ describe('product experience GraphQL document and response parsers', () => {
         expected: 'Complete',
         attributeName: null,
         minimumCount: null,
+        minimumValue: null,
       },
       { type: 'TEXT_CONTAINS', expected: 'Complete' },
     ],
@@ -765,6 +784,7 @@ describe('product experience GraphQL document and response parsers', () => {
         expected: '',
         attributeName: null,
         minimumCount: null,
+        minimumValue: null,
       },
       { type: 'TEXT_CONTAINS', expected: '' },
     ],
@@ -774,6 +794,7 @@ describe('product experience GraphQL document and response parsers', () => {
         expected: 'done',
         attributeName: 'data-state',
         minimumCount: null,
+        minimumValue: null,
       },
       {
         type: 'ATTRIBUTE_EQUALS',
@@ -787,8 +808,19 @@ describe('product experience GraphQL document and response parsers', () => {
         expected: null,
         attributeName: null,
         minimumCount: 2,
+        minimumValue: null,
       },
       { type: 'COUNT_AT_LEAST', minimumCount: 2 },
+    ],
+    [
+      {
+        type: 'NUMERIC_AT_LEAST',
+        expected: null,
+        attributeName: null,
+        minimumCount: null,
+        minimumValue: 100000,
+      },
+      { type: 'NUMERIC_AT_LEAST', minimumValue: 100000 },
     ],
   ])('maps a valid wire condition into the discriminated union', (wire, parsed) => {
     const parseCondition = requireQueryExport<(value: unknown) => unknown>(
@@ -804,30 +836,42 @@ describe('product experience GraphQL document and response parsers', () => {
       expected: 'unexpected',
       attributeName: null,
       minimumCount: null,
+      minimumValue: null,
     },
     {
       type: 'TEXT_CONTAINS',
       expected: null,
       attributeName: null,
       minimumCount: null,
+      minimumValue: null,
     },
     {
       type: 'ATTRIBUTE_EQUALS',
       expected: 'done',
       attributeName: null,
       minimumCount: null,
+      minimumValue: null,
     },
     {
       type: 'COUNT_AT_LEAST',
       expected: null,
       attributeName: null,
       minimumCount: 0,
+      minimumValue: null,
+    },
+    {
+      type: 'NUMERIC_AT_LEAST',
+      expected: null,
+      attributeName: null,
+      minimumCount: null,
+      minimumValue: 0,
     },
     {
       type: 'RUN_JAVASCRIPT',
       expected: 'alert(1)',
       attributeName: null,
       minimumCount: null,
+      minimumValue: null,
     },
   ])('fails closed for an illegal wire condition combination', (wire) => {
     const parseCondition = requireQueryExport<(value: unknown) => unknown>(
@@ -865,6 +909,10 @@ describe('product experience GraphQL document and response parsers', () => {
           {
             ...ticketWire.rules[3],
             condition: { type: 'COUNT_AT_LEAST', minimumCount: 2 },
+          },
+          {
+            ...ticketWire.rules[4],
+            condition: { type: 'NUMERIC_AT_LEAST', minimumValue: 100000 },
           },
         ],
       },
@@ -946,6 +994,7 @@ describe('product experience GraphQL document and response parsers', () => {
                 expected: null,
                 attributeName: null,
                 minimumCount: 1,
+                minimumValue: null,
               },
             },
           ],

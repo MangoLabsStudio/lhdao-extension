@@ -17,6 +17,7 @@ export type ProductExperienceCondition =
       expected: string
     }
   | { type: 'COUNT_AT_LEAST'; minimumCount: number }
+  | { type: 'NUMERIC_AT_LEAST'; minimumValue: number }
 
 export interface ProductExperienceRule {
   id: string

@@ -557,6 +557,7 @@ export type ProductExperienceConditionWireType =
   | 'ATTRIBUTE_EQUALS'
   | 'COUNT_AT_LEAST'
   | 'ELEMENT_EXISTS'
+  | 'NUMERIC_AT_LEAST'
   | 'TEXT_CONTAINS'
 
 /** GraphQL nullable output shape before fail-closed discriminated parsing. */
@@ -565,6 +566,7 @@ export interface ProductExperienceConditionWire {
   expected: string | null
   attributeName: string | null
   minimumCount: number | null
+  minimumValue: number | null
 }
 
 export interface MintProductExperienceTicketResult {
@@ -695,6 +697,7 @@ export function parseProductExperienceCondition(
           'expected',
           'attributeName',
           'minimumCount',
+          'minimumValue',
         ])
       ) {
         return invalidProductExperienceResponse()
@@ -705,7 +708,11 @@ export function parseProductExperienceCondition(
       const expected = condition.expected
       if (
         typeof expected !== 'string' ||
-        !hasOnlyNullFields(condition, ['attributeName', 'minimumCount'])
+        !hasOnlyNullFields(condition, [
+          'attributeName',
+          'minimumCount',
+          'minimumValue',
+        ])
       ) {
         return invalidProductExperienceResponse()
       }
@@ -719,7 +726,8 @@ export function parseProductExperienceCondition(
         typeof attributeName !== 'string' ||
         !isAllowedAttributeName(attributeName) ||
         typeof expected !== 'string' ||
-        condition.minimumCount !== null
+        condition.minimumCount !== null ||
+        condition.minimumValue !== null
       ) {
         return invalidProductExperienceResponse()
       }
@@ -731,11 +739,32 @@ export function parseProductExperienceCondition(
       if (
         !Number.isInteger(minimumCount) ||
         (minimumCount as number) <= 0 ||
-        !hasOnlyNullFields(condition, ['expected', 'attributeName'])
+        !hasOnlyNullFields(condition, [
+          'expected',
+          'attributeName',
+          'minimumValue',
+        ])
       ) {
         return invalidProductExperienceResponse()
       }
       return { type: 'COUNT_AT_LEAST', minimumCount: minimumCount as number }
+    }
+
+    case 'NUMERIC_AT_LEAST': {
+      const minimumValue = condition.minimumValue
+      if (
+        typeof minimumValue !== 'number' ||
+        !Number.isFinite(minimumValue) ||
+        minimumValue <= 0 ||
+        !hasOnlyNullFields(condition, [
+          'expected',
+          'attributeName',
+          'minimumCount',
+        ])
+      ) {
+        return invalidProductExperienceResponse()
+      }
+      return { type: 'NUMERIC_AT_LEAST', minimumValue }
     }
 
     default:
