@@ -1,5 +1,4 @@
 import { getOrCreateDeviceIdentity } from './device-key'
-import { ensureLegacyDeviceRegistered } from './device-registration'
 import { API_ENDPOINT } from './env'
 import { parseRetryAfterMs } from './gql-backoff'
 import { getPluginOperationByDocument } from './plugin-operations'
@@ -149,11 +148,6 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
       : undefined
     if (operation) {
       const identity = await waitForDeadline(() => getOrCreateDeviceIdentity())
-      if (token) {
-        await waitForDeadline(() =>
-          ensureLegacyDeviceRegistered(token, identity, controller.signal),
-        )
-      }
       const signed = await waitForDeadline(() =>
         signPluginRequest({
           operation,

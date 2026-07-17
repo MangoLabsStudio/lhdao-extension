@@ -228,16 +228,11 @@ describe('gql transport outcomes', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('aborts while legacy device registration is still pending', async () => {
+  it('aborts while signed operation device identity is still pending', async () => {
     const caller = new AbortController()
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    mocks.getOrCreateDeviceIdentity.mockResolvedValue({
-      deviceId: 'device-pending-registration',
-      privateKey: {} as CryptoKey,
-      publicKeyJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
-    })
-    mocks.ensureLegacyDeviceRegistered.mockReturnValue(
+    mocks.getOrCreateDeviceIdentity.mockReturnValue(
       new Promise<void>(() => undefined),
     )
 
@@ -252,10 +247,7 @@ describe('gql transport outcomes', () => {
     const outcome = observeBefore(request, 1)
 
     await vi.advanceTimersByTimeAsync(0)
-    expect(mocks.ensureLegacyDeviceRegistered).toHaveBeenCalledTimes(1)
-    expect(
-      mocks.ensureLegacyDeviceRegistered.mock.calls[0]?.[2],
-    ).toBeInstanceOf(AbortSignal)
+    expect(mocks.getOrCreateDeviceIdentity).toHaveBeenCalledTimes(1)
     caller.abort()
     await vi.advanceTimersByTimeAsync(1)
 
@@ -271,15 +263,10 @@ describe('gql transport outcomes', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('times out while legacy device registration is still pending', async () => {
+  it('times out while signed operation device identity is still pending', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    mocks.getOrCreateDeviceIdentity.mockResolvedValue({
-      deviceId: 'device-pending-registration',
-      privateKey: {} as CryptoKey,
-      publicKeyJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
-    })
-    mocks.ensureLegacyDeviceRegistered.mockReturnValue(
+    mocks.getOrCreateDeviceIdentity.mockReturnValue(
       new Promise<void>(() => undefined),
     )
 
@@ -527,6 +514,69 @@ describe('gql transport outcomes', () => {
     })
     expect(requestBody(fetchMock, 1)).toEqual(requestBody(fetchMock, 0))
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('signs sync read operations without legacy device registration preflight', async () => {
+    const pair = (await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['sign', 'verify'],
+    )) as CryptoKeyPair
+    mocks.getOrCreateDeviceIdentity.mockResolvedValue({
+      deviceId: 'device-sync-test',
+      privateKey: pair.privateKey,
+      publicKeyJwk: await crypto.subtle.exportKey('jwk', pair.publicKey),
+    })
+    mocks.getDeviceId.mockResolvedValue('device-sync-test')
+
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse({ data: { ok: true } })),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const operations = [
+      {
+        id: 'engagement.available.v1',
+        name: 'AvailableEngagements',
+        document: productQueries.AVAILABLE_ENGAGEMENTS_QUERY,
+      },
+      {
+        id: 'engagement.reserved.v1',
+        name: 'MyReservedEngagements',
+        document: productQueries.MY_RESERVED_ENGAGEMENTS_QUERY,
+      },
+      {
+        id: 'tweet.available.v1',
+        name: 'AvailableTweets',
+        document: productQueries.AVAILABLE_TWEETS_QUERY,
+      },
+      {
+        id: 'user.me.v1',
+        name: 'Me',
+        document: productQueries.ME_QUERY,
+      },
+    ] as const
+
+    for (const operation of operations) {
+      await gql(operation.document)
+    }
+
+    expect(mocks.ensureLegacyDeviceRegistered).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(operations.length)
+    for (const [index, operation] of operations.entries()) {
+      const init = fetchMock.mock.calls[index]?.[1] as RequestInit | undefined
+      const headers = new Headers(init?.headers)
+      expect(headers.get('x-plugin-operation-id')).toBe(operation.id)
+      expect(headers.get('x-device-id')).toBe('device-sync-test')
+      expect(headers.get('x-request-timestamp')).toMatch(/^\d+$/)
+      expect(headers.get('x-request-nonce')).toBeTruthy()
+      expect(headers.get('x-device-signature')).toBeTruthy()
+      expect(requestBody(fetchMock, index)).toMatchObject({
+        query: operation.document,
+      })
+    }
   })
 
   it('signs each operation in the shared product document', async () => {
