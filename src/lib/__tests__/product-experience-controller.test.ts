@@ -579,10 +579,21 @@ describe('ProductExperienceController runtime messages and replay safety', () =>
       ruleSetVersion: 3,
       allowedOrigins: [CLIENT_ORIGIN, SECOND_ORIGIN],
       completionMode: 'ALL',
+      evaluationMode: 'STRICT',
       rules,
     })
     expect(JSON.stringify(response)).not.toContain('ticket-value')
     expect(JSON.stringify(response)).not.toContain('mac-key')
+  })
+
+  it('uses selector-only evaluation only for a TEST ticket', async () => {
+    harness = createHarness()
+    await harness.controller.saveTask(task('TEST'))
+    await harness.controller.start()
+
+    await expect(harness.controller.bootstrap(sender())).resolves.toMatchObject(
+      { ok: true, evaluationMode: 'SELECTOR_ONLY' },
+    )
   })
 
   it('accumulates ALL rule metadata and submits exactly once', async () => {

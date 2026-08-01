@@ -213,6 +213,7 @@ export type MsgResponse =
       ruleSetVersion: number
       allowedOrigins: string[]
       completionMode: 'ALL'
+      evaluationMode: 'STRICT' | 'SELECTOR_ONLY'
       rules: ProductExperienceRule[]
     }
   | {

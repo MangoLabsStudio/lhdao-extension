@@ -13,6 +13,7 @@ interface ProductExperienceBootstrap {
   ruleSetVersion: number
   allowedOrigins: string[]
   completionMode: 'ALL'
+  evaluationMode: 'STRICT' | 'SELECTOR_ONLY'
   rules: ProductExperienceRule[]
 }
 
@@ -89,6 +90,8 @@ function parseBootstrap(value: unknown): ProductExperienceBootstrap | null {
     value.sessionId.length > 256 ||
     !Number.isInteger(value.ruleSetVersion) ||
     value.completionMode !== 'ALL' ||
+    (value.evaluationMode !== 'STRICT' &&
+      value.evaluationMode !== 'SELECTOR_ONLY') ||
     !Array.isArray(value.allowedOrigins) ||
     !value.allowedOrigins.every((origin) => typeof origin === 'string') ||
     !Array.isArray(value.rules) ||
@@ -105,6 +108,7 @@ function parseBootstrap(value: unknown): ProductExperienceBootstrap | null {
     ruleSetVersion: value.ruleSetVersion as number,
     allowedOrigins: [...value.allowedOrigins] as string[],
     completionMode: 'ALL',
+    evaluationMode: value.evaluationMode,
     rules: rules as ProductExperienceRule[],
   }
 }
@@ -152,6 +156,7 @@ export default defineContentScript({
       rules: bootstrap.rules,
       allowedOrigins: bootstrap.allowedOrigins,
       completionMode: bootstrap.completionMode,
+      evaluationMode: bootstrap.evaluationMode,
       onEvidence(matches) {
         void chrome.runtime
           .sendMessage(

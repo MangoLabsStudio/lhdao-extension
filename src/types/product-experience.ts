@@ -1,4 +1,5 @@
 export type ProductTicketKind = 'PARTICIPANT' | 'TEST'
+export type ProductExperienceEvaluationMode = 'STRICT' | 'SELECTOR_ONLY'
 
 export interface ProductExperienceTaskRef {
   campaignId: string

@@ -96,6 +96,7 @@ export type ProductExperienceBootstrapResponse =
       ruleSetVersion: number
       allowedOrigins: string[]
       completionMode: 'ALL'
+      evaluationMode: 'STRICT' | 'SELECTOR_ONLY'
       rules: ProductExperienceRule[]
     }
   | { ok: false; error: 'INVALID_SENDER' | 'NO_ACTIVE_SESSION' }
@@ -484,6 +485,8 @@ export class ProductExperienceController {
       ruleSetVersion: session.ruleSetVersion,
       allowedOrigins: clone(session.allowedOrigins),
       completionMode: 'ALL',
+      evaluationMode:
+        session.ticketKind === 'TEST' ? 'SELECTOR_ONLY' : 'STRICT',
       rules: clone(session.rules),
     }
   }

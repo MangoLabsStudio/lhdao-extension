@@ -190,6 +190,22 @@ describe('evaluateProductRule', () => {
     ).toBeNull()
   })
 
+  it('recognizes a visible selector for Buyer tests without satisfying its condition', async () => {
+    element({ id: 'trading-volume' }, '$1')
+
+    expect(
+      await evaluateProductRule(
+        rule(
+          { type: 'NUMERIC_AT_LEAST', minimumValue: 100000 },
+          { selector: '#trading-volume' },
+        ),
+        document,
+        CLIENT_URL,
+        { evaluationMode: 'SELECTOR_ONLY' },
+      ),
+    ).not.toBeNull()
+  })
+
   it.each([
     ['class', 'complete'],
     ['aria-current', 'step'],

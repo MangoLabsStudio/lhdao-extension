@@ -14,6 +14,7 @@ const MAX_SELECTOR_LENGTH = 512
 
 export interface ProductRuleEvaluationOptions {
   allowLoopbackHttp?: boolean
+  evaluationMode?: 'STRICT' | 'SELECTOR_ONLY'
   now?: () => Date
 }
 
@@ -231,7 +232,13 @@ export async function evaluateProductRule(
   const visibleElements = elements.filter((element) =>
     isVisible(element, ownerDocument),
   )
-  if (!conditionMatches(rule.condition, visibleElements)) return null
+  if (
+    options.evaluationMode !== 'SELECTOR_ONLY' &&
+    !conditionMatches(rule.condition, visibleElements)
+  ) {
+    return null
+  }
+  if (visibleElements.length === 0) return null
 
   return {
     ruleId: rule.id,

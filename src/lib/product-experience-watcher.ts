@@ -16,6 +16,7 @@ export interface ProductExperienceWatcherOptions {
   rules: readonly ProductExperienceRule[]
   allowedOrigins: readonly string[]
   completionMode: 'ALL'
+  evaluationMode?: 'STRICT' | 'SELECTOR_ONLY'
   onEvidence: (matches: ProductRuleMatch[]) => void
   onStatus?: (status: ProductExperienceWatcherStatus) => void
 }
@@ -208,6 +209,7 @@ export function startProductExperienceWatcher(
       pendingRules.map((rule) =>
         evaluateProductRule(rule, document, href, {
           allowLoopbackHttp: true,
+          evaluationMode: options.evaluationMode,
         }),
       ),
     )
