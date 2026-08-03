@@ -479,6 +479,29 @@ describe('Binance Square probe sanitizer', () => {
 })
 
 describe('Binance Square probe observation parser', () => {
+  function observationEnvelopeOfLength(length: number) {
+    const envelope = (digits: number) => ({
+      __lhBinanceProbe: true,
+      observation: validObservation({
+        requestShape: { text: `<string:${'1'.repeat(digits)}>` },
+      }),
+    })
+    const baseLength = JSON.stringify(envelope(1)).length - 1
+    const value = envelope(length - baseLength)
+    expect(JSON.stringify(value)).toHaveLength(length)
+    return value
+  }
+
+  it('enforces the serialized size limit on the complete message envelope', () => {
+    const atLimit = observationEnvelopeOfLength(16_384)
+    const overLimit = observationEnvelopeOfLength(16_385)
+
+    expect(parseProbeObservation(atLimit.observation)).not.toBeNull()
+    expect(parseProbeObservation(overLimit.observation)).not.toBeNull()
+    expect(parseProbeObservationMessage(atLimit)).not.toBeNull()
+    expect(parseProbeObservationMessage(overLimit)).toBeNull()
+  })
+
   it('accepts only sanitized observation metadata and shapes', () => {
     const observation = validObservation({
       requestShape: {

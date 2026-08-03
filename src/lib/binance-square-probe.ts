@@ -20,6 +20,9 @@ const MAX_ARRAY_ITEMS = 5
 const MAX_JSON_LENGTH = 16_384
 const MAX_NODES = 500
 const MAX_TARGETS = 500
+const OBSERVATION_ENVELOPE_OVERHEAD =
+  JSON.stringify({ __lhBinanceProbe: true, observation: null }).length -
+  'null'.length
 const SENSITIVE_KEY_RE =
   /authorization|cookie|csrf|secret|session|token|credential|password/i
 const SAFE_MARKER_RE =
@@ -356,16 +359,21 @@ function isSanitizedShape(
 }
 
 function serializedShapeFits(value: unknown): boolean {
+  const length = serializedLength(value)
+  return length !== null && length <= MAX_JSON_LENGTH
+}
+
+function serializedLength(value: unknown): number | null {
   try {
-    return JSON.stringify(value).length <= MAX_JSON_LENGTH
+    return JSON.stringify(value).length
   } catch {
-    return false
+    return null
   }
 }
 
-export function parseProbeObservation(
+function parseProbeObservationWithLength(
   value: unknown,
-): BinanceProbeObservation | null {
+): { observation: BinanceProbeObservation; serializedLength: number } | null {
   const obj = record(value)
   const target = record(obj?.target)
   if (
@@ -386,14 +394,23 @@ export function parseProbeObservation(
     !TARGET_ID_RE.test(target.id) ||
     !isCanonicalIsoTimestamp(obj.capturedAt) ||
     !isSanitizedShape(obj.requestShape) ||
-    !isSanitizedShape(obj.responseShape) ||
-    !serializedShapeFits(obj.requestShape) ||
-    !serializedShapeFits(obj.responseShape) ||
-    !serializedShapeFits(obj)
+    !isSanitizedShape(obj.responseShape)
   ) {
     return null
   }
-  return obj as unknown as BinanceProbeObservation
+  const length = serializedLength(obj)
+  return length !== null && length <= MAX_JSON_LENGTH
+    ? {
+        observation: obj as unknown as BinanceProbeObservation,
+        serializedLength: length,
+      }
+    : null
+}
+
+export function parseProbeObservation(
+  value: unknown,
+): BinanceProbeObservation | null {
+  return parseProbeObservationWithLength(value)?.observation ?? null
 }
 
 export function parseProbeObservationMessage(
@@ -401,10 +418,17 @@ export function parseProbeObservationMessage(
 ): BinanceProbeObservation | null {
   try {
     const obj = record(value)
-    return obj &&
-      hasOnlyKeys(obj, ['__lhBinanceProbe', 'observation']) &&
-      obj.__lhBinanceProbe === true
-      ? parseProbeObservation(obj.observation)
+    if (
+      !obj ||
+      !hasOnlyKeys(obj, ['__lhBinanceProbe', 'observation']) ||
+      obj.__lhBinanceProbe !== true
+    ) {
+      return null
+    }
+    const parsed = parseProbeObservationWithLength(obj.observation)
+    return parsed &&
+      parsed.serializedLength + OBSERVATION_ENVELOPE_OVERHEAD <= MAX_JSON_LENGTH
+      ? parsed.observation
       : null
   } catch {
     return null
