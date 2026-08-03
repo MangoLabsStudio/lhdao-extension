@@ -11,6 +11,63 @@ const MATCHES = [
   'https://www.binance.com/square/*',
 ]
 
+// This page-world marker only owns patch lifecycle. It is not an authorization
+// signal; observations still pass the isolated bridge and background checks.
+const PROBE_INSTALLATION = Symbol.for('lhdao.binance-square-probe.installation')
+
+type ProbeInstallation = {
+  owners: number
+  disposed: boolean
+  originalFetch: typeof window.fetch
+  fetchWrapper: typeof window.fetch
+  xhrPrototype: typeof XMLHttpRequest.prototype
+  originalOpen: typeof XMLHttpRequest.prototype.open
+  openWrapper: typeof XMLHttpRequest.prototype.open
+  originalSend: typeof XMLHttpRequest.prototype.send
+  sendWrapper: typeof XMLHttpRequest.prototype.send
+  onConfigMessage: (event: MessageEvent) => void
+  pendingLoad: WeakMap<XMLHttpRequest, () => void>
+  pendingXhrs: Set<XMLHttpRequest>
+}
+
+function installationStore(): Record<PropertyKey, unknown> {
+  return window as unknown as Record<PropertyKey, unknown>
+}
+
+function disposeProbeInstallation(installation: ProbeInstallation): void {
+  if (installation.disposed) return
+  installation.disposed = true
+  window.removeEventListener('message', installation.onConfigMessage)
+  for (const xhr of installation.pendingXhrs) {
+    const listener = installation.pendingLoad.get(xhr)
+    if (listener) xhr.removeEventListener('load', listener)
+  }
+  installation.pendingXhrs.clear()
+  if (window.fetch === installation.fetchWrapper) {
+    window.fetch = installation.originalFetch
+  }
+  if (installation.xhrPrototype.open === installation.openWrapper) {
+    installation.xhrPrototype.open = installation.originalOpen
+  }
+  if (installation.xhrPrototype.send === installation.sendWrapper) {
+    installation.xhrPrototype.send = installation.originalSend
+  }
+  const store = installationStore()
+  if (store[PROBE_INSTALLATION] === installation) {
+    Reflect.deleteProperty(store, PROBE_INSTALLATION)
+  }
+}
+
+function releaseProbeInstallation(installation: ProbeInstallation): () => void {
+  let released = false
+  return () => {
+    if (released || installation.disposed) return
+    released = true
+    installation.owners -= 1
+    if (installation.owners === 0) disposeProbeInstallation(installation)
+  }
+}
+
 export function isBinanceProbeCandidate(
   url: string | undefined,
   method: string,
@@ -65,17 +122,36 @@ function json(text: string | undefined): unknown {
   }
 }
 
-export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
-  if (!enabled) return
+export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): () => void {
+  const store = installationStore()
+  const existing = store[PROBE_INSTALLATION] as ProbeInstallation | undefined
+  if (!enabled) {
+    if (existing) disposeProbeInstallation(existing)
+    return () => undefined
+  }
+  if (
+    existing &&
+    !existing.disposed &&
+    window.fetch === existing.fetchWrapper &&
+    XMLHttpRequest.prototype.open === existing.openWrapper &&
+    XMLHttpRequest.prototype.send === existing.sendWrapper
+  ) {
+    existing.owners += 1
+    return releaseProbeInstallation(existing)
+  }
+  if (existing) disposeProbeInstallation(existing)
+
+  let installation: ProbeInstallation | undefined
   let targets: BinanceProbeTarget[] = []
 
-  window.addEventListener('message', (event) => {
+  const onConfigMessage = (event: MessageEvent) => {
     if (event.source !== window || event.origin !== window.location.origin) {
       return
     }
     const parsed = parseProbeTargetConfigMessage(event.data)
     if (parsed) targets = parsed
-  })
+  }
+  window.addEventListener('message', onConfigMessage)
 
   const emit = (args: {
     url: string
@@ -83,6 +159,7 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
     request: unknown
     response: unknown
   }) => {
+    if (installation?.disposed) return
     const observation = buildProbeObservation({
       ...args,
       method: 'POST',
@@ -99,7 +176,10 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
   }
 
   const originalFetch = window.fetch
-  window.fetch = function (...args: Parameters<typeof fetch>) {
+  const fetchWrapper = function (
+    this: typeof window,
+    ...args: Parameters<typeof fetch>
+  ) {
     const input = args[0]
     const init = args[1]
     let url: string | undefined
@@ -132,18 +212,22 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
     }
     return result
   }
+  window.fetch = fetchWrapper
 
   const state = new WeakMap<XMLHttpRequest, { method: string; url: string }>()
   const pendingLoad = new WeakMap<XMLHttpRequest, () => void>()
+  const pendingXhrs = new Set<XMLHttpRequest>()
   const removePendingLoad = (xhr: XMLHttpRequest) => {
     const listener = pendingLoad.get(xhr)
     if (!listener) return
     pendingLoad.delete(xhr)
+    pendingXhrs.delete(xhr)
     xhr.removeEventListener('load', listener)
   }
-  const originalOpen = XMLHttpRequest.prototype.open
-  const originalSend = XMLHttpRequest.prototype.send
-  XMLHttpRequest.prototype.open = function (...args: unknown[]) {
+  const xhrPrototype = XMLHttpRequest.prototype
+  const originalOpen = xhrPrototype.open
+  const originalSend = xhrPrototype.send
+  const openWrapper = function (this: XMLHttpRequest, ...args: unknown[]) {
     const result = (originalOpen as (...values: unknown[]) => unknown).apply(
       this,
       args,
@@ -155,7 +239,7 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
     })
     return result
   }
-  XMLHttpRequest.prototype.send = function (...args: unknown[]) {
+  const sendWrapper = function (this: XMLHttpRequest, ...args: unknown[]) {
     const previousLoad = pendingLoad.get(this)
     const requestState = state.get(this)
     const candidate =
@@ -171,6 +255,7 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
         loadCompleted = true
         if (pendingLoad.get(this) === loadListener) {
           pendingLoad.delete(this)
+          pendingXhrs.delete(this)
         }
         this.removeEventListener('load', loadListener)
         const status = this.status
@@ -199,7 +284,12 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
           originalSend as (...values: unknown[]) => unknown
         ).apply(this, args)
         if (pendingLoad.get(this) === previousLoad) pendingLoad.delete(this)
-        if (!loadCompleted) pendingLoad.set(this, loadListener)
+        if (loadCompleted) {
+          pendingXhrs.delete(this)
+        } else {
+          pendingLoad.set(this, loadListener)
+          pendingXhrs.add(this)
+        }
         return result
       } catch (error) {
         this.removeEventListener('load', loadListener)
@@ -213,13 +303,35 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
         this,
         args,
       )
-      if (pendingLoad.get(this) === previousLoad) pendingLoad.delete(this)
+      if (pendingLoad.get(this) === previousLoad) {
+        pendingLoad.delete(this)
+        pendingXhrs.delete(this)
+      }
       return result
     } catch (error) {
       if (previousLoad) this.addEventListener('load', previousLoad)
       throw error
     }
   }
+  xhrPrototype.open = openWrapper as typeof XMLHttpRequest.prototype.open
+  xhrPrototype.send = sendWrapper as typeof XMLHttpRequest.prototype.send
+
+  installation = {
+    owners: 1,
+    disposed: false,
+    originalFetch,
+    fetchWrapper,
+    xhrPrototype,
+    originalOpen,
+    openWrapper: xhrPrototype.open,
+    originalSend,
+    sendWrapper: xhrPrototype.send,
+    onConfigMessage,
+    pendingLoad,
+    pendingXhrs,
+  }
+  store[PROBE_INSTALLATION] = installation
+  return releaseProbeInstallation(installation)
 }
 
 export default defineContentScript({

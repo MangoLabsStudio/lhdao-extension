@@ -11,6 +11,14 @@ import {
 
 const target = { kind: 'CONTENT', id: '335389698745313' } as const
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function observation(
   overrides: Partial<BinanceProbeObservation> = {},
 ): BinanceProbeObservation {
@@ -33,6 +41,7 @@ describe('Binance Square MAIN probe', () => {
   const originalSend = XMLHttpRequest.prototype.send
 
   afterEach(() => {
+    installBinanceSquareProbe(false)
     window.fetch = originalFetch
     XMLHttpRequest.prototype.open = originalOpen
     XMLHttpRequest.prototype.send = originalSend
@@ -68,6 +77,70 @@ describe('Binance Square MAIN probe', () => {
     expect(window.fetch).toBe(fetch)
     expect(XMLHttpRequest.prototype.open).toBe(originalOpen)
     expect(XMLHttpRequest.prototype.send).toBe(originalSend)
+  })
+
+  it('deduplicates installs and restores only wrappers it still owns', async () => {
+    const response = {
+      status: 200,
+      clone: () => ({ json: async () => ({ code: 0 }) }),
+    } as Response
+    const nativeFetch = vi.fn(async () => response) as typeof fetch
+    window.fetch = nativeFetch
+    const postMessage = vi.spyOn(window, 'postMessage')
+
+    const releaseFirst = installBinanceSquareProbe(true)
+    const ownedFetch = window.fetch
+    const ownedOpen = XMLHttpRequest.prototype.open
+    const ownedSend = XMLHttpRequest.prototype.send
+    const releaseSecond = installBinanceSquareProbe(true)
+
+    expect(window.fetch).toBe(ownedFetch)
+    expect(XMLHttpRequest.prototype.open).toBe(ownedOpen)
+    expect(XMLHttpRequest.prototype.send).toBe(ownedSend)
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: { __lhBinanceProbeConfig: true, targets: [target] },
+      }),
+    )
+    await window.fetch('https://www.binance.com/bapi/example', {
+      method: 'POST',
+      body: JSON.stringify({ postId: target.id }),
+    })
+    await vi.waitFor(() => {
+      expect(
+        postMessage.mock.calls.filter(
+          ([message]) =>
+            (message as { __lhBinanceProbe?: unknown }).__lhBinanceProbe ===
+            true,
+        ),
+      ).toHaveLength(1)
+    })
+
+    releaseFirst()
+    expect(window.fetch).toBe(ownedFetch)
+    releaseSecond()
+    expect(window.fetch).toBe(nativeFetch)
+    expect(XMLHttpRequest.prototype.open).toBe(originalOpen)
+    expect(XMLHttpRequest.prototype.send).toBe(originalSend)
+
+    const replacementFetch = vi.fn(async () => response) as typeof fetch
+    const replacementOpen =
+      vi.fn() as unknown as typeof XMLHttpRequest.prototype.open
+    const releaseOwned = installBinanceSquareProbe(true)
+    window.fetch = replacementFetch
+    XMLHttpRequest.prototype.open = replacementOpen
+    releaseOwned()
+    expect(window.fetch).toBe(replacementFetch)
+    expect(XMLHttpRequest.prototype.open).toBe(replacementOpen)
+
+    const releaseReinjected = installBinanceSquareProbe(true)
+    expect(window.fetch).not.toBe(replacementFetch)
+    expect(XMLHttpRequest.prototype.open).not.toBe(replacementOpen)
+    releaseReinjected()
+    expect(window.fetch).toBe(replacementFetch)
+    expect(XMLHttpRequest.prototype.open).toBe(replacementOpen)
   })
 
   it('captures only configured targets and preserves the native fetch result', async () => {
@@ -443,6 +516,7 @@ describe('Binance Square MAIN probe', () => {
 
 describe('Binance Square ISOLATED bridge', () => {
   afterEach(() => {
+    installBinanceSquareBridge(false)
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -526,6 +600,10 @@ describe('Binance Square ISOLATED bridge', () => {
         onMessage: {
           addListener: (listener: (message: unknown) => void) =>
             runtimeListeners.push(listener),
+          removeListener: (listener: (message: unknown) => void) => {
+            const index = runtimeListeners.indexOf(listener)
+            if (index >= 0) runtimeListeners.splice(index, 1)
+          },
         },
       },
     })
@@ -560,5 +638,140 @@ describe('Binance Square ISOLATED bridge', () => {
         ),
       ).toHaveLength(2)
     })
+  })
+
+  it('replaces overlapping installs, cleans listeners, and reinjects', async () => {
+    const runtimeListeners = new Set<(message: unknown) => void>()
+    const sendMessage = vi.fn(async (message: { type: string }) =>
+      message.type === 'get-binance-probe-targets'
+        ? { type: 'binance-probe-targets', targets: [target] }
+        : { type: 'ack' },
+    )
+    vi.stubGlobal('chrome', {
+      runtime: {
+        sendMessage,
+        onMessage: {
+          addListener: (listener: (message: unknown) => void) =>
+            runtimeListeners.add(listener),
+          removeListener: (listener: (message: unknown) => void) =>
+            runtimeListeners.delete(listener),
+        },
+      },
+    })
+
+    const releaseFirst = installBinanceSquareBridge(true)
+    const releaseSecond = installBinanceSquareBridge(true)
+    await vi.waitFor(() => expect(runtimeListeners.size).toBe(1))
+    sendMessage.mockClear()
+
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: { __lhBinanceProbe: true, observation: observation() },
+      }),
+    )
+    await vi.waitFor(() => {
+      expect(
+        sendMessage.mock.calls.filter(
+          ([message]) => message.type === 'report-binance-probe-observation',
+        ),
+      ).toHaveLength(1)
+    })
+
+    releaseFirst()
+    expect(runtimeListeners.size).toBe(1)
+    releaseSecond()
+    expect(runtimeListeners.size).toBe(0)
+    sendMessage.mockClear()
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: { __lhBinanceProbe: true, observation: observation() },
+      }),
+    )
+    await Promise.resolve()
+    expect(sendMessage).not.toHaveBeenCalled()
+
+    const releaseReinjected = installBinanceSquareBridge(true)
+    expect(runtimeListeners.size).toBe(1)
+    releaseReinjected()
+    expect(runtimeListeners.size).toBe(0)
+  })
+
+  it('publishes only the latest overlapping target refresh', async () => {
+    const runtimeListeners = new Set<(message: unknown) => void>()
+    type TargetResponse = {
+      type: string
+      targets: readonly { kind: 'CONTENT' | 'AUTHOR'; id: string }[]
+    }
+    const requests = [deferred<TargetResponse>(), deferred<TargetResponse>()]
+    let targetRequest = 0
+    const newerTarget = { kind: 'CONTENT', id: '999999' } as const
+    const sendMessage = vi.fn((message: { type: string }) => {
+      if (message.type !== 'get-binance-probe-targets') {
+        return Promise.resolve({ type: 'ack' })
+      }
+      const request = requests[targetRequest]
+      targetRequest += 1
+      return request.promise
+    })
+    vi.stubGlobal('chrome', {
+      runtime: {
+        sendMessage,
+        onMessage: {
+          addListener: (listener: (message: unknown) => void) =>
+            runtimeListeners.add(listener),
+          removeListener: (listener: (message: unknown) => void) =>
+            runtimeListeners.delete(listener),
+        },
+      },
+    })
+    const postMessage = vi.spyOn(window, 'postMessage')
+    const release = installBinanceSquareBridge(true)
+    runtimeListeners.forEach((listener) => {
+      listener({ type: 'tasks-updated' })
+    })
+
+    requests[1].resolve({
+      type: 'binance-probe-targets',
+      targets: [newerTarget],
+    })
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledWith(
+        { __lhBinanceProbeConfig: true, targets: [newerTarget] },
+        window.location.origin,
+      )
+    })
+    requests[0].resolve({
+      type: 'binance-probe-targets',
+      targets: [target],
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(postMessage).not.toHaveBeenCalledWith(
+      { __lhBinanceProbeConfig: true, targets: [target] },
+      window.location.origin,
+    )
+    sendMessage.mockClear()
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: {
+          __lhBinanceProbe: true,
+          observation: observation({ target: newerTarget }),
+        },
+      }),
+    )
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({
+        type: 'report-binance-probe-observation',
+        observation: observation({ target: newerTarget }),
+      })
+    })
+    release()
   })
 })

@@ -104,6 +104,107 @@ describe('Binance Square probe background store', () => {
     expect(set).toHaveBeenCalledTimes(1)
   })
 
+  it('does not rewrite an already canonical live fixture list', async () => {
+    const value = observation()
+    const { set } = storageHarness({
+      binanceSquareProbeObservations: [value],
+    })
+
+    await expect(
+      liveBinanceProbeObservations({ now: NOW, enabled: true }),
+    ).resolves.toEqual([value])
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('filters future poisoning while preserving exact time boundaries', async () => {
+    const ttlBoundary = observation({
+      id: '123e4567-e89b-42d3-a456-426614174010',
+      status: 210,
+      capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000).toISOString(),
+    })
+    const skewBoundary = observation({
+      id: '123e4567-e89b-42d3-a456-426614174011',
+      status: 211,
+      capturedAt: new Date(NOW + 5 * 60 * 1_000).toISOString(),
+    })
+    const futurePoison = Array.from({ length: 100 }, (_, index) =>
+      observation({
+        id: `123e4567-e89b-42d3-a456-${String(index).padStart(12, '0')}`,
+        status: 300 + index,
+        capturedAt: `9999-12-${String((index % 28) + 1).padStart(2, '0')}T00:00:00.000Z`,
+      }),
+    )
+    const { stored } = storageHarness({
+      binanceSquareProbeObservations: [
+        observation({
+          id: '123e4567-e89b-42d3-a456-426614174012',
+          status: 212,
+          capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000 - 1).toISOString(),
+        }),
+        ttlBoundary,
+        skewBoundary,
+        observation({
+          id: '123e4567-e89b-42d3-a456-426614174013',
+          status: 213,
+          capturedAt: new Date(NOW + 5 * 60 * 1_000 + 1).toISOString(),
+        }),
+        ...futurePoison,
+      ],
+    })
+
+    await expect(
+      liveBinanceProbeObservations({ now: NOW, enabled: true }),
+    ).resolves.toEqual([ttlBoundary, skewBoundary])
+    expect(stored.binanceSquareProbeObservations).toEqual([
+      ttlBoundary,
+      skewBoundary,
+    ])
+  })
+
+  it('rejects out-of-window appends at one millisecond past each boundary', async () => {
+    const ttlBoundary = observation({
+      id: '123e4567-e89b-42d3-a456-426614174020',
+      status: 220,
+      capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000).toISOString(),
+    })
+    const skewBoundary = observation({
+      id: '123e4567-e89b-42d3-a456-426614174021',
+      status: 221,
+      capturedAt: new Date(NOW + 5 * 60 * 1_000).toISOString(),
+    })
+    const { stored } = storageHarness({
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [{ reserved: true }],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [],
+    })
+
+    for (const value of [
+      observation({
+        id: '123e4567-e89b-42d3-a456-426614174022',
+        status: 222,
+        capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000 - 1).toISOString(),
+      }),
+      ttlBoundary,
+      skewBoundary,
+      observation({
+        id: '123e4567-e89b-42d3-a456-426614174023',
+        status: 223,
+        capturedAt: new Date(NOW + 5 * 60 * 1_000 + 1).toISOString(),
+      }),
+    ]) {
+      await appendBinanceProbeObservation(value, { now: NOW, enabled: true })
+    }
+
+    expect(stored.binanceSquareProbeObservations).toEqual([
+      ttlBoundary,
+      skewBoundary,
+    ])
+  })
+
   it('authorizes only current reserved targets', async () => {
     const allowed = observation()
     const unauthorized = observation({

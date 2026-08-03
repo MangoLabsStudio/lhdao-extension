@@ -108,6 +108,9 @@ const RAW_CAPTURE_TTL_MS = 10 * 60 * 1000
 const MAX_RAW_CAPTURES = 80
 const MAX_BINANCE_PROBE_OBSERVATIONS = 100
 const BINANCE_PROBE_TTL_MS = 24 * 60 * 60 * 1_000
+// Page and service-worker clocks may differ briefly, but future fixtures must
+// not remain live forever or crowd real observations out of the bounded store.
+const BINANCE_PROBE_CLOCK_SKEW_MS = 5 * 60 * 1_000
 const SUPPORTED_ACTIONS = new Set<CampaignTaskCache['actionType']>([
   'LIKE',
   'RT',
@@ -153,22 +156,35 @@ function binanceProbeKey(observation: BinanceProbeObservation): string {
   ])
 }
 
+function isLiveBinanceProbeTimestamp(
+  observation: BinanceProbeObservation,
+  now: number,
+): boolean {
+  const capturedAt = Date.parse(observation.capturedAt)
+  return (
+    capturedAt >= now - BINANCE_PROBE_TTL_MS &&
+    capturedAt <= now + BINANCE_PROBE_CLOCK_SKEW_MS
+  )
+}
+
 async function liveBinanceProbeObservationsUnlocked(
   now: number,
 ): Promise<BinanceProbeObservation[]> {
   const raw = await sessionStore.get('binanceSquareProbeObservations')
   const stored = Array.isArray(raw) ? raw : []
-  const cutoff = now - BINANCE_PROBE_TTL_MS
-  const live = stored
-    .map(parseProbeObservation)
+  const parsed = stored.map(parseProbeObservation)
+  const live = parsed
     .filter((item): item is BinanceProbeObservation => item !== null)
-    .filter((item) => Date.parse(item.capturedAt) >= cutoff)
+    .filter((item) => isLiveBinanceProbeTimestamp(item, now))
     .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
     .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
   if (
     !Array.isArray(raw) ||
     live.length !== stored.length ||
-    live.some((item, index) => item !== stored[index])
+    live.some((item, index) => {
+      const original = parsed[index]
+      return !original || JSON.stringify(item) !== JSON.stringify(original)
+    })
   ) {
     await sessionStore.set('binanceSquareProbeObservations', live)
   }
@@ -192,7 +208,7 @@ export async function appendBinanceProbeObservation(
   const { now = Date.now(), enabled = CAPTURE_DEBUG } = options
   if (!enabled) return
   const observation = parseProbeObservation(value)
-  if (!observation) return
+  if (!observation || !isLiveBinanceProbeTimestamp(observation, now)) return
   await withBinanceProbeStorage(async () => {
     const index = (await sessionStore.get('binanceSquareTasks')) ?? {
       byContentId: {},
