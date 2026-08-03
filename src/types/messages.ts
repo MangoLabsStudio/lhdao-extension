@@ -7,6 +7,10 @@
  *   - 单向广播(BG → CS)用 `tasks-updated`,响应永远是 `ack`
  */
 
+import type {
+  BinanceProbeObservation,
+  BinanceProbeTarget,
+} from '@/lib/binance-square-probe'
 import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
 import type { PublicProductExperienceState } from '@/lib/product-experience-task-bridge'
 import type { LighthouseMember } from '@/lib/queries'
@@ -34,6 +38,13 @@ export type MsgRequest =
       correlationId: string
     }
   | { type: 'get-product-experience-state' }
+  | { type: 'get-binance-probe-targets' }
+  | {
+      type: 'report-binance-probe-observation'
+      observation: BinanceProbeObservation
+    }
+  | { type: 'export-binance-probe-observations' }
+  | { type: 'clear-binance-probe-observations' }
   | {
       type: 'get-public-product-experience-state'
       campaignId: string
@@ -200,6 +211,11 @@ export type MsgResponse =
   | {
       type: 'product-experience-state-result'
       state: ProductExperienceControllerState
+    }
+  | { type: 'binance-probe-targets'; targets: BinanceProbeTarget[] }
+  | {
+      type: 'binance-probe-observations'
+      observations: BinanceProbeObservation[]
     }
   | {
       type: 'public-product-experience-state-result'

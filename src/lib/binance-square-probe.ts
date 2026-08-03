@@ -19,6 +19,7 @@ const MAX_KEYS = 80
 const MAX_ARRAY_ITEMS = 5
 const MAX_JSON_LENGTH = 16_384
 const MAX_NODES = 500
+const MAX_TARGETS = 500
 const SENSITIVE_KEY_RE =
   /authorization|cookie|csrf|secret|session|token|credential|password/i
 const SAFE_MARKER_RE =
@@ -387,7 +388,8 @@ export function parseProbeObservation(
     !isSanitizedShape(obj.requestShape) ||
     !isSanitizedShape(obj.responseShape) ||
     !serializedShapeFits(obj.requestShape) ||
-    !serializedShapeFits(obj.responseShape)
+    !serializedShapeFits(obj.responseShape) ||
+    !serializedShapeFits(obj)
   ) {
     return null
   }
@@ -397,10 +399,61 @@ export function parseProbeObservation(
 export function parseProbeObservationMessage(
   value: unknown,
 ): BinanceProbeObservation | null {
-  const obj = record(value)
-  return obj &&
-    hasOnlyKeys(obj, ['__lhBinanceProbe', 'observation']) &&
-    obj.__lhBinanceProbe === true
-    ? parseProbeObservation(obj.observation)
-    : null
+  try {
+    const obj = record(value)
+    return obj &&
+      hasOnlyKeys(obj, ['__lhBinanceProbe', 'observation']) &&
+      obj.__lhBinanceProbe === true
+      ? parseProbeObservation(obj.observation)
+      : null
+  } catch {
+    return null
+  }
+}
+
+export function parseProbeTargetConfigMessage(
+  value: unknown,
+): BinanceProbeTarget[] | null {
+  try {
+    const obj = record(value)
+    if (
+      !obj ||
+      !hasOnlyKeys(obj, ['__lhBinanceProbeConfig', 'targets']) ||
+      obj.__lhBinanceProbeConfig !== true ||
+      !Array.isArray(obj.targets) ||
+      obj.targets.length > MAX_TARGETS ||
+      !serializedShapeFits(obj)
+    ) {
+      return null
+    }
+    const keys = boundedOwnEnumerableKeys(obj.targets, obj.targets.length)
+    if (
+      keys.overflow ||
+      keys.keys.length !== obj.targets.length ||
+      !keys.keys.every((key, index) => key === String(index))
+    ) {
+      return null
+    }
+    const targets: BinanceProbeTarget[] = []
+    const seen = new Set<string>()
+    for (const value of obj.targets) {
+      const target = record(value)
+      if (
+        !target ||
+        !hasOnlyKeys(target, ['id', 'kind']) ||
+        (target.kind !== 'CONTENT' && target.kind !== 'AUTHOR') ||
+        typeof target.id !== 'string' ||
+        !TARGET_ID_RE.test(target.id)
+      ) {
+        return null
+      }
+      const key = `${target.kind}:${target.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      targets.push({ kind: target.kind, id: target.id })
+    }
+    return targets
+  } catch {
+    return null
+  }
 }

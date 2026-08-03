@@ -5,6 +5,7 @@ import {
   findProbeTarget,
   parseProbeObservation,
   parseProbeObservationMessage,
+  parseProbeTargetConfigMessage,
   sanitizeProbeValue,
 } from '../binance-square-probe'
 
@@ -611,6 +612,23 @@ describe('Binance Square probe observation parser', () => {
     ).toBeNull()
   })
 
+  it('rejects an observation whose individually valid shapes exceed the total budget', () => {
+    const largeShape = Object.fromEntries(
+      Array.from({ length: 80 }, (_, i) => [
+        `<key:string:${i + 1}${'0'.repeat(75)}:${i}>`,
+        '<unsupported>',
+      ]),
+    )
+    expect(JSON.stringify(largeShape).length).toBeLessThan(16_384)
+    const value = validObservation({
+      requestShape: largeShape,
+      responseShape: largeShape,
+    })
+    expect(JSON.stringify(value).length).toBeGreaterThan(16_384)
+
+    expect(parseProbeObservation(value)).toBeNull()
+  })
+
   it('rejects non-JSON objects', () => {
     const observation = validObservation({
       requestShape: new Map([['safe', true]]),
@@ -698,6 +716,83 @@ describe('Binance Square probe observation parser', () => {
         __lhBinanceProbe: true,
         observation,
         headers: { authorization: 'secret' },
+      }),
+    ).toBeNull()
+  })
+})
+
+describe('Binance Square probe target config parser', () => {
+  it('accepts an exact, dense, deduplicated target envelope', () => {
+    expect(
+      parseProbeTargetConfigMessage({
+        __lhBinanceProbeConfig: true,
+        targets: [
+          { kind: 'CONTENT', id: '335389698745313' },
+          { kind: 'AUTHOR', id: '123456' },
+          { kind: 'CONTENT', id: '335389698745313' },
+        ],
+      }),
+    ).toEqual([
+      { kind: 'CONTENT', id: '335389698745313' },
+      { kind: 'AUTHOR', id: '123456' },
+    ])
+  })
+
+  it.each([
+    ['missing marker', { targets }],
+    [
+      'extra wrapper key',
+      { __lhBinanceProbeConfig: true, targets, rawBody: 'secret' },
+    ],
+    [
+      'invalid target id',
+      {
+        __lhBinanceProbeConfig: true,
+        targets: [{ kind: 'CONTENT', id: '12345' }],
+      },
+    ],
+    [
+      'invalid target kind',
+      {
+        __lhBinanceProbeConfig: true,
+        targets: [{ kind: 'USER', id: '123456' }],
+      },
+    ],
+    [
+      'extra target key',
+      {
+        __lhBinanceProbeConfig: true,
+        targets: [{ kind: 'CONTENT', id: '123456', token: 'secret' }],
+      },
+    ],
+    [
+      'oversized list',
+      {
+        __lhBinanceProbeConfig: true,
+        targets: Array.from({ length: 500 }, (_, index) => ({
+          kind: 'CONTENT',
+          id: String(index).padStart(32, '1'),
+        })),
+      },
+    ],
+  ])('rejects %s', (_name, value) => {
+    expect(parseProbeTargetConfigMessage(value)).toBeNull()
+  })
+
+  it('rejects sparse and inherited target data without throwing', () => {
+    const sparse = Array(1)
+    const inherited = Object.create({ kind: 'CONTENT', id: '123456' })
+
+    expect(
+      parseProbeTargetConfigMessage({
+        __lhBinanceProbeConfig: true,
+        targets: sparse,
+      }),
+    ).toBeNull()
+    expect(
+      parseProbeTargetConfigMessage({
+        __lhBinanceProbeConfig: true,
+        targets: [inherited],
       }),
     ).toBeNull()
   })

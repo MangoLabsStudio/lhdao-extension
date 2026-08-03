@@ -22,6 +22,7 @@ const {
 const PRODUCTION_HOSTS = [
   'https://x.com/*',
   'https://twitter.com/*',
+  'https://www.binance.com/*',
   'https://service.lhdao.top/*',
   'https://app.lhdao.top/*',
 ]
@@ -41,6 +42,13 @@ function validManifest(overrides = {}) {
       {
         matches: ['https://app.lhdao.top/*'],
         js: ['content-scripts/web-presence.js'],
+      },
+      {
+        matches: [
+          'https://www.binance.com/*/square/*',
+          'https://www.binance.com/square/*',
+        ],
+        js: ['content-scripts/binance-square-probe.js'],
       },
     ],
     ...overrides,
@@ -303,6 +311,7 @@ test('never lets endpoint environment expand the release host allowlist', async 
       host_permissions: [
         'https://x.com/*',
         'https://twitter.com/*',
+        'https://www.binance.com/*',
         'https://evil.example/*',
         'https://also-evil.example/*',
       ],

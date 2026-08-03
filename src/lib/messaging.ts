@@ -50,7 +50,12 @@ export function broadcastToContent(
   const urls =
     msg.type === 'product-experience-state-changed'
       ? [WEB_MATCH_PATTERN]
-      : ['*://x.com/*', '*://twitter.com/*']
+      : [
+          '*://x.com/*',
+          '*://twitter.com/*',
+          'https://www.binance.com/*/square/*',
+          'https://www.binance.com/square/*',
+        ]
   chrome.tabs.query({ url: urls }, (tabs) => {
     for (const tab of tabs) {
       if (tab.id === undefined) continue

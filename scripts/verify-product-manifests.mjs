@@ -9,6 +9,7 @@ const EXPECTED_PERMISSIONS = ['storage', 'alarms', 'activeTab', 'scripting']
 const FIXED_HOST_PERMISSIONS = [
   'https://x.com/*',
   'https://twitter.com/*',
+  'https://www.binance.com/*',
 ]
 const DEFAULT_API_ENDPOINT = 'https://service.lhdao.top/graphql'
 const DEFAULT_WEB_ENDPOINT = 'https://app.lhdao.top'
@@ -22,6 +23,8 @@ const APPROVED_PAGE_MATCHES = new Set([
   'https://twitter.com/*',
   '*://x.com/*',
   '*://twitter.com/*',
+  'https://www.binance.com/*/square/*',
+  'https://www.binance.com/square/*',
   'https://app.lhdao.top/*',
 ])
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])

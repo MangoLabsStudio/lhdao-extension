@@ -39,6 +39,7 @@ export default defineConfig({
     host_permissions: [
       'https://x.com/*',
       'https://twitter.com/*',
+      'https://www.binance.com/*',
       API_HOST_PATTERN,
       WEB_HOST_PATTERN,
     ],

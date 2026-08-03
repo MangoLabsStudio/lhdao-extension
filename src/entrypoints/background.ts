@@ -1,5 +1,12 @@
-import { indexBinanceSquareTasks } from '@/lib/binance-square-tasks'
-import { dbg } from '@/lib/capture-debug'
+import {
+  type BinanceProbeObservation,
+  parseProbeObservation,
+} from '@/lib/binance-square-probe'
+import {
+  indexBinanceSquareTasks,
+  reservedBinanceProbeTargets,
+} from '@/lib/binance-square-tasks'
+import { CAPTURE_DEBUG, dbg } from '@/lib/capture-debug'
 import { getOrCreateDeviceIdentity } from '@/lib/device-key'
 import {
   type CapturedAction,
@@ -90,6 +97,7 @@ import {
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import type {
+  MsgRequest,
   MsgResponse,
   PairingState,
   SubmitErrorCode,
@@ -98,6 +106,8 @@ import type {
 const ALARM_NAME = 'lhdao-sync'
 const RAW_CAPTURE_TTL_MS = 10 * 60 * 1000
 const MAX_RAW_CAPTURES = 80
+const MAX_BINANCE_PROBE_OBSERVATIONS = 100
+const BINANCE_PROBE_TTL_MS = 24 * 60 * 60 * 1_000
 const SUPPORTED_ACTIONS = new Set<CampaignTaskCache['actionType']>([
   'LIKE',
   'RT',
@@ -114,6 +124,131 @@ function isSupportedXAction(
   return SUPPORTED_ACTIONS.has(
     action.actionType as CampaignTaskCache['actionType'],
   )
+}
+
+type BinanceProbeRuntimeOptions = {
+  now?: number
+  enabled?: boolean
+}
+
+function binanceProbeKey(observation: BinanceProbeObservation): string {
+  return JSON.stringify([
+    observation.method,
+    observation.path,
+    observation.status,
+    observation.target,
+    observation.requestShape,
+    observation.responseShape,
+  ])
+}
+
+export async function liveBinanceProbeObservations({
+  now = Date.now(),
+  enabled = CAPTURE_DEBUG,
+}: BinanceProbeRuntimeOptions = {}): Promise<BinanceProbeObservation[]> {
+  if (!enabled) return []
+  const raw = await sessionStore.get('binanceSquareProbeObservations')
+  const stored = Array.isArray(raw) ? raw : []
+  const cutoff = now - BINANCE_PROBE_TTL_MS
+  const live = stored
+    .map(parseProbeObservation)
+    .filter((item): item is BinanceProbeObservation => item !== null)
+    .filter((item) => Date.parse(item.capturedAt) >= cutoff)
+    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+    .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
+  if (
+    !Array.isArray(raw) ||
+    live.length !== stored.length ||
+    live.some((item, index) => item !== stored[index])
+  ) {
+    await sessionStore.set('binanceSquareProbeObservations', live)
+  }
+  return live
+}
+
+export async function appendBinanceProbeObservation(
+  value: unknown,
+  options: BinanceProbeRuntimeOptions = {},
+): Promise<void> {
+  const { now = Date.now(), enabled = CAPTURE_DEBUG } = options
+  if (!enabled) return
+  const observation = parseProbeObservation(value)
+  if (!observation) return
+  const index = (await sessionStore.get('binanceSquareTasks')) ?? {
+    byContentId: {},
+    byAuthorId: {},
+  }
+  const allowed = reservedBinanceProbeTargets(index)
+  if (
+    !allowed.some(
+      (target) =>
+        target.kind === observation.target.kind &&
+        target.id === observation.target.id,
+    )
+  ) {
+    return
+  }
+  const existing = await liveBinanceProbeObservations({ now, enabled })
+  const key = binanceProbeKey(observation)
+  const duplicate = existing.find((item) => binanceProbeKey(item) === key)
+  if (
+    duplicate &&
+    Date.parse(duplicate.capturedAt) >= Date.parse(observation.capturedAt)
+  ) {
+    return
+  }
+  const next = existing
+    .filter((item) => binanceProbeKey(item) !== key)
+    .concat(observation)
+    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+    .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
+  await sessionStore.set('binanceSquareProbeObservations', next)
+}
+
+export async function handleBinanceProbeRequest(
+  req: MsgRequest,
+  options: BinanceProbeRuntimeOptions = {},
+): Promise<MsgResponse | null> {
+  const enabled = options.enabled ?? CAPTURE_DEBUG
+  if (!enabled) {
+    if (req.type === 'get-binance-probe-targets') {
+      return { type: 'binance-probe-targets', targets: [] }
+    }
+    if (req.type === 'export-binance-probe-observations') {
+      return { type: 'binance-probe-observations', observations: [] }
+    }
+    if (
+      req.type === 'report-binance-probe-observation' ||
+      req.type === 'clear-binance-probe-observations'
+    ) {
+      return { type: 'ack' }
+    }
+  }
+  if (req.type === 'get-binance-probe-targets') {
+    const index = (await sessionStore.get('binanceSquareTasks')) ?? {
+      byContentId: {},
+      byAuthorId: {},
+    }
+    return {
+      type: 'binance-probe-targets',
+      targets: reservedBinanceProbeTargets(index),
+    }
+  }
+  if (req.type === 'report-binance-probe-observation') {
+    await appendBinanceProbeObservation(req.observation, options)
+    return { type: 'ack' }
+  }
+  if (req.type === 'export-binance-probe-observations') {
+    return {
+      type: 'binance-probe-observations',
+      observations: await liveBinanceProbeObservations(options),
+    }
+  }
+  if (req.type === 'clear-binance-probe-observations') {
+    await sessionStore.set('binanceSquareProbeObservations', [])
+    return { type: 'ack' }
+  }
+  return null
 }
 
 function engagementReward(c: {
@@ -253,6 +388,9 @@ export default defineBackground(() => {
   })
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
+    const binanceProbeResponse = await handleBinanceProbeRequest(req)
+    if (binanceProbeResponse) return binanceProbeResponse
+
     if (req.type === 'save-product-experience-task') {
       const result = await productExperienceController.saveTask(req.task)
       if (!result.saved) {
