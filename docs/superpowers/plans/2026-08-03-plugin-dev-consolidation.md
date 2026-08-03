@@ -41,6 +41,8 @@ Expected: every old-only runtime function maps to a dev module or is an obsolete
 
 **Files:**
 - Modify: `scripts/release-workflow-contract.test.ts`
+- Modify: `scripts/verify-product-manifests.test.ts`
+- Modify: `scripts/verify-product-manifests.mjs`
 - Modify: `package.json`
 
 - [ ] **Step 1: Change the release contract first**
@@ -80,6 +82,27 @@ pnpm vitest run scripts/release-workflow-contract.test.ts
 ```
 
 Expected: all release workflow contract tests pass.
+
+- [ ] **Step 5: Update the built-manifest version contract test first**
+
+Change the valid manifest fixture and invalid-version error assertion from `0.2.0` to
+`0.2.2`, then run:
+
+```bash
+pnpm test:manifests
+```
+
+Expected: the valid-manifest test fails because the verifier still requires `0.2.0`.
+
+- [ ] **Step 6: Update the minimum verifier constant and verify GREEN**
+
+Set:
+
+```js
+const EXPECTED_EXTENSION_VERSION = '0.2.2'
+```
+
+Run `pnpm test:manifests` again. Expected: all manifest tests pass.
 
 ### Task 3: Remove the binary byte from TypeScript source
 
