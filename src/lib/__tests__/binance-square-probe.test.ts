@@ -533,6 +533,122 @@ describe('Binance Square probe observation parser', () => {
     expect(toJsonCalls).toBe(0)
   })
 
+  it.each([
+    'requestShape',
+    'responseShape',
+  ] as const)('rejects oversized %s without invoking inherited Object.prototype.toJSON', (field) => {
+    const observation = validObservation({
+      [field]: { text: `<string:${'1'.repeat(20_000)}>` },
+    })
+    const previous = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON')
+    let calls = 0
+    let parsed: BinanceProbeObservation | null = null
+    let parsedMessage: BinanceProbeObservation | null = null
+    try {
+      Object.defineProperty(Object.prototype, 'toJSON', {
+        configurable: true,
+        value: () => {
+          calls += 1
+          return null
+        },
+      })
+      parsed = parseProbeObservation(observation)
+      parsedMessage = parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation,
+      })
+    } finally {
+      if (previous) {
+        Object.defineProperty(Object.prototype, 'toJSON', previous)
+      } else {
+        Reflect.deleteProperty(Object.prototype, 'toJSON')
+      }
+    }
+
+    expect(parsed).toBeNull()
+    expect(parsedMessage).toBeNull()
+    expect(calls).toBe(0)
+  })
+
+  it('rejects inherited Array.prototype and custom array-prototype toJSON', () => {
+    const previous = Object.getOwnPropertyDescriptor(Array.prototype, 'toJSON')
+    let calls = 0
+    let inherited: BinanceProbeObservation | null = null
+    try {
+      Object.defineProperty(Array.prototype, 'toJSON', {
+        configurable: true,
+        value: () => {
+          calls += 1
+          return null
+        },
+      })
+      inherited = parseProbeObservation(
+        validObservation({ requestShape: [true] }),
+      )
+    } finally {
+      if (previous) {
+        Object.defineProperty(Array.prototype, 'toJSON', previous)
+      } else {
+        Reflect.deleteProperty(Array.prototype, 'toJSON')
+      }
+    }
+
+    const customPrototype = Object.create(Array.prototype)
+    Object.defineProperty(customPrototype, 'toJSON', {
+      configurable: true,
+      get: () => {
+        calls += 1
+        return () => null
+      },
+    })
+    const customArray = [true]
+    Object.setPrototypeOf(customArray, customPrototype)
+    const custom = parseProbeObservation(
+      validObservation({ responseShape: customArray }),
+    )
+
+    expect(inherited).toBeNull()
+    expect(custom).toBeNull()
+    expect(calls).toBe(0)
+  })
+
+  it('fails closed when prototype descriptor inspection throws', () => {
+    const hostilePrototype = new Proxy(Object.create(Array.prototype), {
+      getOwnPropertyDescriptor() {
+        throw new Error('hostile descriptor trap')
+      },
+    })
+    const shape = [true]
+    Object.setPrototypeOf(shape, hostilePrototype)
+    let parsed: BinanceProbeObservation | null | undefined
+
+    expect(() => {
+      parsed = parseProbeObservation(validObservation({ requestShape: shape }))
+    }).not.toThrow()
+    expect(parsed).toBeNull()
+  })
+
+  it('continues accepting plain, null-prototype, and ordinary array shapes', () => {
+    const requestShape = Object.assign(Object.create(null), {
+      data: [true, null, '<unsupported>'],
+    })
+    const value = Object.assign(
+      Object.create(null),
+      validObservation({
+        target: Object.assign(Object.create(null), targets[0]),
+        requestShape,
+      }),
+    )
+
+    expect(parseProbeObservation(value)).toEqual(value)
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation: value,
+      }),
+    ).toEqual(value)
+  })
+
   it('accepts only sanitized observation metadata and shapes', () => {
     const observation = validObservation({
       requestShape: {

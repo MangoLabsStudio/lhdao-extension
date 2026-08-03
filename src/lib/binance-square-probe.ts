@@ -125,9 +125,17 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
   )
 }
 
-function hasOwnToJson(value: object): boolean {
+function hasToJsonInPrototypeChain(value: object): boolean {
   try {
-    return Object.hasOwn(value, 'toJSON')
+    const seen = new Set<object>()
+    let current: object | null = value
+    for (let depth = 0; current && depth < 8; depth += 1) {
+      if (seen.has(current)) return true
+      seen.add(current)
+      if (Object.getOwnPropertyDescriptor(current, 'toJSON')) return true
+      current = Object.getPrototypeOf(current)
+    }
+    return current !== null
   } catch {
     return true
   }
@@ -344,7 +352,7 @@ function isSanitizedShape(
   if (typeof value === 'string') return SAFE_MARKER_RE.test(value)
   if (typeof value === 'number' || typeof value === 'undefined') return false
   if (Array.isArray(value)) {
-    if (hasOwnToJson(value)) return false
+    if (hasToJsonInPrototypeChain(value)) return false
     if (value.length > MAX_ARRAY_ITEMS) return false
     const collected = boundedOwnEnumerableKeys(value, value.length)
     return (
@@ -355,7 +363,7 @@ function isSanitizedShape(
     )
   }
   const obj = record(value)
-  if (!obj || hasOwnToJson(obj)) return false
+  if (!obj || hasToJsonInPrototypeChain(obj)) return false
   const collected = boundedOwnEnumerableKeys(obj, MAX_KEYS)
   if (collected.overflow) return false
   return collected.keys.every(
@@ -387,7 +395,7 @@ function parseProbeObservationWithLength(
   const target = record(obj?.target)
   if (
     !obj ||
-    hasOwnToJson(obj) ||
+    hasToJsonInPrototypeChain(obj) ||
     !hasOnlyKeys(obj, OBSERVATION_KEYS) ||
     typeof obj.id !== 'string' ||
     !UUID_V4_RE.test(obj.id) ||
@@ -398,7 +406,7 @@ function parseProbeObservationWithLength(
     Number(obj.status) < 0 ||
     Number(obj.status) > 599 ||
     !target ||
-    hasOwnToJson(target) ||
+    hasToJsonInPrototypeChain(target) ||
     !hasOnlyKeys(target, ['id', 'kind']) ||
     (target.kind !== 'CONTENT' && target.kind !== 'AUTHOR') ||
     typeof target.id !== 'string' ||
@@ -433,7 +441,7 @@ export function parseProbeObservationMessage(
     const obj = record(value)
     if (
       !obj ||
-      hasOwnToJson(obj) ||
+      hasToJsonInPrototypeChain(obj) ||
       !hasOnlyKeys(obj, ['__lhBinanceProbe', 'observation']) ||
       obj.__lhBinanceProbe !== true
     ) {
@@ -456,7 +464,7 @@ export function parseProbeTargetConfigMessage(
     const obj = record(value)
     if (
       !obj ||
-      hasOwnToJson(obj) ||
+      hasToJsonInPrototypeChain(obj) ||
       !hasOnlyKeys(obj, ['__lhBinanceProbeConfig', 'targets']) ||
       obj.__lhBinanceProbeConfig !== true ||
       !Array.isArray(obj.targets) ||
@@ -479,7 +487,7 @@ export function parseProbeTargetConfigMessage(
       const target = record(value)
       if (
         !target ||
-        hasOwnToJson(target) ||
+        hasToJsonInPrototypeChain(target) ||
         !hasOnlyKeys(target, ['id', 'kind']) ||
         (target.kind !== 'CONTENT' && target.kind !== 'AUTHOR') ||
         typeof target.id !== 'string' ||
