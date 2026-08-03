@@ -14,8 +14,10 @@ const MATCHES = [
 // This page-world marker only owns patch lifecycle. It is not an authorization
 // signal; observations still pass the isolated bridge and background checks.
 const PROBE_INSTALLATION = Symbol.for('lhdao.binance-square-probe.installation')
+const PROBE_GENERATION = Object.freeze({})
 
 type ProbeInstallation = {
+  generation: object
   owners: number
   disposed: boolean
   originalFetch: typeof window.fetch
@@ -132,6 +134,7 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): () => void {
   if (
     existing &&
     !existing.disposed &&
+    existing.generation === PROBE_GENERATION &&
     window.fetch === existing.fetchWrapper &&
     XMLHttpRequest.prototype.open === existing.openWrapper &&
     XMLHttpRequest.prototype.send === existing.sendWrapper
@@ -317,6 +320,7 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): () => void {
   xhrPrototype.send = sendWrapper as typeof XMLHttpRequest.prototype.send
 
   installation = {
+    generation: PROBE_GENERATION,
     owners: 1,
     disposed: false,
     originalFetch,

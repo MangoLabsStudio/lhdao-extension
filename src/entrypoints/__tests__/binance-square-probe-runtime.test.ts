@@ -42,6 +42,7 @@ describe('Binance Square MAIN probe', () => {
 
   afterEach(() => {
     installBinanceSquareProbe(false)
+    vi.resetModules()
     window.fetch = originalFetch
     XMLHttpRequest.prototype.open = originalOpen
     XMLHttpRequest.prototype.send = originalSend
@@ -141,6 +142,53 @@ describe('Binance Square MAIN probe', () => {
     releaseReinjected()
     expect(window.fetch).toBe(replacementFetch)
     expect(XMLHttpRequest.prototype.open).toBe(replacementOpen)
+  })
+
+  it('replaces an older bundle generation without stacking wrappers', async () => {
+    const response = {
+      status: 200,
+      clone: () => ({ json: async () => ({ code: 0 }) }),
+    } as Response
+    const nativeFetch = vi.fn(async () => response) as typeof fetch
+    window.fetch = nativeFetch
+    const postMessage = vi.spyOn(window, 'postMessage')
+    const releaseOld = installBinanceSquareProbe(true)
+    const oldFetch = window.fetch
+
+    vi.resetModules()
+    const freshModule = await import('../binance-square-probe.content')
+    const releaseFresh = freshModule.installBinanceSquareProbe(true)
+    const freshFetch = window.fetch
+
+    expect(freshFetch).not.toBe(oldFetch)
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: { __lhBinanceProbeConfig: true, targets: [target] },
+      }),
+    )
+    await window.fetch('https://www.binance.com/bapi/example', {
+      method: 'POST',
+      body: JSON.stringify({ postId: target.id }),
+    })
+    await vi.waitFor(() => {
+      expect(
+        postMessage.mock.calls.filter(
+          ([message]) =>
+            (message as { __lhBinanceProbe?: unknown }).__lhBinanceProbe ===
+            true,
+        ),
+      ).toHaveLength(1)
+    })
+    expect(nativeFetch).toHaveBeenCalledTimes(1)
+
+    releaseOld()
+    expect(window.fetch).toBe(freshFetch)
+    releaseFresh()
+    expect(window.fetch).toBe(nativeFetch)
+    expect(XMLHttpRequest.prototype.open).toBe(originalOpen)
+    expect(XMLHttpRequest.prototype.send).toBe(originalSend)
   })
 
   it('captures only configured targets and preserves the native fetch result', async () => {
