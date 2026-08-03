@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { CAPTURE_DEBUG } from '@/lib/capture-debug'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
 import { sendMessage } from '@/lib/messaging'
@@ -172,6 +173,7 @@ export function App() {
       )}
 
       <SensitiveToggleCard />
+      <BinanceProbePanel />
 
       <footer className="mt-12 border-t border-slate-200 pt-4 text-[11px] text-slate-400 dark:border-slate-800 dark:text-slate-600">
         <p>
@@ -836,6 +838,78 @@ function SensitiveToggleCard() {
                 : 'absolute left-[3px] top-[3px] block h-5 w-5 rounded-full bg-white shadow transition'
             }
           />
+        </button>
+      </div>
+    </section>
+  )
+}
+
+export function BinanceProbePanel() {
+  const [count, setCount] = React.useState(0)
+  const [copied, setCopied] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!CAPTURE_DEBUG) return
+    void sendMessage({ type: 'export-binance-probe-observations' })
+      .then((response) => {
+        if (response.type === 'binance-probe-observations') {
+          setCount(response.observations.length)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  if (!CAPTURE_DEBUG) return null
+
+  const copy = async () => {
+    try {
+      const response = await sendMessage({
+        type: 'export-binance-probe-observations',
+      })
+      if (response.type !== 'binance-probe-observations') return
+      await navigator.clipboard.writeText(
+        JSON.stringify(response.observations, null, 2),
+      )
+      setCount(response.observations.length)
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  const clear = async () => {
+    try {
+      await sendMessage({ type: 'clear-binance-probe-observations' })
+      setCount(0)
+      setCopied(false)
+    } catch {
+      // Extension reload can briefly close the runtime message channel.
+    }
+  }
+
+  return (
+    <section className="mt-6 rounded-2xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-900/60 dark:bg-amber-950/30">
+      <h2 className="text-[14px] font-bold text-amber-950 dark:text-amber-100">
+        Binance Square Beta Probe
+      </h2>
+      <p className="mt-1 text-[12px] leading-relaxed text-amber-800 dark:text-amber-300">
+        已采集 {count} 条脱敏 fixture。数据仅保留在当前浏览器 session
+        24h，不会自动上传。
+      </p>
+      <div className="mt-4 flex gap-2">
+        <button
+          type="button"
+          onClick={copy}
+          className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-700"
+        >
+          {copied ? '已复制' : '复制脱敏 fixtures'}
+        </button>
+        <button
+          type="button"
+          onClick={clear}
+          className="rounded-lg border border-amber-300 px-3 py-1.5 text-[12px] font-bold text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/50"
+        >
+          清空
         </button>
       </div>
     </section>
