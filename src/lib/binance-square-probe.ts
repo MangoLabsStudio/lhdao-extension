@@ -23,9 +23,59 @@ const SENSITIVE_KEY_RE =
   /authorization|cookie|csrf|secret|session|token|credential|password/i
 const SAFE_MARKER_RE =
   /^<(?:target:(?:CONTENT|AUTHOR)|digits:\d+|string:\d+|number|max-depth|max-nodes|circular|unsupported)>$/u
+const SAFE_KEY_MARKER_RE =
+  /^<key:(?:digits|string):(?:0|[1-9]\d*):(?:[0-9]|[1-7][0-9])>$/u
 const TARGET_ID_RE = /^\d{6,32}$/u
 const UUID_V4_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+const SAFE_SHAPE_KEYS = new Set([
+  'postId',
+  'authorId',
+  'userId',
+  'uid',
+  'id',
+  'text',
+  'ok',
+  'nested',
+  'code',
+  'data',
+  'result',
+  'value',
+  'deep',
+  'truncated',
+  'count',
+  'empty',
+  'array',
+  'bounds',
+])
+const SAFE_PATH_SEGMENTS = new Set([
+  'v1',
+  'v2',
+  'v3',
+  'public',
+  'private',
+  'square',
+  'post',
+  'posts',
+  'article',
+  'content',
+  'comment',
+  'comments',
+  'like',
+  'follow',
+  'share',
+  'user',
+  'profile',
+  'detail',
+  'list',
+  'query',
+  'search',
+  'create',
+  'update',
+  'delete',
+  'status',
+  'example',
+])
 const OBSERVATION_KEYS = [
   'capturedAt',
   'id',
@@ -49,11 +99,32 @@ function record(value: unknown): Record<string, unknown> | null {
   }
 }
 
+function boundedOwnEnumerableKeys(
+  value: object,
+  limit: number,
+): { keys: string[]; overflow: boolean } {
+  const keys: string[] = []
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue
+    keys.push(key)
+    if (keys.length > limit) return { keys, overflow: true }
+  }
+  return { keys, overflow: false }
+}
+
 function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
-  const actual = Object.keys(value).sort()
+  const collected = boundedOwnEnumerableKeys(value, keys.length)
+  if (collected.overflow) return false
+  const actual = collected.keys.sort()
   return (
     actual.length === keys.length && actual.every((key, i) => key === keys[i])
   )
+}
+
+function sanitizedKey(key: string, ordinal: number): string {
+  if (SAFE_SHAPE_KEYS.has(key)) return key
+  const kind = /^\d+$/u.test(key) ? 'digits' : 'string'
+  return `<key:${kind}:${key.length}:${ordinal}>`
 }
 
 function targetForScalar(
@@ -61,6 +132,12 @@ function targetForScalar(
   targets: readonly BinanceProbeTarget[],
 ): BinanceProbeTarget | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null
+  if (
+    typeof value === 'number' &&
+    (!Number.isSafeInteger(value) || value < 0)
+  ) {
+    return null
+  }
   const scalar = String(value)
   for (const candidate of targets) {
     const target = record(candidate)
@@ -96,7 +173,8 @@ export function findProbeTarget(
     }
     const obj = record(current.value)
     if (!obj) continue
-    for (const key of Object.keys(obj).sort().slice(0, MAX_KEYS)) {
+    const { keys } = boundedOwnEnumerableKeys(obj, MAX_KEYS)
+    for (const key of keys.slice(0, MAX_KEYS).sort()) {
       if (SENSITIVE_KEY_RE.test(key)) continue
       stack.push({ value: obj[key], depth: current.depth + 1 })
     }
@@ -133,9 +211,17 @@ function sanitize(
   const obj = record(value)
   if (!obj) return '<unsupported>'
   const out: Record<string, unknown> = {}
-  for (const key of Object.keys(obj).sort().slice(0, MAX_KEYS)) {
+  const { keys } = boundedOwnEnumerableKeys(obj, MAX_KEYS)
+  let ordinal = 0
+  for (const key of keys.slice(0, MAX_KEYS).sort()) {
     if (SENSITIVE_KEY_RE.test(key)) continue
-    out[key] = sanitize(obj[key], targets, depth + 1, state)
+    out[sanitizedKey(key, ordinal)] = sanitize(
+      obj[key],
+      targets,
+      depth + 1,
+      state,
+    )
+    ordinal += 1
   }
   return out
 }
@@ -163,12 +249,26 @@ function probePath(rawUrl: string): string | null {
       return null
     }
     const parts: string[] = []
-    for (const part of url.pathname.split('/')) {
+    for (const [index, part] of url.pathname.split('/').entries()) {
       const decoded = decodeURIComponent(part)
+      if (index === 0) {
+        parts.push('')
+        continue
+      }
+      if (index === 1) {
+        if (decoded !== 'bapi') return null
+        parts.push(decoded)
+        continue
+      }
+      const structural = decoded.toLowerCase()
       parts.push(
         /^\d{6,}$/u.test(decoded) || /^[A-Za-z0-9_-]{24,}$/u.test(decoded)
           ? ':id'
-          : part,
+          : decoded === ':id' || decoded === ':segment'
+            ? decoded
+            : SAFE_PATH_SEGMENTS.has(structural)
+              ? structural
+              : ':segment',
       )
     }
     const path = parts.join('/')
@@ -232,21 +332,25 @@ function isSanitizedShape(
   if (typeof value === 'string') return SAFE_MARKER_RE.test(value)
   if (typeof value === 'number' || typeof value === 'undefined') return false
   if (Array.isArray(value)) {
-    const keys = Object.keys(value)
+    if (value.length > MAX_ARRAY_ITEMS) return false
+    const collected = boundedOwnEnumerableKeys(value, value.length)
     return (
-      value.length <= MAX_ARRAY_ITEMS &&
-      keys.length === value.length &&
-      keys.every((key, index) => key === String(index)) &&
+      !collected.overflow &&
+      collected.keys.length === value.length &&
+      collected.keys.every((key, index) => key === String(index)) &&
       value.every((item) => isSanitizedShape(item, depth + 1, state))
     )
   }
   const obj = record(value)
-  if (!obj || Object.keys(obj).length > MAX_KEYS) return false
-  return Object.entries(obj).every(
-    ([key, item]) =>
+  if (!obj) return false
+  const collected = boundedOwnEnumerableKeys(obj, MAX_KEYS)
+  if (collected.overflow) return false
+  return collected.keys.every(
+    (key) =>
       key.length <= 128 &&
       !SENSITIVE_KEY_RE.test(key) &&
-      isSanitizedShape(item, depth + 1, state),
+      (SAFE_SHAPE_KEYS.has(key) || SAFE_KEY_MARKER_RE.test(key)) &&
+      isSanitizedShape(obj[key], depth + 1, state),
   )
 }
 

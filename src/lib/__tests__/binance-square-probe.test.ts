@@ -72,6 +72,24 @@ describe('Binance Square probe sanitizer', () => {
     ).toBeNull()
   })
 
+  it('does not authorize a rounded unsafe numeric target alias', () => {
+    const aliasTargets = [{ kind: 'CONTENT', id: '9007199254740992' }] as const
+    const rounded = Number('9007199254740993')
+
+    expect(String(rounded)).toBe('9007199254740992')
+    expect(findProbeTarget({ postId: rounded }, aliasTargets)).toBeNull()
+    expect(
+      buildProbeObservation({
+        ...validBuildArgs(),
+        request: { postId: rounded },
+        targets: aliasTargets,
+      }),
+    ).toBeNull()
+    expect(
+      findProbeTarget({ postId: '9007199254740992' }, aliasTargets),
+    ).toEqual(aliasTargets[0])
+  })
+
   it('replaces scalar values and drops sensitive keys', () => {
     expect(
       sanitizeProbeValue(
@@ -95,6 +113,46 @@ describe('Binance Square probe sanitizer', () => {
       postId: '<target:CONTENT>',
       text: '<string:15>',
     })
+  })
+
+  it('templates dynamic object keys without retaining private key text', () => {
+    const privateKeys = [
+      'alice@example.com',
+      '@short-handle',
+      '123456789',
+      '12 Private Street',
+      '0x1234567890abcdef1234567890abcdef12345678',
+    ]
+    const request = Object.fromEntries([
+      ['postId', '335389698745313'],
+      ...privateKeys.map((key) => [key, true]),
+    ])
+    const shape = sanitizeProbeValue(request, targets) as Record<
+      string,
+      unknown
+    >
+    const serializedShape = JSON.stringify(shape)
+
+    for (const privateKey of privateKeys) {
+      expect(serializedShape).not.toContain(privateKey)
+    }
+    expect(Object.keys(shape).filter((key) => key !== 'postId')).toEqual([
+      '<key:string:42:0>',
+      '<key:string:17:1>',
+      '<key:digits:9:2>',
+      '<key:string:13:3>',
+      '<key:string:17:4>',
+    ])
+
+    const observation = buildProbeObservation({
+      ...validBuildArgs(),
+      request,
+    })
+    expect(parseProbeObservation(observation)).toEqual(observation)
+    const serializedObservation = JSON.stringify(observation)
+    for (const privateKey of privateKeys) {
+      expect(serializedObservation).not.toContain(privateKey)
+    }
   })
 
   it('builds only a sanitized Binance POST observation', () => {
@@ -204,6 +262,26 @@ describe('Binance Square probe sanitizer', () => {
   })
 
   it.each([
+    ['alice%40example.com', ':segment'],
+    ['alice', ':segment'],
+    ['alice@example.com', ':segment'],
+    ['private%20comment', ':segment'],
+    ['0x1234567890abcdef1234567890abcdef12345678', ':id'],
+  ])('templates a private path segment: %s', (segment, template) => {
+    const observation = buildProbeObservation({
+      ...validBuildArgs(),
+      url: `https://www.binance.com/bapi/post/${segment}/detail`,
+    })
+
+    expect(observation?.path).toBe(`/bapi/post/${template}/detail`)
+    expect(parseProbeObservation(observation)).toEqual(observation)
+    expect(JSON.stringify(observation)).not.toContain(segment)
+    expect(JSON.stringify(observation)).not.toContain(
+      decodeURIComponent(segment),
+    )
+  })
+
+  it.each([
     ['%39%38%37%36%35%34%33%32%31', '/bapi/post/:id'],
     ['%61'.repeat(24), '/bapi/post/:id'],
   ])('redacts an encoded identifier segment', (segment, expectedPath) => {
@@ -224,13 +302,14 @@ describe('Binance Square probe sanitizer', () => {
     ).toBeNull()
   })
 
-  it('fails closed instead of cutting an overlong encoded path', () => {
-    expect(
-      buildProbeObservation({
-        ...validBuildArgs(),
-        url: `https://www.binance.com/bapi/${'%E4%B8%AD'.repeat(60)}`,
-      }),
-    ).toBeNull()
+  it('templates an overlong private path segment without retaining it', () => {
+    const privateSegment = '%E4%B8%AD'.repeat(60)
+    const observation = buildProbeObservation({
+      ...validBuildArgs(),
+      url: `https://www.binance.com/bapi/${privateSegment}`,
+    })
+    expect(observation?.path).toBe('/bapi/:segment')
+    expect(JSON.stringify(observation)).not.toContain(privateSegment)
   })
 
   it('rejects a non-default Binance HTTPS port', () => {
@@ -323,7 +402,34 @@ describe('Binance Square probe sanitizer', () => {
     const longKeys = Object.fromEntries(
       Array.from({ length: 80 }, (_, i) => [`${i}-${'x'.repeat(300)}`, i]),
     )
-    expect(sanitizeProbeValue(longKeys, targets)).toEqual({ truncated: true })
+    const longKeyShape = sanitizeProbeValue(longKeys, targets)
+    expect(JSON.stringify(longKeyShape).length).toBeLessThanOrEqual(16_384)
+    expect(JSON.stringify(longKeyShape)).not.toContain('x'.repeat(300))
+  })
+
+  it.each([
+    'sanitize',
+    'find',
+  ])('does not use a full key sort before bounded %s traversal', (operation) => {
+    let reads = 0
+    const wide: Record<string, unknown> = {}
+    for (let i = 0; i < 200; i += 1) {
+      Object.defineProperty(wide, `dynamic-${i}`, {
+        enumerable: true,
+        get() {
+          reads += 1
+          if (i >= 80) throw new Error('read beyond key bound')
+          return false
+        },
+      })
+    }
+
+    expect(() =>
+      operation === 'sanitize'
+        ? sanitizeProbeValue(wide, targets)
+        : findProbeTarget(wide, targets),
+    ).not.toThrow()
+    expect(reads).toBe(80)
   })
 
   it('handles circular and unsupported values without exposing them', () => {
@@ -342,11 +448,11 @@ describe('Binance Square probe sanitizer', () => {
         targets,
       ),
     ).toEqual({
-      bigint: '<unsupported>',
-      circular: { self: '<circular>' },
-      fn: '<unsupported>',
-      symbol: '<unsupported>',
-      undefined: '<unsupported>',
+      '<key:string:6:0>': '<unsupported>',
+      '<key:string:8:1>': { '<key:string:4:0>': '<circular>' },
+      '<key:string:2:2>': '<unsupported>',
+      '<key:string:6:3>': '<unsupported>',
+      '<key:string:9:4>': '<unsupported>',
     })
   })
 
@@ -389,17 +495,49 @@ describe('Binance Square probe observation parser', () => {
     ).toEqual(observation)
   })
 
+  it('accepts canonical key markers and rejects raw dynamic keys', () => {
+    const marked = validObservation({
+      requestShape: { '<key:string:17:0>': true },
+    })
+    expect(parseProbeObservation(marked)).toEqual(marked)
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation: marked,
+      }),
+    ).toEqual(marked)
+
+    const raw = validObservation({
+      requestShape: { 'alice@example.com': true },
+    })
+    expect(parseProbeObservation(raw)).toBeNull()
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation: raw,
+      }),
+    ).toBeNull()
+  })
+
   it.each([
     ['raw string', { requestShape: { text: 'private comment' } }],
     ['raw number', { responseShape: { count: 42 } }],
     ['unknown marker', { requestShape: { text: '<redacted>' } }],
     ['sensitive key', { requestShape: { accessToken: '<string:6>' } }],
     [
+      'out-of-range key-marker ordinal',
+      { requestShape: { '<key:string:4:80>': true } },
+    ],
+    [
       'too many keys',
       {
-        requestShape: Object.fromEntries(
-          Array.from({ length: 81 }, (_, i) => [`k${i}`, true]),
-        ),
+        requestShape: Object.fromEntries([
+          ...Array.from({ length: 80 }, (_, i) => [
+            `<key:string:${i + 1}:${i}>`,
+            true,
+          ]),
+          ['data', true],
+        ]),
       },
     ],
     ['long key', { requestShape: { ['x'.repeat(129)]: true } }],
@@ -442,7 +580,7 @@ describe('Binance Square probe observation parser', () => {
 
   it('rejects excessive shape depth, nodes, and serialized length', () => {
     let deep: unknown = true
-    for (let i = 0; i < 8; i += 1) deep = { child: deep }
+    for (let i = 0; i < 8; i += 1) deep = { nested: deep }
     expect(
       parseProbeObservation(validObservation({ requestShape: deep })),
     ).toBeNull()
@@ -456,17 +594,17 @@ describe('Binance Square probe observation parser', () => {
       parseProbeObservation(validObservation({ requestShape: nodeHeavy })),
     ).toBeNull()
 
-    const largeShape = Object.fromEntries(
-      ['a', 'b'].map((prefix) => [
-        prefix,
-        Object.fromEntries(
-          Array.from({ length: 80 }, (_, i) => [
-            `${String(i).padStart(3, '0')}${'x'.repeat(125)}`,
-            '<unsupported>',
-          ]),
-        ),
-      ]),
-    )
+    const largeMarkerObject = () =>
+      Object.fromEntries(
+        Array.from({ length: 80 }, (_, i) => [
+          `<key:string:${i + 1}${'0'.repeat(99)}:${i}>`,
+          '<unsupported>',
+        ]),
+      )
+    const largeShape = {
+      data: largeMarkerObject(),
+      result: largeMarkerObject(),
+    }
     expect(JSON.stringify(largeShape).length).toBeGreaterThan(16_384)
     expect(
       parseProbeObservation(validObservation({ requestShape: largeShape })),
@@ -524,6 +662,18 @@ describe('Binance Square probe observation parser', () => {
         validObservation({
           path: '/bapi/post/%39%38%37%36%35%34%33%32%31',
         }),
+      ),
+    ).toBeNull()
+  })
+
+  it.each([
+    'alice',
+    'alice@example.com',
+    'private%20comment',
+  ])('rejects an untemplated private path segment: %s', (segment) => {
+    expect(
+      parseProbeObservation(
+        validObservation({ path: `/bapi/post/${segment}/detail` }),
       ),
     ).toBeNull()
   })
