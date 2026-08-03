@@ -144,15 +144,19 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
   const originalOpen = XMLHttpRequest.prototype.open
   const originalSend = XMLHttpRequest.prototype.send
   XMLHttpRequest.prototype.open = function (...args: unknown[]) {
+    const result = (originalOpen as (...values: unknown[]) => unknown).apply(
+      this,
+      args,
+    )
     removePendingLoad(this)
     state.set(this, {
       method: String(args[0] ?? 'GET'),
       url: String(args[1] ?? ''),
     })
-    return (originalOpen as (...values: unknown[]) => void).apply(this, args)
+    return result
   }
   XMLHttpRequest.prototype.send = function (...args: unknown[]) {
-    removePendingLoad(this)
+    const previousLoad = pendingLoad.get(this)
     const requestState = state.get(this)
     const candidate =
       targets.length > 0 &&
@@ -162,7 +166,9 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
         undefined,
         (args[0] ?? null) as BodyInit | null,
       )
+      let loadCompleted = false
       const loadListener = () => {
+        loadCompleted = true
         if (pendingLoad.get(this) === loadListener) {
           pendingLoad.delete(this)
         }
@@ -186,13 +192,31 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
           })
         })
       }
-      pendingLoad.set(this, loadListener)
       this.addEventListener('load', loadListener)
+      if (previousLoad) this.removeEventListener('load', previousLoad)
+      try {
+        const result = (
+          originalSend as (...values: unknown[]) => unknown
+        ).apply(this, args)
+        if (pendingLoad.get(this) === previousLoad) pendingLoad.delete(this)
+        if (!loadCompleted) pendingLoad.set(this, loadListener)
+        return result
+      } catch (error) {
+        this.removeEventListener('load', loadListener)
+        if (previousLoad) this.addEventListener('load', previousLoad)
+        throw error
+      }
     }
     try {
-      return (originalSend as (...values: unknown[]) => void).apply(this, args)
+      if (previousLoad) this.removeEventListener('load', previousLoad)
+      const result = (originalSend as (...values: unknown[]) => unknown).apply(
+        this,
+        args,
+      )
+      if (pendingLoad.get(this) === previousLoad) pendingLoad.delete(this)
+      return result
     } catch (error) {
-      removePendingLoad(this)
+      if (previousLoad) this.addEventListener('load', previousLoad)
       throw error
     }
   }

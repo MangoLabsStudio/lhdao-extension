@@ -309,6 +309,136 @@ describe('Binance Square MAIN probe', () => {
       expect(postMessage).toHaveBeenCalledTimes(1)
     })
   })
+
+  it('preserves a pending request when a reused XHR open throws', async () => {
+    const thrown = new Error('invalid open')
+    class FailedOpenXhr {
+      listeners = new Set<() => void>()
+      responseType = 'json'
+      response: unknown = { code: 1 }
+      responseText = ''
+      status = 201
+      open(_method: string, url: string) {
+        if (url.includes('invalid')) throw thrown
+        return 'open-result'
+      }
+      send() {
+        return 'send-result'
+      }
+      addEventListener(type: string, listener: () => void) {
+        if (type === 'load') this.listeners.add(listener)
+      }
+      removeEventListener(type: string, listener: () => void) {
+        if (type === 'load') this.listeners.delete(listener)
+      }
+      fireLoad() {
+        for (const listener of [...this.listeners]) listener()
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', FailedOpenXhr)
+    const postMessage = vi.spyOn(window, 'postMessage')
+    installBinanceSquareProbe(true)
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: { __lhBinanceProbeConfig: true, targets: [target] },
+      }),
+    )
+    const xhr = new XMLHttpRequest() as XMLHttpRequest & FailedOpenXhr
+
+    expect(xhr.open('POST', 'https://www.binance.com/bapi/post/like')).toBe(
+      'open-result',
+    )
+    expect(xhr.send(JSON.stringify({ postId: target.id, text: 'first' }))).toBe(
+      'send-result',
+    )
+    expect(() =>
+      xhr.open('POST', 'https://www.binance.com/bapi/invalid'),
+    ).toThrow(thrown)
+    xhr.fireLoad()
+
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledTimes(1)
+    })
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        observation: expect.objectContaining({
+          path: '/bapi/post/like',
+          requestShape: {
+            postId: '<target:CONTENT>',
+            text: '<string:5>',
+          },
+        }),
+      }),
+      window.location.origin,
+    )
+  })
+
+  it('preserves a pending request when a second XHR send throws', async () => {
+    const thrown = new Error('invalid second send')
+    let shouldThrow = false
+    class FailedSecondSendXhr {
+      listeners = new Set<() => void>()
+      responseType = 'json'
+      response: unknown = { code: 1 }
+      responseText = ''
+      status = 201
+      open() {
+        return 'open-result'
+      }
+      send() {
+        if (shouldThrow) throw thrown
+        return 'send-result'
+      }
+      addEventListener(type: string, listener: () => void) {
+        if (type === 'load') this.listeners.add(listener)
+      }
+      removeEventListener(type: string, listener: () => void) {
+        if (type === 'load') this.listeners.delete(listener)
+      }
+      fireLoad() {
+        for (const listener of [...this.listeners]) listener()
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', FailedSecondSendXhr)
+    const postMessage = vi.spyOn(window, 'postMessage')
+    installBinanceSquareProbe(true)
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: { __lhBinanceProbeConfig: true, targets: [target] },
+      }),
+    )
+    const xhr = new XMLHttpRequest() as XMLHttpRequest & FailedSecondSendXhr
+
+    xhr.open('POST', 'https://www.binance.com/bapi/post/like')
+    expect(xhr.send(JSON.stringify({ postId: target.id, text: 'first' }))).toBe(
+      'send-result',
+    )
+    shouldThrow = true
+    expect(() =>
+      xhr.send(JSON.stringify({ postId: target.id, text: 'second' })),
+    ).toThrow(thrown)
+    xhr.fireLoad()
+
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledTimes(1)
+    })
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        observation: expect.objectContaining({
+          path: '/bapi/post/like',
+          requestShape: {
+            postId: '<target:CONTENT>',
+            text: '<string:5>',
+          },
+        }),
+      }),
+      window.location.origin,
+    )
+  })
 })
 
 describe('Binance Square ISOLATED bridge', () => {
