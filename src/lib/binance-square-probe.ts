@@ -23,6 +23,9 @@ const SENSITIVE_KEY_RE =
   /authorization|cookie|csrf|secret|session|token|credential|password/i
 const SAFE_MARKER_RE =
   /^<(?:target:(?:CONTENT|AUTHOR)|digits:\d+|string:\d+|number|max-depth|max-nodes|circular|unsupported)>$/u
+const TARGET_ID_RE = /^\d{6,32}$/u
+const UUID_V4_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const OBSERVATION_KEYS = [
   'capturedAt',
   'id',
@@ -35,9 +38,15 @@ const OBSERVATION_KEYS = [
 ]
 
 function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  try {
+    const prototype = Object.getPrototypeOf(value)
+    return prototype === Object.prototype || prototype === null
+      ? (value as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
@@ -53,7 +62,18 @@ function targetForScalar(
 ): BinanceProbeTarget | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null
   const scalar = String(value)
-  return targets.find((target) => target.id === scalar) ?? null
+  for (const candidate of targets) {
+    const target = record(candidate)
+    if (
+      (target?.kind === 'CONTENT' || target?.kind === 'AUTHOR') &&
+      typeof target.id === 'string' &&
+      TARGET_ID_RE.test(target.id) &&
+      target.id === scalar
+    ) {
+      return { kind: target.kind, id: target.id }
+    }
+  }
+  return null
 }
 
 export function findProbeTarget(
@@ -110,15 +130,12 @@ function sanitize(
       .slice(0, MAX_ARRAY_ITEMS)
       .map((item) => sanitize(item, targets, depth + 1, state))
   }
+  const obj = record(value)
+  if (!obj) return '<unsupported>'
   const out: Record<string, unknown> = {}
-  for (const key of Object.keys(value).sort().slice(0, MAX_KEYS)) {
+  for (const key of Object.keys(obj).sort().slice(0, MAX_KEYS)) {
     if (SENSITIVE_KEY_RE.test(key)) continue
-    out[key] = sanitize(
-      (value as Record<string, unknown>)[key],
-      targets,
-      depth + 1,
-      state,
-    )
+    out[key] = sanitize(obj[key], targets, depth + 1, state)
   }
   return out
 }
@@ -131,7 +148,7 @@ export function sanitizeProbeValue(
     nodes: 0,
     seen: new WeakSet(),
   })
-  return JSON.stringify(result).length <= MAX_JSON_LENGTH
+  return serializedShapeFits(result) && isSanitizedShape(result)
     ? result
     : { truncated: true }
 }
@@ -140,23 +157,33 @@ function probePath(rawUrl: string): string | null {
   try {
     const url = new URL(rawUrl)
     if (
-      url.protocol !== 'https:' ||
-      url.hostname !== 'www.binance.com' ||
+      url.origin !== 'https://www.binance.com' ||
       !url.pathname.startsWith('/bapi/')
     ) {
       return null
     }
-    return url.pathname
-      .split('/')
-      .map((part) =>
-        /^\d{6,}$/u.test(part) || /^[A-Za-z0-9_-]{24,}$/u.test(part)
+    const parts: string[] = []
+    for (const part of url.pathname.split('/')) {
+      const decoded = decodeURIComponent(part)
+      parts.push(
+        /^\d{6,}$/u.test(decoded) || /^[A-Za-z0-9_-]{24,}$/u.test(decoded)
           ? ':id'
           : part,
       )
-      .join('/')
-      .slice(0, 512)
+    }
+    const path = parts.join('/')
+    return path.length <= 512 ? path : null
   } catch {
     return null
+  }
+}
+
+function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  try {
+    return new Date(value).toISOString() === value
+  } catch {
+    return false
   }
 }
 
@@ -175,6 +202,7 @@ export function buildProbeObservation(args: {
     args.method.toUpperCase() !== 'POST' ||
     !path ||
     !target ||
+    !isCanonicalIsoTimestamp(args.capturedAt) ||
     !Number.isInteger(args.status) ||
     args.status < 0 ||
     args.status > 599
@@ -206,6 +234,15 @@ function isSanitizedShape(
   if (Array.isArray(value)) {
     return (
       value.length <= MAX_ARRAY_ITEMS &&
+      Object.keys(value).every((key) => {
+        const index = Number(key)
+        return (
+          Number.isInteger(index) &&
+          index >= 0 &&
+          index < value.length &&
+          String(index) === key
+        )
+      }) &&
       value.every((item) => isSanitizedShape(item, depth + 1, state))
     )
   }
@@ -236,7 +273,7 @@ export function parseProbeObservation(
     !obj ||
     !hasOnlyKeys(obj, OBSERVATION_KEYS) ||
     typeof obj.id !== 'string' ||
-    obj.id.length > 128 ||
+    !UUID_V4_RE.test(obj.id) ||
     obj.method !== 'POST' ||
     typeof obj.path !== 'string' ||
     probePath(`https://www.binance.com${obj.path}`) !== obj.path ||
@@ -247,9 +284,8 @@ export function parseProbeObservation(
     !hasOnlyKeys(target, ['id', 'kind']) ||
     (target.kind !== 'CONTENT' && target.kind !== 'AUTHOR') ||
     typeof target.id !== 'string' ||
-    !/^\d{6,32}$/u.test(target.id) ||
-    typeof obj.capturedAt !== 'string' ||
-    !Number.isFinite(Date.parse(obj.capturedAt)) ||
+    !TARGET_ID_RE.test(target.id) ||
+    !isCanonicalIsoTimestamp(obj.capturedAt) ||
     !isSanitizedShape(obj.requestShape) ||
     !isSanitizedShape(obj.responseShape) ||
     !serializedShapeFits(obj.requestShape) ||

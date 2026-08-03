@@ -14,7 +14,7 @@ function validObservation(
   overrides: Partial<BinanceProbeObservation> = {},
 ): BinanceProbeObservation {
   return {
-    id: 'probe-1',
+    id: '123e4567-e89b-42d3-a456-426614174000',
     method: 'POST',
     path: '/bapi/example',
     status: 200,
@@ -23,6 +23,18 @@ function validObservation(
     responseShape: { code: '<digits:6>' },
     capturedAt: '2026-08-03T00:00:00.000Z',
     ...overrides,
+  }
+}
+
+function validBuildArgs() {
+  return {
+    url: 'https://www.binance.com/bapi/example',
+    method: 'POST',
+    status: 200,
+    request: { postId: '335389698745313' },
+    response: null,
+    targets,
+    capturedAt: '2026-08-03T00:00:00.000Z',
   }
 }
 
@@ -119,15 +131,7 @@ describe('Binance Square probe sanitizer', () => {
   })
 
   it('rejects invalid requests and redacts identifier-like path segments', () => {
-    const base = {
-      url: 'https://www.binance.com/bapi/example',
-      method: 'POST',
-      status: 200,
-      request: { postId: '335389698745313' },
-      response: null,
-      targets,
-      capturedAt: '2026-08-03T00:00:00.000Z',
-    }
+    const base = validBuildArgs()
 
     expect(
       buildProbeObservation({
@@ -164,6 +168,128 @@ describe('Binance Square probe sanitizer', () => {
     ).toBeNull()
   })
 
+  it('normalizes matching targets to exact public fields', () => {
+    const injectedTargets = [
+      {
+        kind: 'CONTENT' as const,
+        id: '335389698745313',
+        rawBody: 'private comment',
+      },
+    ]
+    const observation = buildProbeObservation({
+      ...validBuildArgs(),
+      targets: injectedTargets,
+    })
+
+    expect(observation?.target).toEqual({
+      kind: 'CONTENT',
+      id: '335389698745313',
+    })
+    expect(Object.keys(observation?.target ?? {})).toEqual(['kind', 'id'])
+    expect(JSON.stringify(observation)).not.toContain('private comment')
+  })
+
+  it.each([
+    ['short id', { kind: 'CONTENT', id: '12345' }],
+    ['non-numeric id', { kind: 'AUTHOR', id: '12345x' }],
+    ['invalid kind', { kind: 'USER', id: '335389698745313' }],
+  ])('rejects an invalid target definition: %s', (_name, target) => {
+    expect(
+      buildProbeObservation({
+        ...validBuildArgs(),
+        request: { postId: target.id },
+        targets: [target] as never,
+      }),
+    ).toBeNull()
+  })
+
+  it.each([
+    ['%39%38%37%36%35%34%33%32%31', '/bapi/post/:id'],
+    ['%61'.repeat(24), '/bapi/post/:id'],
+  ])('redacts an encoded identifier segment', (segment, expectedPath) => {
+    expect(
+      buildProbeObservation({
+        ...validBuildArgs(),
+        url: `https://www.binance.com/bapi/post/${segment}`,
+      })?.path,
+    ).toBe(expectedPath)
+  })
+
+  it('fails closed on a malformed encoded path segment', () => {
+    expect(
+      buildProbeObservation({
+        ...validBuildArgs(),
+        url: 'https://www.binance.com/bapi/post/%not-valid',
+      }),
+    ).toBeNull()
+  })
+
+  it('fails closed instead of cutting an overlong encoded path', () => {
+    expect(
+      buildProbeObservation({
+        ...validBuildArgs(),
+        url: `https://www.binance.com/bapi/${'%E4%B8%AD'.repeat(60)}`,
+      }),
+    ).toBeNull()
+  })
+
+  it('rejects a non-default Binance HTTPS port', () => {
+    expect(
+      buildProbeObservation({
+        ...validBuildArgs(),
+        url: 'https://www.binance.com:444/bapi/example',
+      }),
+    ).toBeNull()
+  })
+
+  it.each([
+    '0',
+    '2026-08-03T00:00:00Z',
+    'not-a-date',
+  ])('rejects a noncanonical build timestamp: %s', (capturedAt) => {
+    expect(
+      buildProbeObservation({ ...validBuildArgs(), capturedAt }),
+    ).toBeNull()
+  })
+
+  it('builds a parser-valid shape after bounding long keys', () => {
+    const longKey = `private-${'x'.repeat(121)}`
+    const observation = buildProbeObservation({
+      ...validBuildArgs(),
+      request: {
+        postId: '335389698745313',
+        [longKey]: 'private comment',
+      },
+    })
+    expect(parseProbeObservation(observation)).not.toBeNull()
+    expect(JSON.stringify(observation)).not.toContain(longKey)
+    expect(JSON.stringify(observation)).not.toContain('private comment')
+  })
+
+  it('builds a parser-valid truncated shape after node overflow', () => {
+    const nodeHeavy = Object.fromEntries([
+      ...Array.from({ length: 80 }, (_, i) => [
+        `n${String(i).padStart(2, '0')}`,
+        Array.from({ length: 5 }, (_, j) => ({
+          value: `private-${i}-${j}`,
+          ...(i === 79 && j === 4 ? { postId: '335389698745313' } : {}),
+        })),
+      ]),
+    ])
+    const observation = buildProbeObservation({
+      ...validBuildArgs(),
+      request: nodeHeavy,
+    })
+    expect(parseProbeObservation(observation)).not.toBeNull()
+    expect(observation?.requestShape).toEqual({ truncated: true })
+    expect(JSON.stringify(observation)).not.toContain('private-')
+  })
+
+  it('builds a parser-valid observation for ordinary input', () => {
+    const observation = buildProbeObservation(validBuildArgs())
+    expect(parseProbeObservation(observation)).toEqual(observation)
+  })
+
   it('bounds depth, object keys, arrays, nodes, and output size', () => {
     const wide = Object.fromEntries(
       Array.from({ length: 200 }, (_, i) => [`k${i}`, { deep: { value: i } }]),
@@ -192,9 +318,7 @@ describe('Binance Square probe sanitizer', () => {
         Array.from({ length: 5 }, () => ({ value: i })),
       ]),
     )
-    expect(JSON.stringify(sanitizeProbeValue(nodeHeavy, targets))).toContain(
-      '<max-nodes>',
-    )
+    expect(sanitizeProbeValue(nodeHeavy, targets)).toEqual({ truncated: true })
 
     const longKeys = Object.fromEntries(
       Array.from({ length: 80 }, (_, i) => [`${i}-${'x'.repeat(300)}`, i]),
@@ -284,6 +408,10 @@ describe('Binance Square probe observation parser', () => {
     ['non-numeric target id', { target: { kind: 'CONTENT', id: '12345x' } }],
     ['long target id', { target: { kind: 'CONTENT', id: '1'.repeat(33) } }],
     ['invalid date', { capturedAt: 'not-a-date' }],
+    ['noncanonical date', { capturedAt: '2026-08-03T00:00:00Z' }],
+    ['parseable non-date form', { capturedAt: '0' }],
+    ['non-UUID id', { id: 'probe-1' }],
+    ['non-v4 UUID id', { id: '123e4567-e89b-12d3-a456-426614174000' }],
   ])('rejects malformed metadata: %s', (_name, overrides) => {
     expect(
       parseProbeObservation(
@@ -322,6 +450,47 @@ describe('Binance Square probe observation parser', () => {
     expect(JSON.stringify(largeShape).length).toBeGreaterThan(16_384)
     expect(
       parseProbeObservation(validObservation({ requestShape: largeShape })),
+    ).toBeNull()
+  })
+
+  it('rejects non-JSON objects', () => {
+    const observation = validObservation({
+      requestShape: new Map([['safe', true]]),
+    })
+    expect(parseProbeObservation(observation)).toBeNull()
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation,
+      }),
+    ).toBeNull()
+  })
+
+  it.each([
+    'rawBody',
+    '-1',
+  ])('rejects an array with a custom enumerable %s property', (key) => {
+    const arrayWithCustomProperty: unknown[] = [true]
+    Object.assign(arrayWithCustomProperty, { [key]: 'private comment' })
+    const observation = validObservation({
+      requestShape: arrayWithCustomProperty,
+    })
+    expect(parseProbeObservation(observation)).toBeNull()
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation,
+      }),
+    ).toBeNull()
+  })
+
+  it('rejects an unredacted encoded identifier path', () => {
+    expect(
+      parseProbeObservation(
+        validObservation({
+          path: '/bapi/post/%39%38%37%36%35%34%33%32%31',
+        }),
+      ),
     ).toBeNull()
   })
 
