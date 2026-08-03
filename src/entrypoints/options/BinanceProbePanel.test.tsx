@@ -35,6 +35,16 @@ let root: Root | null = null
 let container: HTMLElement
 let requests: unknown[]
 const writeText = vi.fn(async () => undefined)
+let exportObservations: () => Promise<BinanceProbeObservation[]>
+let clearResponse: () => Promise<unknown>
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
 
 function findButton(label: string): HTMLButtonElement {
   const button = Array.from(container.querySelectorAll('button')).find(
@@ -60,18 +70,27 @@ describe('BinanceProbePanel', () => {
     container = document.createElement('div')
     document.body.append(container)
     writeText.mockClear()
+    exportObservations = async () => observations
+    clearResponse = async () => ({ type: 'ack' })
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
     })
     fakeBrowser.runtime.onMessage.addListener(async (message: unknown) => {
       requests.push(structuredClone(message))
-      return message &&
-        typeof message === 'object' &&
-        'type' in message &&
-        message.type === 'export-binance-probe-observations'
-        ? { type: 'binance-probe-observations', observations }
-        : { type: 'ack' }
+      if (!message || typeof message !== 'object' || !('type' in message)) {
+        return { type: 'ack' }
+      }
+      if (message.type === 'export-binance-probe-observations') {
+        return {
+          type: 'binance-probe-observations',
+          observations: await exportObservations(),
+        }
+      }
+      if (message.type === 'clear-binance-probe-observations') {
+        return clearResponse()
+      }
+      return { type: 'ack' }
     })
   })
 
@@ -110,6 +129,43 @@ describe('BinanceProbePanel', () => {
     expect(requests).toContainEqual({
       type: 'clear-binance-probe-observations',
     })
+  })
+
+  it('lets clear win over an older pending copy', async () => {
+    await renderPanel()
+    await vi.waitFor(() => expect(container.textContent).toContain('1 条'))
+    const pending = deferred<BinanceProbeObservation[]>()
+    exportObservations = () => pending.promise
+
+    await act(async () => {
+      findButton('复制脱敏 fixtures').click()
+      findButton('清空').click()
+    })
+    pending.resolve(observations)
+    await act(async () => pending.promise)
+
+    expect(container.textContent).toContain('0 条')
+    expect(container.textContent).not.toContain('已复制')
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('keeps the fixtures and reports an unsuccessful clear response', async () => {
+    await renderPanel()
+    await vi.waitFor(() => expect(container.textContent).toContain('1 条'))
+    await act(async () => findButton('复制脱敏 fixtures').click())
+    await vi.waitFor(() => expect(container.textContent).toContain('已复制'))
+    clearResponse = async () => ({
+      type: 'submit-result',
+      ok: false,
+      code: 'INTERNAL',
+      message: 'background failed',
+    })
+
+    await act(async () => findButton('清空').click())
+
+    await vi.waitFor(() => expect(container.textContent).toContain('清空失败'))
+    expect(container.textContent).toContain('1 条')
+    expect(container.textContent).toContain('已复制')
   })
 
   it('renders nothing when capture debug is disabled', async () => {

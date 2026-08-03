@@ -847,43 +847,97 @@ function SensitiveToggleCard() {
 export function BinanceProbePanel() {
   const [count, setCount] = React.useState(0)
   const [copied, setCopied] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+  const [status, setStatus] = React.useState<string | null>(null)
+  const generation = React.useRef(0)
+  const mounted = React.useRef(false)
 
   React.useEffect(() => {
-    if (!CAPTURE_DEBUG) return
+    mounted.current = true
+    const current = ++generation.current
+    if (!CAPTURE_DEBUG) {
+      return () => {
+        mounted.current = false
+        generation.current += 1
+      }
+    }
     void sendMessage({ type: 'export-binance-probe-observations' })
       .then((response) => {
-        if (response.type === 'binance-probe-observations') {
+        if (
+          mounted.current &&
+          current === generation.current &&
+          response.type === 'binance-probe-observations'
+        ) {
           setCount(response.observations.length)
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        if (mounted.current && current === generation.current) {
+          setStatus('加载失败')
+        }
+      })
+    return () => {
+      mounted.current = false
+      generation.current += 1
+    }
   }, [])
 
   if (!CAPTURE_DEBUG) return null
 
   const copy = async () => {
+    const current = ++generation.current
+    setBusy(true)
+    setCopied(false)
+    setStatus(null)
     try {
       const response = await sendMessage({
         type: 'export-binance-probe-observations',
       })
-      if (response.type !== 'binance-probe-observations') return
+      if (!mounted.current || current !== generation.current) return
+      if (response.type !== 'binance-probe-observations') {
+        setStatus('复制失败')
+        return
+      }
       await navigator.clipboard.writeText(
         JSON.stringify(response.observations, null, 2),
       )
+      if (!mounted.current || current !== generation.current) return
       setCount(response.observations.length)
       setCopied(true)
     } catch {
-      setCopied(false)
+      if (mounted.current && current === generation.current) {
+        setStatus('复制失败')
+      }
+    } finally {
+      if (mounted.current && current === generation.current) {
+        setBusy(false)
+      }
     }
   }
 
   const clear = async () => {
+    const current = ++generation.current
+    setBusy(true)
+    setStatus(null)
     try {
-      await sendMessage({ type: 'clear-binance-probe-observations' })
+      const response = await sendMessage({
+        type: 'clear-binance-probe-observations',
+      })
+      if (!mounted.current || current !== generation.current) return
+      if (response.type !== 'ack') {
+        setStatus('清空失败')
+        return
+      }
       setCount(0)
       setCopied(false)
     } catch {
-      // Extension reload can briefly close the runtime message channel.
+      if (mounted.current && current === generation.current) {
+        setStatus('清空失败')
+      }
+    } finally {
+      if (mounted.current && current === generation.current) {
+        setBusy(false)
+      }
     }
   }
 
@@ -896,18 +950,28 @@ export function BinanceProbePanel() {
         已采集 {count} 条脱敏 fixture。数据仅保留在当前浏览器 session
         24h，不会自动上传。
       </p>
+      {status && (
+        <p
+          aria-live="polite"
+          className="mt-2 text-[12px] font-semibold text-rose-700 dark:text-rose-300"
+        >
+          {status}
+        </p>
+      )}
       <div className="mt-4 flex gap-2">
         <button
           type="button"
           onClick={copy}
-          className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-700"
+          disabled={busy}
+          className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {copied ? '已复制' : '复制脱敏 fixtures'}
         </button>
         <button
           type="button"
           onClick={clear}
-          className="rounded-lg border border-amber-300 px-3 py-1.5 text-[12px] font-bold text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/50"
+          disabled={busy}
+          className="rounded-lg border border-amber-300 px-3 py-1.5 text-[12px] font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/50"
         >
           清空
         </button>
