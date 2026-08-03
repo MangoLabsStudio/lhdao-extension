@@ -115,13 +115,69 @@ function boundedOwnEnumerableKeys(
   return { keys, overflow: false }
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
-  const collected = boundedOwnEnumerableKeys(value, keys.length)
-  if (collected.overflow) return false
+function boundedOwnEnumerableData(
+  value: object,
+  limit: number,
+): { keys: string[]; overflow: boolean; values: Map<string, unknown> } | null {
+  try {
+    const collected = boundedOwnEnumerableKeys(value, limit)
+    const values = new Map<string, unknown>()
+    for (const key of collected.keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor?.enumerable || !('value' in descriptor)) return null
+      values.set(key, descriptor.value)
+    }
+    return { ...collected, values }
+  } catch {
+    return null
+  }
+}
+
+function exactOwnEnumerableData(
+  value: object,
+  keys: string[],
+): Map<string, unknown> | null {
+  const collected = boundedOwnEnumerableData(value, keys.length)
+  if (!collected || collected.overflow) return null
   const actual = collected.keys.sort()
-  return (
-    actual.length === keys.length && actual.every((key, i) => key === keys[i])
-  )
+  return actual.length === keys.length &&
+    actual.every((key, index) => key === keys[index])
+    ? collected.values
+    : null
+}
+
+function ownArrayLength(value: unknown[]): number | null {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    return descriptor &&
+      'value' in descriptor &&
+      Number.isSafeInteger(descriptor.value) &&
+      descriptor.value >= 0
+      ? descriptor.value
+      : null
+  } catch {
+    return null
+  }
+}
+
+function ownArrayPrefix(value: unknown[], limit: number): unknown[] | null {
+  const length = ownArrayLength(value)
+  if (length === null) return null
+  const items: unknown[] = []
+  try {
+    for (let index = 0; index < Math.min(length, limit); index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (!descriptor) {
+        items.push(undefined)
+        continue
+      }
+      if (!descriptor.enumerable || !('value' in descriptor)) return null
+      items.push(descriptor.value)
+    }
+    return items
+  } catch {
+    return null
+  }
 }
 
 function hasToJsonInPrototypeChain(value: object): boolean {
@@ -160,13 +216,16 @@ function targetForScalar(
   const scalar = String(value)
   for (const candidate of targets) {
     const target = record(candidate)
+    const data = target && boundedOwnEnumerableData(target, MAX_KEYS)
+    const kind = data?.values.get('kind')
+    const id = data?.values.get('id')
     if (
-      (target?.kind === 'CONTENT' || target?.kind === 'AUTHOR') &&
-      typeof target.id === 'string' &&
-      TARGET_ID_RE.test(target.id) &&
-      target.id === scalar
+      (kind === 'CONTENT' || kind === 'AUTHOR') &&
+      typeof id === 'string' &&
+      TARGET_ID_RE.test(id) &&
+      id === scalar
     ) {
-      return { kind: target.kind, id: target.id }
+      return { kind, id }
     }
   }
   return null
@@ -185,17 +244,23 @@ export function findProbeTarget(
     if (matched) return matched
     if (current.depth >= MAX_DEPTH || !current.value) continue
     if (Array.isArray(current.value)) {
-      for (const item of current.value.slice(0, MAX_ARRAY_ITEMS)) {
+      const items = ownArrayPrefix(current.value, MAX_ARRAY_ITEMS)
+      if (!items) continue
+      for (const item of items) {
         stack.push({ value: item, depth: current.depth + 1 })
       }
       continue
     }
     const obj = record(current.value)
     if (!obj) continue
-    const { keys } = boundedOwnEnumerableKeys(obj, MAX_KEYS)
-    for (const key of keys.slice(0, MAX_KEYS).sort()) {
+    const collected = boundedOwnEnumerableData(obj, MAX_KEYS)
+    if (!collected) continue
+    for (const key of collected.keys.slice(0, MAX_KEYS).sort()) {
       if (SENSITIVE_KEY_RE.test(key)) continue
-      stack.push({ value: obj[key], depth: current.depth + 1 })
+      stack.push({
+        value: collected.values.get(key),
+        depth: current.depth + 1,
+      })
     }
   }
   return null
@@ -223,19 +288,20 @@ function sanitize(
   if (state.seen.has(value)) return '<circular>'
   state.seen.add(value)
   if (Array.isArray(value)) {
-    return Array.from(value.slice(0, MAX_ARRAY_ITEMS), (item) =>
-      sanitize(item, targets, depth + 1, state),
-    )
+    const items = ownArrayPrefix(value, MAX_ARRAY_ITEMS)
+    if (!items) return '<unsupported>'
+    return items.map((item) => sanitize(item, targets, depth + 1, state))
   }
   const obj = record(value)
   if (!obj) return '<unsupported>'
   const out: Record<string, unknown> = {}
-  const { keys } = boundedOwnEnumerableKeys(obj, MAX_KEYS)
+  const collected = boundedOwnEnumerableData(obj, MAX_KEYS)
+  if (!collected) return '<unsupported>'
   let ordinal = 0
-  for (const key of keys.slice(0, MAX_KEYS).sort()) {
+  for (const key of collected.keys.slice(0, MAX_KEYS).sort()) {
     if (SENSITIVE_KEY_RE.test(key)) continue
     out[sanitizedKey(key, ordinal)] = sanitize(
-      obj[key],
+      collected.values.get(key),
       targets,
       depth + 1,
       state,
@@ -352,25 +418,29 @@ function isSanitizedShape(
   if (typeof value === 'number' || typeof value === 'undefined') return false
   if (Array.isArray(value)) {
     if (hasToJsonInPrototypeChain(value)) return false
-    if (value.length > MAX_ARRAY_ITEMS) return false
-    const collected = boundedOwnEnumerableKeys(value, value.length)
+    const length = ownArrayLength(value)
+    if (length === null || length > MAX_ARRAY_ITEMS) return false
+    const collected = boundedOwnEnumerableData(value, length)
     return (
+      !!collected &&
       !collected.overflow &&
-      collected.keys.length === value.length &&
+      collected.keys.length === length &&
       collected.keys.every((key, index) => key === String(index)) &&
-      value.every((item) => isSanitizedShape(item, depth + 1, state))
+      collected.keys.every((key) =>
+        isSanitizedShape(collected.values.get(key), depth + 1, state),
+      )
     )
   }
   const obj = record(value)
   if (!obj || hasToJsonInPrototypeChain(obj)) return false
-  const collected = boundedOwnEnumerableKeys(obj, MAX_KEYS)
-  if (collected.overflow) return false
+  const collected = boundedOwnEnumerableData(obj, MAX_KEYS)
+  if (!collected || collected.overflow) return false
   return collected.keys.every(
     (key) =>
       key.length <= 128 &&
       !SENSITIVE_KEY_RE.test(key) &&
       (SAFE_SHAPE_KEYS.has(key) || SAFE_KEY_MARKER_RE.test(key)) &&
-      isSanitizedShape(obj[key], depth + 1, state),
+      isSanitizedShape(collected.values.get(key), depth + 1, state),
   )
 }
 
@@ -391,30 +461,41 @@ function parseProbeObservationWithLength(
   value: unknown,
 ): { observation: BinanceProbeObservation; serializedLength: number } | null {
   const obj = record(value)
-  const target = record(obj?.target)
+  const data = obj && exactOwnEnumerableData(obj, OBSERVATION_KEYS)
+  const target = record(data?.get('target'))
+  const targetData = target && exactOwnEnumerableData(target, ['id', 'kind'])
+  const id = data?.get('id')
+  const method = data?.get('method')
+  const path = data?.get('path')
+  const status = data?.get('status')
+  const targetId = targetData?.get('id')
+  const targetKind = targetData?.get('kind')
+  const capturedAt = data?.get('capturedAt')
+  const requestShape = data?.get('requestShape')
+  const responseShape = data?.get('responseShape')
   if (
     !obj ||
     hasToJsonInPrototypeChain(obj) ||
-    !hasOnlyKeys(obj, OBSERVATION_KEYS) ||
-    typeof obj.id !== 'string' ||
-    !UUID_V4_RE.test(obj.id) ||
-    obj.method !== 'POST' ||
-    typeof obj.path !== 'string' ||
-    probePath(`https://www.binance.com${obj.path}`) !== obj.path ||
-    !Number.isInteger(obj.status) ||
-    Number(obj.status) < 0 ||
-    Number(obj.status) > 599 ||
+    !data ||
+    typeof id !== 'string' ||
+    !UUID_V4_RE.test(id) ||
+    method !== 'POST' ||
+    typeof path !== 'string' ||
+    probePath(`https://www.binance.com${path}`) !== path ||
+    !Number.isInteger(status) ||
+    Number(status) < 0 ||
+    Number(status) > 599 ||
     !target ||
     hasToJsonInPrototypeChain(target) ||
-    !hasOnlyKeys(target, ['id', 'kind']) ||
-    (target.kind !== 'CONTENT' && target.kind !== 'AUTHOR') ||
-    typeof target.id !== 'string' ||
-    !TARGET_ID_RE.test(target.id) ||
-    !isCanonicalIsoTimestamp(obj.capturedAt) ||
-    !isSanitizedShape(obj.requestShape) ||
-    !isSanitizedShape(obj.responseShape) ||
-    !serializedShapeFits(obj.requestShape) ||
-    !serializedShapeFits(obj.responseShape)
+    !targetData ||
+    (targetKind !== 'CONTENT' && targetKind !== 'AUTHOR') ||
+    typeof targetId !== 'string' ||
+    !TARGET_ID_RE.test(targetId) ||
+    !isCanonicalIsoTimestamp(capturedAt) ||
+    !isSanitizedShape(requestShape) ||
+    !isSanitizedShape(responseShape) ||
+    !serializedShapeFits(requestShape) ||
+    !serializedShapeFits(responseShape)
   ) {
     return null
   }
@@ -438,15 +519,17 @@ export function parseProbeObservationMessage(
 ): BinanceProbeObservation | null {
   try {
     const obj = record(value)
+    const data =
+      obj && exactOwnEnumerableData(obj, ['__lhBinanceProbe', 'observation'])
     if (
       !obj ||
       hasToJsonInPrototypeChain(obj) ||
-      !hasOnlyKeys(obj, ['__lhBinanceProbe', 'observation']) ||
-      obj.__lhBinanceProbe !== true
+      !data ||
+      data.get('__lhBinanceProbe') !== true
     ) {
       return null
     }
-    const parsed = parseProbeObservationWithLength(obj.observation)
+    const parsed = parseProbeObservationWithLength(data.get('observation'))
     return parsed &&
       parsed.serializedLength + OBSERVATION_ENVELOPE_OVERHEAD <= MAX_JSON_LENGTH
       ? parsed.observation
@@ -461,43 +544,56 @@ export function parseProbeTargetConfigMessage(
 ): BinanceProbeTarget[] | null {
   try {
     const obj = record(value)
+    const data =
+      obj && exactOwnEnumerableData(obj, ['__lhBinanceProbeConfig', 'targets'])
+    const targetList = data?.get('targets')
+    const targetListArray = Array.isArray(targetList) ? targetList : null
+    const targetListLength = targetListArray
+      ? ownArrayLength(targetListArray)
+      : null
     if (
       !obj ||
       hasToJsonInPrototypeChain(obj) ||
-      !hasOnlyKeys(obj, ['__lhBinanceProbeConfig', 'targets']) ||
-      obj.__lhBinanceProbeConfig !== true ||
-      !Array.isArray(obj.targets) ||
-      hasToJsonInPrototypeChain(obj.targets) ||
-      obj.targets.length > MAX_TARGETS
+      !data ||
+      data.get('__lhBinanceProbeConfig') !== true ||
+      !targetListArray ||
+      hasToJsonInPrototypeChain(targetListArray) ||
+      targetListLength === null ||
+      targetListLength > MAX_TARGETS
     ) {
       return null
     }
-    const keys = boundedOwnEnumerableKeys(obj.targets, obj.targets.length)
+    const entries = boundedOwnEnumerableData(targetListArray, targetListLength)
     if (
-      keys.overflow ||
-      keys.keys.length !== obj.targets.length ||
-      !keys.keys.every((key, index) => key === String(index))
+      !entries ||
+      entries.overflow ||
+      entries.keys.length !== targetListLength ||
+      !entries.keys.every((key, index) => key === String(index))
     ) {
       return null
     }
     const targets: BinanceProbeTarget[] = []
     const seen = new Set<string>()
-    for (const value of obj.targets) {
-      const target = record(value)
+    for (const entryKey of entries.keys) {
+      const target = record(entries.values.get(entryKey))
+      const targetData =
+        target && exactOwnEnumerableData(target, ['id', 'kind'])
+      const kind = targetData?.get('kind')
+      const id = targetData?.get('id')
       if (
         !target ||
         hasToJsonInPrototypeChain(target) ||
-        !hasOnlyKeys(target, ['id', 'kind']) ||
-        (target.kind !== 'CONTENT' && target.kind !== 'AUTHOR') ||
-        typeof target.id !== 'string' ||
-        !TARGET_ID_RE.test(target.id)
+        !targetData ||
+        (kind !== 'CONTENT' && kind !== 'AUTHOR') ||
+        typeof id !== 'string' ||
+        !TARGET_ID_RE.test(id)
       ) {
         return null
       }
-      const key = `${target.kind}:${target.id}`
+      const key = `${kind}:${id}`
       if (seen.has(key)) continue
       seen.add(key)
-      targets.push({ kind: target.kind, id: target.id })
+      targets.push({ kind, id })
     }
     return serializedShapeFits(obj) ? targets : null
   } catch {

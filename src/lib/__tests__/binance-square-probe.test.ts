@@ -411,7 +411,7 @@ describe('Binance Square probe sanitizer', () => {
   it.each([
     'sanitize',
     'find',
-  ])('does not use a full key sort before bounded %s traversal', (operation) => {
+  ])('does not read accessors during bounded %s traversal', (operation) => {
     let reads = 0
     const wide: Record<string, unknown> = {}
     for (let i = 0; i < 200; i += 1) {
@@ -430,7 +430,7 @@ describe('Binance Square probe sanitizer', () => {
         ? sanitizeProbeValue(wide, targets)
         : findProbeTarget(wide, targets),
     ).not.toThrow()
-    expect(reads).toBe(80)
+    expect(reads).toBe(0)
   })
 
   it('handles circular and unsupported values without exposing them', () => {
@@ -655,6 +655,94 @@ describe('Binance Square probe observation parser', () => {
       parsed = parseProbeObservation(validObservation({ requestShape: shape }))
     }).not.toThrow()
     expect(parsed).toBeNull()
+  })
+
+  it('rejects accessor-backed observations before reading or serializing them', () => {
+    let accessorCalls = 0
+    let serializerCalls = 0
+    const observationWithShapeRace = () => {
+      const observation = validObservation()
+      let reads = 0
+      Object.defineProperty(observation, 'requestShape', {
+        enumerable: true,
+        get: () => {
+          accessorCalls += 1
+          reads += 1
+          if (reads <= 2) return { postId: '<target:CONTENT>' }
+          return {
+            toJSON: () => {
+              serializerCalls += 1
+              return { postId: '<target:CONTENT>' }
+            },
+          }
+        },
+      })
+      return observation
+    }
+
+    const direct = observationWithShapeRace()
+    const messageObservation = observationWithShapeRace()
+
+    expect(parseProbeObservation(direct)).toBeNull()
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation: messageObservation,
+      }),
+    ).toBeNull()
+    expect(accessorCalls).toBe(0)
+    expect(serializerCalls).toBe(0)
+  })
+
+  it('rejects accessors throughout observation envelopes without invoking them', () => {
+    let calls = 0
+    const accessor = (value: unknown) => ({
+      enumerable: true,
+      get: () => {
+        calls += 1
+        return value
+      },
+    })
+
+    const root = validObservation()
+    Object.defineProperty(root, 'method', accessor('POST'))
+
+    const target = { ...targets[0] }
+    Object.defineProperty(target, 'id', accessor(target.id))
+
+    const shape = { postId: '<target:CONTENT>' }
+    Object.defineProperty(shape, 'postId', accessor('<target:CONTENT>'))
+
+    const arrayShape = [true]
+    Object.defineProperty(arrayShape, '0', accessor(true))
+
+    const setterShape = {}
+    Object.defineProperty(setterShape, 'postId', {
+      enumerable: true,
+      set: () => {
+        calls += 1
+      },
+    })
+
+    const wrapper = {
+      __lhBinanceProbe: true,
+      observation: validObservation(),
+    }
+    Object.defineProperty(wrapper, 'observation', accessor(wrapper.observation))
+
+    expect(parseProbeObservation(root)).toBeNull()
+    expect(parseProbeObservation(validObservation({ target }))).toBeNull()
+    expect(
+      parseProbeObservation(validObservation({ requestShape: shape })),
+    ).toBeNull()
+    expect(
+      parseProbeObservation(validObservation({ responseShape: arrayShape })),
+    ).toBeNull()
+    expect(
+      parseProbeObservation(validObservation({ requestShape: setterShape })),
+    ).toBeNull()
+    expect(parseProbeObservationMessage(wrapper)).toBeNull()
+    expect(calls).toBe(0)
   })
 
   it('continues accepting plain, null-prototype, and ordinary array shapes', () => {
@@ -937,6 +1025,21 @@ describe('Binance Square probe target config parser', () => {
     ])
   })
 
+  it('accepts null-prototype config data with ordinary value descriptors', () => {
+    const target = Object.assign(Object.create(null), {
+      kind: 'CONTENT',
+      id: '335389698745313',
+    })
+    const wrapper = Object.assign(Object.create(null), {
+      __lhBinanceProbeConfig: true,
+      targets: [target],
+    })
+
+    expect(parseProbeTargetConfigMessage(wrapper)).toEqual([
+      { kind: 'CONTENT', id: '335389698745313' },
+    ])
+  })
+
   it.each([
     ['missing marker', { targets }],
     [
@@ -1042,5 +1145,83 @@ describe('Binance Square probe target config parser', () => {
     expect(inherited).toBeNull()
     expect(custom).toBeNull()
     expect(calls).toBe(0)
+  })
+
+  it('rejects accessors throughout target configs without invoking them', () => {
+    let calls = 0
+    const accessor = (value: unknown) => ({
+      enumerable: true,
+      get: () => {
+        calls += 1
+        return value
+      },
+    })
+    const validTarget = { kind: 'CONTENT', id: '335389698745313' } as const
+
+    const wrapper = {
+      __lhBinanceProbeConfig: true,
+      targets: [validTarget],
+    }
+    Object.defineProperty(wrapper, 'targets', accessor(wrapper.targets))
+
+    const targetArray = [validTarget]
+    Object.defineProperty(targetArray, '0', accessor(validTarget))
+
+    const target = { ...validTarget }
+    Object.defineProperty(target, 'id', accessor(target.id))
+
+    const setterTarget = { kind: 'CONTENT' }
+    Object.defineProperty(setterTarget, 'id', {
+      enumerable: true,
+      set: () => {
+        calls += 1
+      },
+    })
+
+    expect(parseProbeTargetConfigMessage(wrapper)).toBeNull()
+    expect(
+      parseProbeTargetConfigMessage({
+        __lhBinanceProbeConfig: true,
+        targets: targetArray,
+      }),
+    ).toBeNull()
+    expect(
+      parseProbeTargetConfigMessage({
+        __lhBinanceProbeConfig: true,
+        targets: [target],
+      }),
+    ).toBeNull()
+    expect(
+      parseProbeTargetConfigMessage({
+        __lhBinanceProbeConfig: true,
+        targets: [setterTarget],
+      }),
+    ).toBeNull()
+    expect(calls).toBe(0)
+  })
+
+  it('fails closed when config descriptor inspection throws', () => {
+    const throwing = <T extends object>(value: T) =>
+      new Proxy(value, {
+        getOwnPropertyDescriptor() {
+          throw new Error('hostile descriptor trap')
+        },
+      })
+
+    const wrapper = throwing({
+      __lhBinanceProbeConfig: true,
+      targets: [{ kind: 'CONTENT', id: '335389698745313' }],
+    })
+    const targetArray = throwing([{ kind: 'CONTENT', id: '335389698745313' }])
+    const target = throwing({ kind: 'CONTENT', id: '335389698745313' })
+
+    for (const value of [
+      wrapper,
+      { __lhBinanceProbeConfig: true, targets: targetArray },
+      { __lhBinanceProbeConfig: true, targets: [target] },
+    ]) {
+      expect(() => parseProbeTargetConfigMessage(value)).not.toThrow()
+      expect(parseProbeTargetConfigMessage(value)).toBeNull()
+    }
   })
 })
