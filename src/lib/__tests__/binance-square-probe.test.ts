@@ -502,6 +502,37 @@ describe('Binance Square probe observation parser', () => {
     expect(parseProbeObservationMessage(overLimit)).toBeNull()
   })
 
+  it.each([
+    'requestShape',
+    'responseShape',
+  ] as const)('rejects oversized %s hidden by a non-enumerable observation toJSON', (field) => {
+    const oversizedShape = {
+      text: `<string:${'1'.repeat(20_000)}>`,
+    }
+    const observation = validObservation({ [field]: oversizedShape })
+    let toJsonCalls = 0
+    Object.defineProperty(observation, 'toJSON', {
+      enumerable: false,
+      value: () => {
+        toJsonCalls += 1
+        return validObservation()
+      },
+    })
+
+    expect(JSON.stringify(oversizedShape).length).toBeGreaterThan(16_384)
+    expect(JSON.stringify(observation).length).toBeLessThan(16_384)
+    expect(toJsonCalls).toBe(1)
+    toJsonCalls = 0
+    expect(parseProbeObservation(observation)).toBeNull()
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation,
+      }),
+    ).toBeNull()
+    expect(toJsonCalls).toBe(0)
+  })
+
   it('accepts only sanitized observation metadata and shapes', () => {
     const observation = validObservation({
       requestShape: {

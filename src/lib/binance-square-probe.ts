@@ -125,6 +125,14 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
   )
 }
 
+function hasOwnToJson(value: object): boolean {
+  try {
+    return Object.hasOwn(value, 'toJSON')
+  } catch {
+    return true
+  }
+}
+
 function sanitizedKey(key: string, ordinal: number): string {
   if (SAFE_SHAPE_KEYS.has(key)) return key
   const kind = /^\d+$/u.test(key) ? 'digits' : 'string'
@@ -336,6 +344,7 @@ function isSanitizedShape(
   if (typeof value === 'string') return SAFE_MARKER_RE.test(value)
   if (typeof value === 'number' || typeof value === 'undefined') return false
   if (Array.isArray(value)) {
+    if (hasOwnToJson(value)) return false
     if (value.length > MAX_ARRAY_ITEMS) return false
     const collected = boundedOwnEnumerableKeys(value, value.length)
     return (
@@ -346,7 +355,7 @@ function isSanitizedShape(
     )
   }
   const obj = record(value)
-  if (!obj) return false
+  if (!obj || hasOwnToJson(obj)) return false
   const collected = boundedOwnEnumerableKeys(obj, MAX_KEYS)
   if (collected.overflow) return false
   return collected.keys.every(
@@ -378,6 +387,7 @@ function parseProbeObservationWithLength(
   const target = record(obj?.target)
   if (
     !obj ||
+    hasOwnToJson(obj) ||
     !hasOnlyKeys(obj, OBSERVATION_KEYS) ||
     typeof obj.id !== 'string' ||
     !UUID_V4_RE.test(obj.id) ||
@@ -388,13 +398,16 @@ function parseProbeObservationWithLength(
     Number(obj.status) < 0 ||
     Number(obj.status) > 599 ||
     !target ||
+    hasOwnToJson(target) ||
     !hasOnlyKeys(target, ['id', 'kind']) ||
     (target.kind !== 'CONTENT' && target.kind !== 'AUTHOR') ||
     typeof target.id !== 'string' ||
     !TARGET_ID_RE.test(target.id) ||
     !isCanonicalIsoTimestamp(obj.capturedAt) ||
     !isSanitizedShape(obj.requestShape) ||
-    !isSanitizedShape(obj.responseShape)
+    !isSanitizedShape(obj.responseShape) ||
+    !serializedShapeFits(obj.requestShape) ||
+    !serializedShapeFits(obj.responseShape)
   ) {
     return null
   }
@@ -420,6 +433,7 @@ export function parseProbeObservationMessage(
     const obj = record(value)
     if (
       !obj ||
+      hasOwnToJson(obj) ||
       !hasOnlyKeys(obj, ['__lhBinanceProbe', 'observation']) ||
       obj.__lhBinanceProbe !== true
     ) {
@@ -442,6 +456,7 @@ export function parseProbeTargetConfigMessage(
     const obj = record(value)
     if (
       !obj ||
+      hasOwnToJson(obj) ||
       !hasOnlyKeys(obj, ['__lhBinanceProbeConfig', 'targets']) ||
       obj.__lhBinanceProbeConfig !== true ||
       !Array.isArray(obj.targets) ||
@@ -464,6 +479,7 @@ export function parseProbeTargetConfigMessage(
       const target = record(value)
       if (
         !target ||
+        hasOwnToJson(target) ||
         !hasOnlyKeys(target, ['id', 'kind']) ||
         (target.kind !== 'CONTENT' && target.kind !== 'AUTHOR') ||
         typeof target.id !== 'string' ||
