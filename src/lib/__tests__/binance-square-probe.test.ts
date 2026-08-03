@@ -476,6 +476,35 @@ describe('Binance Square probe sanitizer', () => {
     expect(observation?.requestShape).toEqual(expected)
     expect(parseProbeObservation(observation)).not.toBeNull()
   })
+
+  it.each([
+    ['Object.prototype', Object.prototype, { postId: targets[0].id }],
+    ['Array.prototype', Array.prototype, [targets[0].id]],
+  ] as const)('does not invoke an inherited %s serializer before validating sanitized output', (_name, prototype, input) => {
+    const previous = Object.getOwnPropertyDescriptor(prototype, 'toJSON')
+    let calls = 0
+    let result: unknown
+    try {
+      Object.defineProperty(prototype, 'toJSON', {
+        configurable: true,
+        value: () => {
+          calls += 1
+          return null
+        },
+      })
+      result = sanitizeProbeValue(input, targets)
+    } finally {
+      if (previous) {
+        Object.defineProperty(prototype, 'toJSON', previous)
+      } else {
+        Reflect.deleteProperty(prototype, 'toJSON')
+      }
+    }
+
+    expect(result).toEqual({ truncated: true })
+    expect(Object.getPrototypeOf(result as object)).toBeNull()
+    expect(calls).toBe(0)
+  })
 })
 
 describe('Binance Square probe observation parser', () => {
@@ -965,5 +994,53 @@ describe('Binance Square probe target config parser', () => {
         targets: [inherited],
       }),
     ).toBeNull()
+  })
+
+  it('validates the target array prototype before serializing an oversized config', () => {
+    const targetList = Array.from({ length: 500 }, (_, index) => ({
+      kind: 'CONTENT',
+      id: String(index).padStart(32, '1'),
+    }))
+    const previous = Object.getOwnPropertyDescriptor(Array.prototype, 'toJSON')
+    let calls = 0
+    let inherited: ReturnType<typeof parseProbeTargetConfigMessage>
+    try {
+      Object.defineProperty(Array.prototype, 'toJSON', {
+        configurable: true,
+        value: () => {
+          calls += 1
+          return []
+        },
+      })
+      inherited = parseProbeTargetConfigMessage({
+        __lhBinanceProbeConfig: true,
+        targets: targetList,
+      })
+    } finally {
+      if (previous) {
+        Object.defineProperty(Array.prototype, 'toJSON', previous)
+      } else {
+        Reflect.deleteProperty(Array.prototype, 'toJSON')
+      }
+    }
+
+    const customPrototype = Object.create(Array.prototype)
+    Object.defineProperty(customPrototype, 'toJSON', {
+      configurable: true,
+      get: () => {
+        calls += 1
+        return () => []
+      },
+    })
+    const customTargets = [...targetList]
+    Object.setPrototypeOf(customTargets, customPrototype)
+    const custom = parseProbeTargetConfigMessage({
+      __lhBinanceProbeConfig: true,
+      targets: customTargets,
+    })
+
+    expect(inherited).toBeNull()
+    expect(custom).toBeNull()
+    expect(calls).toBe(0)
   })
 })

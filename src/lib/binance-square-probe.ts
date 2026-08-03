@@ -20,9 +20,8 @@ const MAX_ARRAY_ITEMS = 5
 const MAX_JSON_LENGTH = 16_384
 const MAX_NODES = 500
 const MAX_TARGETS = 500
-const OBSERVATION_ENVELOPE_OVERHEAD =
-  JSON.stringify({ __lhBinanceProbe: true, observation: null }).length -
-  'null'.length
+const OBSERVATION_ENVELOPE_OVERHEAD = '{"__lhBinanceProbe":true,"observation":}'
+  .length
 const SENSITIVE_KEY_RE =
   /authorization|cookie|csrf|secret|session|token|credential|password/i
 const SAFE_MARKER_RE =
@@ -254,9 +253,9 @@ export function sanitizeProbeValue(
     nodes: 0,
     seen: new WeakSet(),
   })
-  return serializedShapeFits(result) && isSanitizedShape(result)
+  return isSanitizedShape(result) && serializedShapeFits(result)
     ? result
-    : { truncated: true }
+    : Object.assign(Object.create(null), { truncated: true })
 }
 
 function probePath(rawUrl: string): string | null {
@@ -468,8 +467,8 @@ export function parseProbeTargetConfigMessage(
       !hasOnlyKeys(obj, ['__lhBinanceProbeConfig', 'targets']) ||
       obj.__lhBinanceProbeConfig !== true ||
       !Array.isArray(obj.targets) ||
-      obj.targets.length > MAX_TARGETS ||
-      !serializedShapeFits(obj)
+      hasToJsonInPrototypeChain(obj.targets) ||
+      obj.targets.length > MAX_TARGETS
     ) {
       return null
     }
@@ -500,7 +499,7 @@ export function parseProbeTargetConfigMessage(
       seen.add(key)
       targets.push({ kind: target.kind, id: target.id })
     }
-    return targets
+    return serializedShapeFits(obj) ? targets : null
   } catch {
     return null
   }
