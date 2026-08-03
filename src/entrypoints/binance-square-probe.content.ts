@@ -134,9 +134,17 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
   }
 
   const state = new WeakMap<XMLHttpRequest, { method: string; url: string }>()
+  const pendingLoad = new WeakMap<XMLHttpRequest, () => void>()
+  const removePendingLoad = (xhr: XMLHttpRequest) => {
+    const listener = pendingLoad.get(xhr)
+    if (!listener) return
+    pendingLoad.delete(xhr)
+    xhr.removeEventListener('load', listener)
+  }
   const originalOpen = XMLHttpRequest.prototype.open
   const originalSend = XMLHttpRequest.prototype.send
   XMLHttpRequest.prototype.open = function (...args: unknown[]) {
+    removePendingLoad(this)
     state.set(this, {
       method: String(args[0] ?? 'GET'),
       url: String(args[1] ?? ''),
@@ -144,6 +152,7 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
     return (originalOpen as (...values: unknown[]) => void).apply(this, args)
   }
   XMLHttpRequest.prototype.send = function (...args: unknown[]) {
+    removePendingLoad(this)
     const requestState = state.get(this)
     const candidate =
       targets.length > 0 &&
@@ -153,27 +162,39 @@ export function installBinanceSquareProbe(enabled = CAPTURE_DEBUG): void {
         undefined,
         (args[0] ?? null) as BodyInit | null,
       )
-      this.addEventListener('load', () => {
+      const loadListener = () => {
+        if (pendingLoad.get(this) === loadListener) {
+          pendingLoad.delete(this)
+        }
+        this.removeEventListener('load', loadListener)
+        const status = this.status
+        let response: unknown = null
+        try {
+          response =
+            this.responseType === 'json'
+              ? this.response
+              : JSON.parse(this.responseText)
+        } catch {}
         void requestBody.then((text) => {
           const request = json(text)
           if (!findProbeTarget(request, targets)) return
-          let response: unknown = null
-          try {
-            response =
-              this.responseType === 'json'
-                ? this.response
-                : JSON.parse(this.responseText)
-          } catch {}
           emit({
             url: requestState.url,
-            status: this.status,
+            status,
             request,
             response,
           })
         })
-      })
+      }
+      pendingLoad.set(this, loadListener)
+      this.addEventListener('load', loadListener)
     }
-    return (originalSend as (...values: unknown[]) => void).apply(this, args)
+    try {
+      return (originalSend as (...values: unknown[]) => void).apply(this, args)
+    } catch (error) {
+      removePendingLoad(this)
+      throw error
+    }
   }
 }
 

@@ -165,6 +165,9 @@ describe('Binance Square MAIN probe', () => {
       addEventListener(type: string, listener: () => void) {
         this.listeners[type] = listener
       }
+      removeEventListener(type: string, listener: () => void) {
+        if (this.listeners[type] === listener) delete this.listeners[type]
+      }
     }
     vi.stubGlobal('XMLHttpRequest', FakeXhr)
     const postMessage = vi.spyOn(window, 'postMessage')
@@ -196,6 +199,114 @@ describe('Binance Square MAIN probe', () => {
         }),
         window.location.origin,
       )
+    })
+  })
+
+  it('emits exactly once per request when an XHR instance is reused', async () => {
+    class ReusedXhr {
+      listeners = new Set<() => void>()
+      sends = 0
+      responseType = 'json'
+      response: unknown = { code: 0 }
+      responseText = ''
+      status = 200
+      open() {}
+      send() {
+        this.sends += 1
+        this.status = 200 + this.sends
+        this.response = { code: this.sends }
+        for (const listener of [...this.listeners]) listener()
+      }
+      addEventListener(type: string, listener: () => void) {
+        if (type === 'load') this.listeners.add(listener)
+      }
+      removeEventListener(type: string, listener: () => void) {
+        if (type === 'load') this.listeners.delete(listener)
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', ReusedXhr)
+    const postMessage = vi.spyOn(window, 'postMessage')
+    installBinanceSquareProbe(true)
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: { __lhBinanceProbeConfig: true, targets: [target] },
+      }),
+    )
+    const xhr = new XMLHttpRequest()
+
+    xhr.open('POST', 'https://www.binance.com/bapi/post/like')
+    xhr.send(JSON.stringify({ postId: target.id, text: 'first' }))
+    xhr.open('POST', 'https://www.binance.com/bapi/post/share')
+    xhr.send(JSON.stringify({ postId: target.id, text: 'second' }))
+
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledTimes(2)
+    })
+    const observations = postMessage.mock.calls.map(
+      ([message]) =>
+        (message as { observation: BinanceProbeObservation }).observation,
+    )
+    expect(observations.map(({ path }) => path)).toEqual([
+      '/bapi/post/like',
+      '/bapi/post/share',
+    ])
+    expect(observations.map(({ requestShape }) => requestShape)).toEqual([
+      { postId: '<target:CONTENT>', text: '<string:5>' },
+      { postId: '<target:CONTENT>', text: '<string:6>' },
+    ])
+    expect(observations.map(({ status }) => status)).toEqual([201, 202])
+    expect(observations.map(({ responseShape }) => responseShape)).toEqual([
+      { code: '<number>' },
+      { code: '<number>' },
+    ])
+  })
+
+  it('removes the request load listener when native XHR send throws', async () => {
+    const thrown = new Error('sync send')
+    let shouldThrow = true
+    class ThrowingXhr {
+      listeners = new Set<() => void>()
+      responseType = 'json'
+      response: unknown = { code: 0 }
+      responseText = ''
+      status = 200
+      open() {}
+      send() {
+        if (shouldThrow) throw thrown
+        for (const listener of [...this.listeners]) listener()
+      }
+      addEventListener(type: string, listener: () => void) {
+        if (type === 'load') this.listeners.add(listener)
+      }
+      removeEventListener(type: string, listener: () => void) {
+        if (type === 'load') this.listeners.delete(listener)
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', ThrowingXhr)
+    const postMessage = vi.spyOn(window, 'postMessage')
+    installBinanceSquareProbe(true)
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: { __lhBinanceProbeConfig: true, targets: [target] },
+      }),
+    )
+    const xhr = new XMLHttpRequest() as XMLHttpRequest & ThrowingXhr
+
+    xhr.open('POST', 'https://www.binance.com/bapi/post/like')
+    expect(() =>
+      xhr.send(JSON.stringify({ postId: target.id, text: 'first' })),
+    ).toThrow(thrown)
+    expect(xhr.listeners.size).toBe(0)
+
+    shouldThrow = false
+    xhr.open('POST', 'https://www.binance.com/bapi/post/share')
+    xhr.send(JSON.stringify({ postId: target.id, text: 'second' }))
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledTimes(1)
     })
   })
 })

@@ -8,6 +8,14 @@ import {
 
 const NOW = Date.parse('2026-08-04T00:00:00.000Z')
 
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function observation(
   overrides: Partial<BinanceProbeObservation> = {},
 ): BinanceProbeObservation {
@@ -170,6 +178,110 @@ describe('Binance Square probe background store', () => {
 
     await appendBinanceProbeObservation(newest, { now: NOW, enabled: true })
     expect(harness.stored.binanceSquareProbeObservations).toEqual([newest])
+  })
+
+  it('serializes concurrent appends so neither observation is lost', async () => {
+    const firstReadStarted = deferred()
+    const releaseFirstRead = deferred()
+    const stored: Record<string, unknown> = {
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [{ reserved: true }],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [],
+    }
+    let blockFirstRead = true
+    const get = vi.fn(async (key: string) => {
+      const snapshot = stored[key]
+      if (key === 'binanceSquareProbeObservations' && blockFirstRead) {
+        blockFirstRead = false
+        firstReadStarted.resolve()
+        await releaseFirstRead.promise
+      }
+      return { [key]: snapshot }
+    })
+    const set = vi.fn(async (value: Record<string, unknown>) => {
+      Object.assign(stored, value)
+    })
+    vi.stubGlobal('chrome', { storage: { session: { get, set } } })
+    const first = observation({
+      id: '123e4567-e89b-42d3-a456-426614174001',
+      status: 201,
+      capturedAt: new Date(NOW - 2_000).toISOString(),
+    })
+    const second = observation({
+      id: '123e4567-e89b-42d3-a456-426614174002',
+      status: 202,
+      capturedAt: new Date(NOW - 1_000).toISOString(),
+    })
+
+    const firstAppend = appendBinanceProbeObservation(first, {
+      now: NOW,
+      enabled: true,
+    })
+    await firstReadStarted.promise
+    const secondAppend = appendBinanceProbeObservation(second, {
+      now: NOW,
+      enabled: true,
+    })
+    await Promise.resolve()
+    releaseFirstRead.resolve()
+    await Promise.all([firstAppend, secondAppend])
+
+    expect(stored.binanceSquareProbeObservations).toEqual([first, second])
+  })
+
+  it('orders export and clear after an earlier append mutation', async () => {
+    const taskReadStarted = deferred()
+    const releaseTaskRead = deferred()
+    const stored: Record<string, unknown> = {
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [{ reserved: true }],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [],
+    }
+    let blockTaskRead = true
+    const get = vi.fn(async (key: string) => {
+      const snapshot = stored[key]
+      if (key === 'binanceSquareTasks' && blockTaskRead) {
+        blockTaskRead = false
+        taskReadStarted.resolve()
+        await releaseTaskRead.promise
+      }
+      return { [key]: snapshot }
+    })
+    const set = vi.fn(async (value: Record<string, unknown>) => {
+      Object.assign(stored, value)
+    })
+    vi.stubGlobal('chrome', { storage: { session: { get, set } } })
+    const value = observation()
+
+    const append = appendBinanceProbeObservation(value, {
+      now: NOW,
+      enabled: true,
+    })
+    await taskReadStarted.promise
+    const exported = handleBinanceProbeRequest(
+      { type: 'export-binance-probe-observations' },
+      { now: NOW, enabled: true },
+    )
+    const cleared = handleBinanceProbeRequest(
+      { type: 'clear-binance-probe-observations' },
+      { now: NOW, enabled: true },
+    )
+    releaseTaskRead.resolve()
+
+    await expect(exported).resolves.toEqual({
+      type: 'binance-probe-observations',
+      observations: [value],
+    })
+    await expect(Promise.all([append, cleared])).resolves.toBeDefined()
+    expect(stored.binanceSquareProbeObservations).toEqual([])
   })
 
   it('keeps only the newest 100 live observations', async () => {

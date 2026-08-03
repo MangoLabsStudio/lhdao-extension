@@ -319,8 +319,9 @@ export function sanitizeProbeValue(
     nodes: 0,
     seen: new WeakSet(),
   })
-  return isSanitizedShape(result) && serializedShapeFits(result)
-    ? result
+  const snapshot = snapshotSanitizedShape(result)
+  return snapshot !== INVALID_SANITIZED_SHAPE && serializedShapeFits(snapshot)
+    ? snapshot
     : Object.assign(Object.create(null), { truncated: true })
 }
 
@@ -406,42 +407,75 @@ export function buildProbeObservation(args: {
   }
 }
 
-function isSanitizedShape(
+const INVALID_SANITIZED_SHAPE = Symbol('invalid-sanitized-shape')
+
+function snapshotSanitizedShape(
   value: unknown,
   depth = 0,
   state = { nodes: 0 },
-): boolean {
+): unknown | typeof INVALID_SANITIZED_SHAPE {
   state.nodes += 1
-  if (state.nodes > MAX_NODES || depth > MAX_DEPTH + 1) return false
-  if (value === null || typeof value === 'boolean') return true
-  if (typeof value === 'string') return SAFE_MARKER_RE.test(value)
-  if (typeof value === 'number' || typeof value === 'undefined') return false
+  if (state.nodes > MAX_NODES || depth > MAX_DEPTH + 1) {
+    return INVALID_SANITIZED_SHAPE
+  }
+  if (value === null || typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    return SAFE_MARKER_RE.test(value) ? value : INVALID_SANITIZED_SHAPE
+  }
+  if (typeof value === 'number' || typeof value === 'undefined') {
+    return INVALID_SANITIZED_SHAPE
+  }
   if (Array.isArray(value)) {
-    if (hasToJsonInPrototypeChain(value)) return false
+    if (hasToJsonInPrototypeChain(value)) return INVALID_SANITIZED_SHAPE
     const length = ownArrayLength(value)
-    if (length === null || length > MAX_ARRAY_ITEMS) return false
+    if (length === null || length > MAX_ARRAY_ITEMS) {
+      return INVALID_SANITIZED_SHAPE
+    }
     const collected = boundedOwnEnumerableData(value, length)
-    return (
-      !!collected &&
-      !collected.overflow &&
-      collected.keys.length === length &&
-      collected.keys.every((key, index) => key === String(index)) &&
-      collected.keys.every((key) =>
-        isSanitizedShape(collected.values.get(key), depth + 1, state),
+    if (
+      !collected ||
+      collected.overflow ||
+      collected.keys.length !== length ||
+      !collected.keys.every((key, index) => key === String(index))
+    ) {
+      return INVALID_SANITIZED_SHAPE
+    }
+    const snapshot: unknown[] = []
+    for (const key of collected.keys) {
+      const item = snapshotSanitizedShape(
+        collected.values.get(key),
+        depth + 1,
+        state,
       )
-    )
+      if (item === INVALID_SANITIZED_SHAPE) return INVALID_SANITIZED_SHAPE
+      snapshot.push(item)
+    }
+    return snapshot
   }
   const obj = record(value)
-  if (!obj || hasToJsonInPrototypeChain(obj)) return false
+  if (!obj || hasToJsonInPrototypeChain(obj)) {
+    return INVALID_SANITIZED_SHAPE
+  }
   const collected = boundedOwnEnumerableData(obj, MAX_KEYS)
-  if (!collected || collected.overflow) return false
-  return collected.keys.every(
-    (key) =>
-      key.length <= 128 &&
-      !SENSITIVE_KEY_RE.test(key) &&
-      (SAFE_SHAPE_KEYS.has(key) || SAFE_KEY_MARKER_RE.test(key)) &&
-      isSanitizedShape(collected.values.get(key), depth + 1, state),
-  )
+  if (!collected || collected.overflow) return INVALID_SANITIZED_SHAPE
+  const snapshot: Record<string, unknown> = Object.create(null)
+  for (const key of collected.keys) {
+    if (
+      key.length > 128 ||
+      SENSITIVE_KEY_RE.test(key) ||
+      (!SAFE_SHAPE_KEYS.has(key) && !SAFE_KEY_MARKER_RE.test(key))
+    ) {
+      return INVALID_SANITIZED_SHAPE
+    }
+    const item = snapshotSanitizedShape(
+      collected.values.get(key),
+      depth + 1,
+      state,
+    )
+    if (item === INVALID_SANITIZED_SHAPE) return INVALID_SANITIZED_SHAPE
+    snapshot[key] = item
+  }
+  return snapshot
 }
 
 function serializedShapeFits(value: unknown): boolean {
@@ -473,6 +507,8 @@ function parseProbeObservationWithLength(
   const capturedAt = data?.get('capturedAt')
   const requestShape = data?.get('requestShape')
   const responseShape = data?.get('responseShape')
+  const requestShapeSnapshot = snapshotSanitizedShape(requestShape)
+  const responseShapeSnapshot = snapshotSanitizedShape(responseShape)
   if (
     !obj ||
     hasToJsonInPrototypeChain(obj) ||
@@ -492,17 +528,30 @@ function parseProbeObservationWithLength(
     typeof targetId !== 'string' ||
     !TARGET_ID_RE.test(targetId) ||
     !isCanonicalIsoTimestamp(capturedAt) ||
-    !isSanitizedShape(requestShape) ||
-    !isSanitizedShape(responseShape) ||
-    !serializedShapeFits(requestShape) ||
-    !serializedShapeFits(responseShape)
+    requestShapeSnapshot === INVALID_SANITIZED_SHAPE ||
+    responseShapeSnapshot === INVALID_SANITIZED_SHAPE ||
+    !serializedShapeFits(requestShapeSnapshot) ||
+    !serializedShapeFits(responseShapeSnapshot)
   ) {
     return null
   }
-  const length = serializedLength(obj)
+  const observation = Object.assign(Object.create(null), {
+    id,
+    method: 'POST' as const,
+    path,
+    status: status as number,
+    target: Object.assign(Object.create(null), {
+      kind: targetKind,
+      id: targetId,
+    }),
+    requestShape: requestShapeSnapshot,
+    responseShape: responseShapeSnapshot,
+    capturedAt,
+  }) as BinanceProbeObservation
+  const length = serializedLength(observation)
   return length !== null && length <= MAX_JSON_LENGTH
     ? {
-        observation: obj as unknown as BinanceProbeObservation,
+        observation,
         serializedLength: length,
       }
     : null
@@ -573,6 +622,7 @@ export function parseProbeTargetConfigMessage(
       return null
     }
     const targets: BinanceProbeTarget[] = []
+    const snapshotTargets: BinanceProbeTarget[] = []
     const seen = new Set<string>()
     for (const entryKey of entries.keys) {
       const target = record(entries.values.get(entryKey))
@@ -590,12 +640,19 @@ export function parseProbeTargetConfigMessage(
       ) {
         return null
       }
+      snapshotTargets.push(
+        Object.assign(Object.create(null), { kind, id }) as BinanceProbeTarget,
+      )
       const key = `${kind}:${id}`
       if (seen.has(key)) continue
       seen.add(key)
       targets.push({ kind, id })
     }
-    return serializedShapeFits(obj) ? targets : null
+    const snapshot = Object.assign(Object.create(null), {
+      __lhBinanceProbeConfig: true,
+      targets: snapshotTargets,
+    })
+    return serializedShapeFits(snapshot) ? targets : null
   } catch {
     return null
   }

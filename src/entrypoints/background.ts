@@ -131,6 +131,17 @@ type BinanceProbeRuntimeOptions = {
   enabled?: boolean
 }
 
+let binanceProbeStorageQueue: Promise<void> = Promise.resolve()
+
+function withBinanceProbeStorage<T>(operation: () => Promise<T>): Promise<T> {
+  const result = binanceProbeStorageQueue.then(operation)
+  binanceProbeStorageQueue = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
+
 function binanceProbeKey(observation: BinanceProbeObservation): string {
   return JSON.stringify([
     observation.method,
@@ -142,11 +153,9 @@ function binanceProbeKey(observation: BinanceProbeObservation): string {
   ])
 }
 
-export async function liveBinanceProbeObservations({
-  now = Date.now(),
-  enabled = CAPTURE_DEBUG,
-}: BinanceProbeRuntimeOptions = {}): Promise<BinanceProbeObservation[]> {
-  if (!enabled) return []
+async function liveBinanceProbeObservationsUnlocked(
+  now: number,
+): Promise<BinanceProbeObservation[]> {
   const raw = await sessionStore.get('binanceSquareProbeObservations')
   const stored = Array.isArray(raw) ? raw : []
   const cutoff = now - BINANCE_PROBE_TTL_MS
@@ -166,6 +175,16 @@ export async function liveBinanceProbeObservations({
   return live
 }
 
+export async function liveBinanceProbeObservations({
+  now = Date.now(),
+  enabled = CAPTURE_DEBUG,
+}: BinanceProbeRuntimeOptions = {}): Promise<BinanceProbeObservation[]> {
+  if (!enabled) return []
+  return withBinanceProbeStorage(() =>
+    liveBinanceProbeObservationsUnlocked(now),
+  )
+}
+
 export async function appendBinanceProbeObservation(
   value: unknown,
   options: BinanceProbeRuntimeOptions = {},
@@ -174,35 +193,37 @@ export async function appendBinanceProbeObservation(
   if (!enabled) return
   const observation = parseProbeObservation(value)
   if (!observation) return
-  const index = (await sessionStore.get('binanceSquareTasks')) ?? {
-    byContentId: {},
-    byAuthorId: {},
-  }
-  const allowed = reservedBinanceProbeTargets(index)
-  if (
-    !allowed.some(
-      (target) =>
-        target.kind === observation.target.kind &&
-        target.id === observation.target.id,
-    )
-  ) {
-    return
-  }
-  const existing = await liveBinanceProbeObservations({ now, enabled })
-  const key = binanceProbeKey(observation)
-  const duplicate = existing.find((item) => binanceProbeKey(item) === key)
-  if (
-    duplicate &&
-    Date.parse(duplicate.capturedAt) >= Date.parse(observation.capturedAt)
-  ) {
-    return
-  }
-  const next = existing
-    .filter((item) => binanceProbeKey(item) !== key)
-    .concat(observation)
-    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
-    .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
-  await sessionStore.set('binanceSquareProbeObservations', next)
+  await withBinanceProbeStorage(async () => {
+    const index = (await sessionStore.get('binanceSquareTasks')) ?? {
+      byContentId: {},
+      byAuthorId: {},
+    }
+    const allowed = reservedBinanceProbeTargets(index)
+    if (
+      !allowed.some(
+        (target) =>
+          target.kind === observation.target.kind &&
+          target.id === observation.target.id,
+      )
+    ) {
+      return
+    }
+    const existing = await liveBinanceProbeObservationsUnlocked(now)
+    const key = binanceProbeKey(observation)
+    const duplicate = existing.find((item) => binanceProbeKey(item) === key)
+    if (
+      duplicate &&
+      Date.parse(duplicate.capturedAt) >= Date.parse(observation.capturedAt)
+    ) {
+      return
+    }
+    const next = existing
+      .filter((item) => binanceProbeKey(item) !== key)
+      .concat(observation)
+      .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+      .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
+    await sessionStore.set('binanceSquareProbeObservations', next)
+  })
 }
 
 export async function handleBinanceProbeRequest(
@@ -245,7 +266,9 @@ export async function handleBinanceProbeRequest(
     }
   }
   if (req.type === 'clear-binance-probe-observations') {
-    await sessionStore.set('binanceSquareProbeObservations', [])
+    await withBinanceProbeStorage(() =>
+      sessionStore.set('binanceSquareProbeObservations', []),
+    )
     return { type: 'ack' }
   }
   return null

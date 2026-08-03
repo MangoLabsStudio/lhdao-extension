@@ -694,6 +694,45 @@ describe('Binance Square probe observation parser', () => {
     expect(serializerCalls).toBe(0)
   })
 
+  it('serializes trusted observation snapshots instead of transparent proxies', () => {
+    let toJsonReads = 0
+    let serializerCalls = 0
+    const transparent = <T extends object>(value: T): T =>
+      new Proxy(value, {
+        get(target, key, receiver) {
+          if (key === 'toJSON') {
+            toJsonReads += 1
+            return () => {
+              serializerCalls += 1
+              return null
+            }
+          }
+          return Reflect.get(target, key, receiver)
+        },
+      })
+
+    const direct = transparent(
+      validObservation({
+        requestShape: transparent({ postId: '<target:CONTENT>' }),
+      }),
+    )
+    const wrapped = transparent(
+      validObservation({
+        responseShape: transparent({ code: '<digits:1>' }),
+      }),
+    )
+
+    expect(parseProbeObservation(direct)).toEqual(validObservation())
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation: wrapped,
+      }),
+    ).toEqual(validObservation({ responseShape: { code: '<digits:1>' } }))
+    expect(toJsonReads).toBe(0)
+    expect(serializerCalls).toBe(0)
+  })
+
   it('rejects accessors throughout observation envelopes without invoking them', () => {
     let calls = 0
     const accessor = (value: unknown) => ({
@@ -1223,5 +1262,50 @@ describe('Binance Square probe target config parser', () => {
       expect(() => parseProbeTargetConfigMessage(value)).not.toThrow()
       expect(parseProbeTargetConfigMessage(value)).toBeNull()
     }
+  })
+
+  it('serializes a trusted config snapshot instead of transparent proxies', () => {
+    let toJsonReads = 0
+    let serializerCalls = 0
+    const transparent = <T extends object>(value: T): T =>
+      new Proxy(value, {
+        get(target, key, receiver) {
+          if (key === 'toJSON') {
+            toJsonReads += 1
+            return () => {
+              serializerCalls += 1
+              return []
+            }
+          }
+          return Reflect.get(target, key, receiver)
+        },
+      })
+    const target = transparent({
+      kind: 'CONTENT' as const,
+      id: '335389698745313',
+    })
+    const targets = transparent([target])
+    const wrapper = transparent({
+      __lhBinanceProbeConfig: true,
+      targets,
+    })
+
+    expect(parseProbeTargetConfigMessage(wrapper)).toEqual([
+      { kind: 'CONTENT', id: '335389698745313' },
+    ])
+    expect(toJsonReads).toBe(0)
+    expect(serializerCalls).toBe(0)
+  })
+
+  it('applies the config byte limit before deduplicating snapshot targets', () => {
+    expect(
+      parseProbeTargetConfigMessage({
+        __lhBinanceProbeConfig: true,
+        targets: Array.from({ length: 500 }, () => ({
+          kind: 'CONTENT',
+          id: '335389698745313',
+        })),
+      }),
+    ).toBeNull()
   })
 })
