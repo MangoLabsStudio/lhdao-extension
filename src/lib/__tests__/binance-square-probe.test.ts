@@ -349,6 +349,26 @@ describe('Binance Square probe sanitizer', () => {
       undefined: '<unsupported>',
     })
   })
+
+  it('densifies sparse arrays into explicit sanitized markers', () => {
+    const sparseRequest: unknown[] = Array(5)
+    sparseRequest[4] = { postId: '335389698745313' }
+    const expected = [
+      '<unsupported>',
+      '<unsupported>',
+      '<unsupported>',
+      '<unsupported>',
+      { postId: '<target:CONTENT>' },
+    ]
+
+    expect(sanitizeProbeValue(sparseRequest, targets)).toEqual(expected)
+    const observation = buildProbeObservation({
+      ...validBuildArgs(),
+      request: sparseRequest,
+    })
+    expect(observation?.requestShape).toEqual(expected)
+    expect(parseProbeObservation(observation)).not.toBeNull()
+  })
 })
 
 describe('Binance Square probe observation parser', () => {
@@ -475,6 +495,20 @@ describe('Binance Square probe observation parser', () => {
     const observation = validObservation({
       requestShape: arrayWithCustomProperty,
     })
+    expect(parseProbeObservation(observation)).toBeNull()
+    expect(
+      parseProbeObservationMessage({
+        __lhBinanceProbe: true,
+        observation,
+      }),
+    ).toBeNull()
+  })
+
+  it('rejects sparse arrays in parsed shapes and messages', () => {
+    const sparseShape: unknown[] = Array(5)
+    sparseShape[4] = true
+    const observation = validObservation({ requestShape: sparseShape })
+
     expect(parseProbeObservation(observation)).toBeNull()
     expect(
       parseProbeObservationMessage({

@@ -126,9 +126,9 @@ function sanitize(
   if (state.seen.has(value)) return '<circular>'
   state.seen.add(value)
   if (Array.isArray(value)) {
-    return value
-      .slice(0, MAX_ARRAY_ITEMS)
-      .map((item) => sanitize(item, targets, depth + 1, state))
+    return Array.from(value.slice(0, MAX_ARRAY_ITEMS), (item) =>
+      sanitize(item, targets, depth + 1, state),
+    )
   }
   const obj = record(value)
   if (!obj) return '<unsupported>'
@@ -232,17 +232,11 @@ function isSanitizedShape(
   if (typeof value === 'string') return SAFE_MARKER_RE.test(value)
   if (typeof value === 'number' || typeof value === 'undefined') return false
   if (Array.isArray(value)) {
+    const keys = Object.keys(value)
     return (
       value.length <= MAX_ARRAY_ITEMS &&
-      Object.keys(value).every((key) => {
-        const index = Number(key)
-        return (
-          Number.isInteger(index) &&
-          index >= 0 &&
-          index < value.length &&
-          String(index) === key
-        )
-      }) &&
+      keys.length === value.length &&
+      keys.every((key, index) => key === String(index)) &&
       value.every((item) => isSanitizedShape(item, depth + 1, state))
     )
   }
