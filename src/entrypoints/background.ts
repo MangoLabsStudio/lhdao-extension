@@ -1,3 +1,4 @@
+import { indexBinanceSquareTasks } from '@/lib/binance-square-tasks'
 import { dbg } from '@/lib/capture-debug'
 import { getOrCreateDeviceIdentity } from '@/lib/device-key'
 import {
@@ -37,7 +38,6 @@ import {
   type CreateAutoReinvestVars,
   type CreateExtensionPairingResult,
   type CreateExtensionPairingVars,
-  type EngagementActionType,
   LIGHTHOUSE_MEMBERS_QUERY,
   type LighthouseMember,
   type LighthouseMembersResult,
@@ -98,13 +98,23 @@ import type {
 const ALARM_NAME = 'lhdao-sync'
 const RAW_CAPTURE_TTL_MS = 10 * 60 * 1000
 const MAX_RAW_CAPTURES = 80
-const SUPPORTED_ACTIONS = new Set<EngagementActionType>([
+const SUPPORTED_ACTIONS = new Set<CampaignTaskCache['actionType']>([
   'LIKE',
   'RT',
   'COMMENT',
   'COMMENT_LIKE',
   'FOLLOW',
 ])
+
+function isSupportedXAction(
+  action: AvailableEngagementsResult['availableEngagements'][number]['actions'][number],
+): action is AvailableEngagementsResult['availableEngagements'][number]['actions'][number] & {
+  actionType: CampaignTaskCache['actionType']
+} {
+  return SUPPORTED_ACTIONS.has(
+    action.actionType as CampaignTaskCache['actionType'],
+  )
+}
 
 function engagementReward(c: {
   myExpectedReward?: number | null
@@ -534,6 +544,10 @@ async function performSyncTasks(): Promise<void> {
     // 没 token 就清空所有缓存,避免遗留旧任务/旧余额误导
     await sessionStore.set('tasksByTweetId', {})
     await sessionStore.set('tasksByAuthorHandle', {})
+    await sessionStore.set('binanceSquareTasks', {
+      byContentId: {},
+      byAuthorId: {},
+    })
     await sessionStore.set('activeCampaigns', [])
     await sessionStore.set('tweetCampaigns', [])
     await sessionStore.set('userProfile', null)
@@ -569,9 +583,11 @@ async function performSyncTasks(): Promise<void> {
     // 「当前任务」优先显示用户实际预约的那个(修 NO_ACTIVE_RESERVATION)。
     const reservedIds = new Set<string>(reserved.map((c) => c.id))
     const { byTweet, byAuthor } = flattenTasks(merged, reservedIds)
+    const binanceIndex = indexBinanceSquareTasks(merged, reservedIds)
     const activeCampaigns = buildActiveCampaignSummaries(merged)
     await sessionStore.set('tasksByTweetId', byTweet)
     await sessionStore.set('tasksByAuthorHandle', byAuthor)
+    await sessionStore.set('binanceSquareTasks', binanceIndex)
     await sessionStore.set('activeCampaigns', activeCampaigns)
   } else {
     console.warn('[lhdao] availableEngagements failed', engRes.reason)
@@ -713,9 +729,7 @@ function buildActiveCampaignSummaries(
       c.tweetId ?? (c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null)
     if (!tweetId || !c.targetUrl) continue
 
-    const supportedActions = c.actions.filter((a) =>
-      SUPPORTED_ACTIONS.has(a.actionType),
-    )
+    const supportedActions = c.actions.filter(isSupportedXAction)
     if (supportedActions.length === 0) continue
 
     // dedupe action types
@@ -784,9 +798,7 @@ function flattenTasks(
     // 没有"代表推文")。所以 tweetId null 不能直接 skip 整条 campaign,
     // 要看 FOLLOW action 能否落到 author 索引上。
     const firstKeyword = c.keywords?.[0] ?? null
-    const supportedActions = c.actions.filter((a) =>
-      SUPPORTED_ACTIONS.has(a.actionType),
-    )
+    const supportedActions = c.actions.filter(isSupportedXAction)
     if (supportedActions.length === 0) continue
 
     const effectiveTotal = engagementReward(c)

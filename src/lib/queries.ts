@@ -82,7 +82,10 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       id
       type
       mode
+      platform
       targetUrl
+      targetContentId
+      targetAuthorId
       tweetId
       tweetText
       tweetAuthorName
@@ -108,13 +111,19 @@ export type EngagementActionType =
   | 'RT'
   | 'COMMENT'
   | 'COMMENT_LIKE'
+  | 'SHARE'
   | 'FOLLOW'
+
+export type EngagementPlatform = 'X' | 'BINANCE_SQUARE'
 
 export interface AvailableEngagement {
   id: string
   type: string
   mode: string
+  platform: EngagementPlatform
   targetUrl: string | null
+  targetContentId: string | null
+  targetAuthorId: string | null
   tweetId: string | null
   tweetText: string | null
   tweetAuthorName: string | null
@@ -156,7 +165,10 @@ export const MY_RESERVED_ENGAGEMENTS_QUERY = `
       id
       type
       mode
+      platform
       targetUrl
+      targetContentId
+      targetAuthorId
       tweetId
       tweetText
       tweetAuthorName

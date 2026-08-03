@@ -63,14 +63,14 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'engagement.available.v1',
     'AvailableEngagements',
     AVAILABLE_ENGAGEMENTS_QUERY,
-    '7f3faf8b7363b23748fb23daea8e7200969b5ac12730267b9f666cab830815cd',
+    '0eeb2ddb0d9592bba041d40c86e9f633ccc23c483a878cb7a8420d2fcaa89863',
     'read',
   ),
   operation(
     'engagement.reserved.v1',
     'MyReservedEngagements',
     MY_RESERVED_ENGAGEMENTS_QUERY,
-    'ea01775852479e34bf2ee184c3f67553a4de024c55aff1c34b342c6e2542e610',
+    '0d8fc915363539ebef479c151a57ef096eb034a4328371bc204f3947cfbb74d5',
     'read',
   ),
   operation(

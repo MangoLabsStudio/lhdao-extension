@@ -12,6 +12,22 @@
 import type { ProductExperienceTaskRef } from '../types/product-experience'
 import type { ProductExperienceSession } from './product-experience-controller'
 
+export type BinanceSquareActionType = 'LIKE' | 'COMMENT' | 'SHARE' | 'FOLLOW'
+
+export interface BinanceSquareTaskCache {
+  campaignId: string
+  actionType: BinanceSquareActionType
+  targetUrl: string
+  targetContentId?: string
+  targetAuthorId?: string
+  reserved: boolean
+}
+
+export interface BinanceSquareTaskIndex {
+  byContentId: Record<string, BinanceSquareTaskCache[]>
+  byAuthorId: Record<string, BinanceSquareTaskCache[]>
+}
+
 // ── Schemas ───────────────────────────────────────────────────────────
 
 interface LocalSchema {
@@ -45,6 +61,8 @@ interface LocalSchema {
 }
 
 interface SessionSchema {
+  /** Binance Square 任务的独立索引，不与 X tweet ID 缓存混用。 */
+  binanceSquareTasks: BinanceSquareTaskIndex
   /** Lighthouse 页面保存的脱敏产品任务引用，不含规则或凭据。 */
   activeProductExperienceTask: ProductExperienceTaskRef
   /** L2 当前验证会话；凭据只允许保存在 chrome.storage.session。 */
