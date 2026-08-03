@@ -10,6 +10,7 @@
  */
 
 import type { ProductExperienceTaskRef } from '../types/product-experience'
+import type { BinanceProbeObservation } from './binance-square-probe'
 import type { ProductExperienceSession } from './product-experience-controller'
 
 export type BinanceSquareActionType = 'LIKE' | 'COMMENT' | 'SHARE' | 'FOLLOW'
@@ -63,6 +64,8 @@ interface LocalSchema {
 interface SessionSchema {
   /** Binance Square 任务的独立索引，不与 X tweet ID 缓存混用。 */
   binanceSquareTasks: BinanceSquareTaskIndex
+  /** Beta 探针暂存的脱敏网络形状；不包含原始请求或响应。 */
+  binanceSquareProbeObservations: BinanceProbeObservation[]
   /** Lighthouse 页面保存的脱敏产品任务引用，不含规则或凭据。 */
   activeProductExperienceTask: ProductExperienceTaskRef
   /** L2 当前验证会话；凭据只允许保存在 chrome.storage.session。 */
