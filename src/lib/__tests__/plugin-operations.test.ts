@@ -5,8 +5,10 @@ import {
   PLUGIN_OPERATIONS,
 } from '../plugin-operations'
 import {
+  AVAILABLE_ENGAGEMENTS_QUERY,
   MintProductExperienceTestTicketOperationName,
   MintProductExperienceTicketOperationName,
+  MY_RESERVED_ENGAGEMENTS_QUERY,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   SubmitProductExperienceProofOperationName,
 } from '../queries'
@@ -65,6 +67,27 @@ describe('PLUGIN_OPERATIONS', () => {
         )?.id,
       ).toBe(operation.id)
     }
+  })
+
+  it('versions the expanded engagement documents as v2 operations', () => {
+    expect(PLUGIN_OPERATIONS.map((operation) => operation.id)).not.toContain(
+      'engagement.available.v1',
+    )
+    expect(PLUGIN_OPERATIONS.map((operation) => operation.id)).not.toContain(
+      'engagement.reserved.v1',
+    )
+    expect(
+      getPluginOperationByDocument(
+        AVAILABLE_ENGAGEMENTS_QUERY,
+        'AvailableEngagements',
+      )?.id,
+    ).toBe('engagement.available.v2')
+    expect(
+      getPluginOperationByDocument(
+        MY_RESERVED_ENGAGEMENTS_QUERY,
+        'MyReservedEngagements',
+      )?.id,
+    ).toBe('engagement.reserved.v2')
   })
 
   it('does not match a document with an added field or alias', () => {

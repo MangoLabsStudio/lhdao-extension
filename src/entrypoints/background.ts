@@ -719,12 +719,12 @@ function buildTweetCampaignSummaries(
  *  - 没有 targetUrl / tweetId
  *  - actions 全是 unsupported 类型
  */
-function buildActiveCampaignSummaries(
+export function buildActiveCampaignSummaries(
   engagements: AvailableEngagementsResult['availableEngagements'],
 ): ActiveCampaignSummary[] {
   const result: ActiveCampaignSummary[] = []
   for (const c of engagements) {
-    if (c.type !== 'ENGAGEMENT') continue
+    if (c.type !== 'ENGAGEMENT' || c.platform !== 'X') continue
     const tweetId =
       c.tweetId ?? (c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null)
     if (!tweetId || !c.targetUrl) continue
@@ -779,7 +779,7 @@ function buildActiveCampaignSummaries(
  * 同一个 FOLLOW 任务仍然在 byTweet 里存一份(挂在 targetUrl 对应的"代表推文"
  * 上),让用户在 campaign 来源推文上看到合并 chip(Q3:复合任务合并显示)。
  */
-function flattenTasks(
+export function flattenTasks(
   engagements: AvailableEngagementsResult['availableEngagements'],
   /** 当前用户已预约(RESERVED)的 campaignId 集合(来自 myReservedEngagements)。
    *  标进 task.reserved,让「当前任务」在同推文多单时优先显示已预约的那个。 */
@@ -792,7 +792,7 @@ function flattenTasks(
   const byAuthor: Record<string, CampaignTaskCache[]> = {}
 
   for (const c of engagements) {
-    if (c.type !== 'ENGAGEMENT') continue
+    if (c.type !== 'ENGAGEMENT' || c.platform !== 'X') continue
     const tweetId = c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null
     // 注意:FOLLOW-only campaign 也可能没有 targetUrl(纯粹是关注账户,
     // 没有"代表推文")。所以 tweetId null 不能直接 skip 整条 campaign,
