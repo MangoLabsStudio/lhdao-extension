@@ -5,6 +5,7 @@ export type ZkTlsProfile = {
   local: boolean
   apiEndpoint: string | null
   verifierEndpoint: string | null
+  verifierProfileId: string | null
   publicKeys: PublicKeys
 }
 
@@ -17,6 +18,7 @@ export const ZKTLS_PROFILE: ZkTlsProfile =
         local: false,
         apiEndpoint: null,
         verifierEndpoint: null,
+        verifierProfileId: null,
         publicKeys: {},
       }
     : __ZKTLS_PROFILE__
@@ -24,6 +26,16 @@ export const ZKTLS_VERIFICATION_PATH = '/verify/'
 
 export function zktlsVerificationPath(sessionId: string): string {
   return `${ZKTLS_VERIFICATION_PATH}${sessionId}`
+}
+
+export function assertVerifierProfile(config: {
+  verifier_profile_id: string
+}): void {
+  if (
+    !ZKTLS_PROFILE.verifierProfileId ||
+    config.verifier_profile_id !== ZKTLS_PROFILE.verifierProfileId
+  )
+    throw new Error('connector verifier profile is unavailable')
 }
 
 export function isSupportedZkTlsBrowser(): boolean {

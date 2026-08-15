@@ -5,6 +5,7 @@ import {
   verifierUrls,
 } from '@/entrypoints/zktls-offscreen/worker'
 import {
+  assertConnectorAvailable,
   configDigest,
   interpret,
   validateConnector,
@@ -14,6 +15,7 @@ import {
   ZKTLS_PAGE_CHANNEL,
 } from '@/lib/zktls/page-bridge'
 import { parseZkTlsRuntimeRequest } from '@/lib/zktls/runtime-request'
+import { assertTicketAvailable } from '@/lib/zktls/signed-config'
 
 const connector = {
   interpreter_version: 1,
@@ -87,6 +89,21 @@ describe('zkTLS strict boundaries', () => {
         request: { ...connector.request, headers: { authorization: 'x' } },
       }),
     ).toThrow()
+  })
+
+  test('fails closed for disabled and expired connector or ticket', () => {
+    expect(() =>
+      assertConnectorAvailable(
+        { ...connector, disabled: true },
+        '2026-08-15T00:00:00.000Z',
+      ),
+    ).toThrow('connector is unavailable')
+    expect(() =>
+      assertConnectorAvailable(connector, '2031-01-01T00:00:00.000Z'),
+    ).toThrow('connector is unavailable')
+    expect(() =>
+      assertTicketAvailable(ticket, '2031-01-01T00:00:00.000Z'),
+    ).toThrow('ticket is unavailable')
   })
 
   test('content parser rejects page-supplied config and extra fields', () => {

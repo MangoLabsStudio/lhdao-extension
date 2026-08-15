@@ -1,11 +1,12 @@
 import {
+  assertConnectorAvailable,
   type Connector,
   htmlDisclosureRanges,
   interpret,
   requestTarget,
 } from '@/lib/zktls/interpreter'
-import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
-import type { Ticket } from '@/lib/zktls/signed-config'
+import { assertVerifierProfile, ZKTLS_PROFILE } from '@/lib/zktls/profile'
+import { assertTicketAvailable, type Ticket } from '@/lib/zktls/signed-config'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -260,6 +261,13 @@ export function revealConfig(
   }
 }
 
+function assertAvailable(message: ProveMessage): void {
+  const now = new Date().toISOString()
+  assertConnectorAvailable(message.config, now)
+  assertTicketAvailable(message.ticket, now)
+  assertVerifierProfile(message.config)
+}
+
 async function prove(message: ProveMessage): Promise<void> {
   if (message.config.response_format !== 'html')
     throw new Error('JSON connectors are unsupported by this runtime')
@@ -267,6 +275,7 @@ async function prove(message: ProveMessage): Promise<void> {
   await wasm.default()
   await wasm.initialize(null, 1)
   const origin = new URL(message.config.origin)
+  assertAvailable(message)
   const registration = await registerSession(message, origin.hostname)
   const prover = new wasm.Prover({
     server_name: origin.hostname,
@@ -283,6 +292,7 @@ async function prove(message: ProveMessage): Promise<void> {
   })
   try {
     await prover.setup(await websocketIo(registration.verifierUrl))
+    assertAvailable(message)
     const path = requestTarget(message.config, message.identity)
     await prover.send_request(await websocketIo(registration.proxyUrl), {
       uri: path,

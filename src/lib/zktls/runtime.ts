@@ -1,8 +1,16 @@
 import { WEB_ENDPOINT } from '@/lib/env'
-import { type Connector, extractIdentity } from './interpreter'
-import { ZKTLS_PROFILE } from './profile'
+import {
+  assertConnectorAvailable,
+  type Connector,
+  extractIdentity,
+} from './interpreter'
+import { assertVerifierProfile, ZKTLS_PROFILE } from './profile'
 import { parseZkTlsRuntimeRequest } from './runtime-request'
-import { fetchAndVerifySignedConfig, type Ticket } from './signed-config'
+import {
+  assertTicketAvailable,
+  fetchAndVerifySignedConfig,
+  type Ticket,
+} from './signed-config'
 
 type Job = {
   sessionId: string
@@ -36,6 +44,13 @@ function permissionUrl(): string {
   return chrome.runtime.getURL('zktls-permission.html')
 }
 
+function assertAvailable(config: Connector, ticket: Ticket): void {
+  const now = new Date().toISOString()
+  assertConnectorAvailable(config, now)
+  assertTicketAvailable(ticket, now)
+  assertVerifierProfile(config)
+}
+
 async function signedConnector(
   sessionId: string,
   connectorId: string,
@@ -56,6 +71,7 @@ async function signedConnector(
     result.config.connector_id !== connectorId
   )
     throw new Error('ticket mismatch')
+  assertAvailable(result.config, result.ticket)
   return result
 }
 
@@ -179,6 +195,7 @@ export async function handleZkTlsProof(
         code: 'UNSUPPORTED_CONNECTOR',
       }
     await ensurePermission(config.origin, request.connectorId)
+    assertAvailable(config, ticket)
     const tab = await connectorTab(config.origin)
     if (!tab?.id) {
       await chrome.tabs.create({ url: config.origin })
@@ -197,6 +214,7 @@ export async function handleZkTlsProof(
         status: 'pending_login',
       }
     }
+    assertAvailable(config, ticket)
     clearJob()
     const active: Job = {
       sessionId: request.sessionId,

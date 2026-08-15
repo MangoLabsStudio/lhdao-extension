@@ -1,4 +1,5 @@
 import {
+  assertConnectorAvailable,
   type Connector,
   canonicalJson,
   configDigest,
@@ -153,6 +154,15 @@ function validateTicket(value: unknown): Ticket {
   return value as Ticket
 }
 
+export function assertTicketAvailable(ticket: Ticket, now: string): void {
+  const current = isoTime(now, 'now')
+  if (
+    current < Date.parse(ticket.issued_at) ||
+    current >= Date.parse(ticket.expires_at)
+  )
+    fail('ticket is unavailable.')
+}
+
 export async function verifyConfigEnvelope(
   value: unknown,
   publicKeys: Record<string, JsonWebKey>,
@@ -195,7 +205,6 @@ export async function verifyTicketEnvelope(
     value.key_id,
     options.publicKeys,
   )
-  const now = isoTime(options.now, 'now')
   if (
     ticket.connector_id !== options.config.connector_id ||
     ticket.revision !== options.config.revision ||
@@ -203,11 +212,7 @@ export async function verifyTicketEnvelope(
     ticket.config_digest !== (await configDigest(options.config))
   )
     fail('ticket did not bind the verified config.')
-  if (
-    now < Date.parse(ticket.issued_at) ||
-    now >= Date.parse(ticket.expires_at)
-  )
-    fail('ticket is unavailable.')
+  assertTicketAvailable(ticket, options.now)
   return ticket
 }
 
@@ -247,5 +252,6 @@ export async function fetchAndVerifySignedConfig(
     publicKeys: options.publicKeys,
     now: options.now,
   })
+  assertConnectorAvailable(config, options.now)
   return { config, ticket }
 }

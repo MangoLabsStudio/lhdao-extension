@@ -306,6 +306,17 @@ export function validateConnector(value: unknown): Connector {
   return value as Connector
 }
 
+export function assertConnectorAvailable(config: Connector, now: string): void {
+  validateConnector(config)
+  const current = Date.parse(now)
+  if (
+    !Number.isFinite(current) ||
+    config.disabled ||
+    Date.parse(config.expires_at) <= current
+  )
+    fail('connector is unavailable.')
+}
+
 export function canonicalJson(value: unknown): string {
   if (
     value === null ||
@@ -418,12 +429,7 @@ export function interpret(
   input: { response: string; status: number; identity: string; now: string },
 ): { request_target: string; status: string; marker: string; claim: string } {
   validateConnector(config)
-  if (
-    config.disabled ||
-    Date.parse(config.expires_at) <= Date.parse(input.now) ||
-    !Number.isFinite(Date.parse(input.now))
-  )
-    fail('connector is unavailable.')
+  assertConnectorAvailable(config, input.now)
   if (
     typeof input.response !== 'string' ||
     bytes(input.response) > config.request.max_recv_data ||
