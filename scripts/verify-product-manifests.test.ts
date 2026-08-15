@@ -32,8 +32,19 @@ function validManifest(overrides = {}) {
     manifest_version: 3,
     name: 'Lighthouse',
     version: '0.2.2',
-    permissions: ['storage', 'alarms', 'activeTab', 'scripting'],
+    permissions: [
+      'storage',
+      'alarms',
+      'activeTab',
+      'scripting',
+      'offscreen',
+      'webRequest',
+    ],
     host_permissions: PRODUCTION_HOSTS,
+    optional_host_permissions: ['https://*/*'],
+    content_security_policy: {
+      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
+    },
     content_scripts: [
       {
         matches: ['https://x.com/*', 'https://twitter.com/*'],
@@ -68,6 +79,12 @@ async function manifestDirectory(manifest = validManifest(), withRuntime = true)
       join(contentScripts, 'product-experience.js'),
       '/* runtime evaluator */\n',
     )
+    await writeFile(join(directory, 'tlsn_wasm.js'), '/* wasm loader */\n')
+    await writeFile(join(directory, 'tlsn_wasm_bg.wasm'), 'wasm')
+    await writeFile(join(directory, 'spawn.js'), '/* spawn */\n')
+    const snippet = join(directory, 'snippets', 'web-spawn-05868593a72e2d44', 'js')
+    await mkdir(snippet, { recursive: true })
+    await writeFile(join(snippet, 'spawn.js'), '/* spawn */\n')
   }
   return directory
 }
@@ -127,8 +144,8 @@ describe('requires exact version, permissions, and host permissions', () => {
     ['extension version', { version: '0.1.6' }, /version.*0\.2\.2/i],
     [
       'permissions',
-      { permissions: ['storage', 'alarms', 'activeTab'] },
-      /permissions.*scripting/i,
+      { permissions: ['storage', 'alarms', 'activeTab', 'scripting'] },
+      /permissions.*offscreen/i,
     ],
     [
       'host permissions',

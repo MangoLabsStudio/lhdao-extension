@@ -26,16 +26,84 @@ const WEB_ENDPOINT = endpointPolicy.webEndpoint
 const API_HOST_PATTERN = endpointPolicy.apiHostPattern
 const WEB_HOST_PATTERN = endpointPolicy.webHostPattern
 
+const LOCAL_ZKTLS_KEY = {
+  'local-dev-2026': {
+    kty: 'OKP',
+    crv: 'Ed25519',
+    x: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo',
+  },
+}
+
+function zktlsProfile() {
+  const enabled = process.env.WXT_ZKTLS_ENABLED === 'true'
+  if (!enabled) {
+    return {
+      enabled: false,
+      local: endpointPolicy.localBuild,
+      apiEndpoint: null,
+      verifierEndpoint: null,
+      publicKeys: {},
+    }
+  }
+  const apiEndpoint =
+    process.env.WXT_ZKTLS_API_ENDPOINT ??
+    (endpointPolicy.localBuild ? 'http://localhost:3031/signed-config' : '')
+  const verifierEndpoint =
+    process.env.WXT_ZKTLS_VERIFIER_ENDPOINT ??
+    (endpointPolicy.localBuild ? 'ws://localhost:7047/session' : '')
+  const publicKeys = endpointPolicy.localBuild
+    ? LOCAL_ZKTLS_KEY
+    : JSON.parse(process.env.WXT_ZKTLS_PUBLIC_KEYS ?? '')
+  const api = new URL(apiEndpoint)
+  const verifier = new URL(verifierEndpoint)
+  if (endpointPolicy.localBuild) {
+    if (
+      api.protocol !== 'http:' ||
+      api.hostname !== 'localhost' ||
+      verifier.protocol !== 'ws:' ||
+      verifier.hostname !== 'localhost'
+    ) {
+      throw new Error(
+        'Local zkTLS requires localhost HTTP API and WS verifier.',
+      )
+    }
+  } else if (
+    api.protocol !== 'https:' ||
+    verifier.protocol !== 'wss:' ||
+    Object.keys(publicKeys).some((key) => /(?:local|dev|test)/i.test(key))
+  ) {
+    throw new Error(
+      'Product zkTLS requires HTTPS/WSS endpoints and a non-development Ed25519 key.',
+    )
+  }
+  return {
+    enabled: true,
+    local: endpointPolicy.localBuild,
+    apiEndpoint: api.href,
+    verifierEndpoint: verifier.href,
+    publicKeys,
+  }
+}
+
+const ZKTLS_PROFILE = zktlsProfile()
+
 // See https://wxt.dev/api/config.html
 export default defineConfig({
-  modules: ['@wxt-dev/module-react'],
+  modules: ['@wxt-dev/module-react', './modules/tlsn-wasm.ts'],
   srcDir: 'src',
   outDir: '.output',
 
-  manifest: {
+  manifest: ({ browser }) => ({
     name: 'Lighthouse',
     description: 'Complete Lighthouse engagement and product-experience tasks',
-    permissions: ['storage', 'alarms', 'activeTab', 'scripting'],
+    permissions: [
+      'storage',
+      'alarms',
+      'activeTab',
+      'scripting',
+      ...(browser === 'firefox' ? [] : ['offscreen', 'webRequest']),
+    ],
+    optional_host_permissions: browser === 'firefox' ? [] : ['https://*/*'],
     host_permissions: [
       'https://x.com/*',
       'https://twitter.com/*',
@@ -55,7 +123,15 @@ export default defineConfig({
         matches: ['*://x.com/*', '*://twitter.com/*'],
       },
     ],
-  },
+    ...(browser === 'firefox'
+      ? {}
+      : {
+          content_security_policy: {
+            extension_pages:
+              "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
+          },
+        }),
+  }),
 
   vite: () => ({
     plugins: [tailwindcss()],
@@ -63,6 +139,7 @@ export default defineConfig({
       __API_ENDPOINT__: JSON.stringify(API_ENDPOINT),
       __WEB_ENDPOINT__: JSON.stringify(WEB_ENDPOINT),
       __WEB_MATCH_PATTERN__: JSON.stringify(WEB_HOST_PATTERN),
+      __ZKTLS_PROFILE__: JSON.stringify(ZKTLS_PROFILE),
     },
   }),
 })

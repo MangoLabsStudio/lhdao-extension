@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const EXPECTED_EXTENSION_VERSION = '0.2.2'
-const EXPECTED_PERMISSIONS = ['storage', 'alarms', 'activeTab', 'scripting']
+const BASE_PERMISSIONS = ['storage', 'alarms', 'activeTab', 'scripting']
 const FIXED_HOST_PERMISSIONS = [
   'https://x.com/*',
   'https://twitter.com/*',
@@ -174,6 +174,9 @@ function manifestMatchPatterns(manifest) {
 }
 
 function assertSafeMatchPatterns(manifest) {
+  if (manifest.host_permissions?.includes('https://*/*')) {
+    throw new Error('Wildcard resident host permissions are forbidden.')
+  }
   for (const pattern of manifestMatchPatterns(manifest)) {
     const schemeWildcardMatch = /^\*:\/\/([^/]+)\//.exec(pattern)
     const allowedFixedSchemeWildcard =
@@ -183,7 +186,7 @@ function assertSafeMatchPatterns(manifest) {
       pattern === '<all_urls>' ||
       (schemeWildcardMatch && !allowedFixedSchemeWildcard) ||
       /^[a-z][a-z\d+.-]*:\/\/[^/]*\*/i.test(pattern)
-    if (wildcardOrigin) {
+    if (wildcardOrigin && pattern !== 'https://*/*') {
       throw new Error(
         `Wildcard origins are forbidden in manifest matches: ${pattern}`,
       )
@@ -268,7 +271,15 @@ async function assertRuntimeEvaluatorArtifact(directory) {
   }
 }
 
-export async function verifyManifestDirectory(directory) {
+async function assertTlsnAssets(directory) {
+  for (const name of ['tlsn_wasm.js', 'tlsn_wasm_bg.wasm', 'spawn.js', 'snippets/web-spawn-05868593a72e2d44/js/spawn.js']) {
+    const asset = await stat(resolve(directory, name))
+    if (!asset.isFile() || asset.size === 0) throw new Error(`Missing TLSNotary asset: ${name}`)
+  }
+}
+
+export async function verifyManifestDirectory(directory, options = {}) {
+  const browser = typeof options === 'string' ? options : options.browser ?? 'chrome'
   const absoluteDirectory = resolve(directory)
   const manifestPath = resolve(absoluteDirectory, 'manifest.json')
   let manifest
@@ -292,11 +303,11 @@ export async function verifyManifestDirectory(directory) {
     )
   }
 
-  assertExactStringSet(
-    'permissions',
-    manifest.permissions,
-    EXPECTED_PERMISSIONS,
-  )
+  const chromium = browser === 'chrome' || browser === 'edge'
+  assertExactStringSet('permissions', manifest.permissions, [
+    ...BASE_PERMISSIONS,
+    ...(chromium ? ['offscreen', 'webRequest'] : []),
+  ])
   assertExactStringSet('optional_permissions', manifest.optional_permissions ?? [], [])
   assertExactStringSet(
     'host_permissions',
@@ -306,11 +317,27 @@ export async function verifyManifestDirectory(directory) {
   assertExactStringSet(
     'optional_host_permissions',
     manifest.optional_host_permissions ?? [],
-    [],
+    chromium ? ['https://*/*'] : [],
   )
-  assertApprovedPageSurfaces(manifest)
   await assertRuntimeEvaluatorArtifact(absoluteDirectory)
-
+  if (chromium) {
+    if (manifest.content_security_policy?.extension_pages !== "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';") {
+      throw new Error('Chromium manifest must include the TLSNotary WASM CSP.')
+    }
+    await assertTlsnAssets(absoluteDirectory)
+  } else if (manifest.content_security_policy) {
+    throw new Error('Firefox must not receive Chromium zkTLS CSP.')
+  } else {
+    for (const name of ['tlsn_wasm.js', 'tlsn_wasm_bg.wasm', 'spawn.js', 'zktls-offscreen.html', 'zktls-permission.html']) {
+      try {
+        await stat(resolve(absoluteDirectory, name))
+        throw new Error(`Firefox must not package Chromium zkTLS asset: ${name}`)
+      } catch (error) {
+        if (String(error).includes('Firefox must not')) throw error
+      }
+    }
+  }
+  assertApprovedPageSurfaces(manifest)
   return { directory: absoluteDirectory, manifestPath }
 }
 
@@ -318,8 +345,8 @@ export async function verifyProductManifests(
   directories = DEFAULT_OUTPUT_DIRECTORIES,
 ) {
   const results = []
-  for (const directory of directories) {
-    results.push(await verifyManifestDirectory(directory))
+  for (const [index, directory] of directories.entries()) {
+    results.push(await verifyManifestDirectory(directory, ['chrome', 'edge', 'firefox'][index]))
   }
   return results
 }
