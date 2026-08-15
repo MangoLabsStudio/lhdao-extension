@@ -89,7 +89,7 @@ const ZKTLS_PROFILE = zktlsProfile()
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
-  modules: ['@wxt-dev/module-react', './modules/tlsn-wasm.ts'],
+  modules: ['@wxt-dev/module-react', './modules/tlsn-wasm.mjs'],
   srcDir: 'src',
   outDir: '.output',
 
