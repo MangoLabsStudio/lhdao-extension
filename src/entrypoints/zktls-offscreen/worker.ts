@@ -1,4 +1,4 @@
-import type { CapturedRequest } from '@/lib/zktls/capture'
+import { type CapturedRequest, clearSecrets } from '@/lib/zktls/capture'
 import {
   assertConnectorAvailable,
   htmlBetweenDisclosureRanges,
@@ -375,6 +375,7 @@ async function prove(message: ProveMessage): Promise<void> {
       ]),
       body: undefined,
     })
+    clearSecrets(secrets)
     const transcript = prover.transcript()
     const received = new Uint8Array(transcript.recv)
     if (received.length >= message.config.request.max_recv_data)
@@ -420,8 +421,7 @@ self.addEventListener('message', (event: MessageEvent<ProveMessage>) => {
           ...message,
           captured: { ...message.captured, secrets },
         }).finally(() => {
-          for (const key of Object.keys(secrets))
-            secrets[key as keyof typeof secrets] = ''
+          clearSecrets(secrets)
         })
       })()
   void task.then(

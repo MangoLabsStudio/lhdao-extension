@@ -11,6 +11,17 @@ export type CapturedRequest = {
   secrets: Partial<Record<SecretHeader, string>>
 }
 
+export function clearSecrets(
+  secrets: Partial<Record<SecretHeader, string>>,
+): void {
+  for (const key of Object.keys(secrets) as SecretHeader[]) secrets[key] = ''
+}
+
+export function clearCapturedRequest(captured: CapturedRequest): void {
+  clearSecrets(captured.secrets)
+  captured.secrets = {}
+}
+
 export type CaptureBinding = {
   tabId: number
   frameId: number
@@ -87,9 +98,13 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
 }
 
 function requestPath(url: string, origin: string): string | null {
-  const target = new URL(url)
-  if (target.origin !== origin || target.hash) return null
-  return normalizePathQuery(`${target.pathname}${target.search}`)
+  try {
+    const target = new URL(url)
+    if (target.origin !== origin || target.hash) return null
+    return normalizePathQuery(`${target.pathname}${target.search}`)
+  } catch {
+    return null
+  }
 }
 
 export class CaptureSession {
@@ -104,8 +119,6 @@ export class CaptureSession {
   }
 
   observe(details: RequestDetails): void {
-    if (this.#used || this.#failed || this.#captured)
-      fail('capture already completed')
     if (
       details.tabId !== this.#binding.tabId ||
       details.frameId !== this.#binding.frameId ||
@@ -113,8 +126,9 @@ export class CaptureSession {
     )
       return
     const path = requestPath(details.url, this.#binding.origin)
-    if (path === null || path !== this.#binding.path)
-      fail('captured request did not match the signed provider')
+    if (path === null || path !== this.#binding.path) return
+    if (this.#used || this.#failed || this.#captured)
+      fail('capture already completed')
     const secrets: Partial<Record<SecretHeader, string>> = {}
     for (const header of details.requestHeaders ?? []) {
       const name = header.name.toLowerCase() as SecretHeader
@@ -151,9 +165,7 @@ export class CaptureSession {
   }
 
   clear(): void {
-    if (this.#captured)
-      for (const key of Object.keys(this.#captured.secrets) as SecretHeader[])
-        this.#captured.secrets[key] = ''
+    if (this.#captured) clearCapturedRequest(this.#captured)
     this.#captured = null
     this.#requestId = null
   }

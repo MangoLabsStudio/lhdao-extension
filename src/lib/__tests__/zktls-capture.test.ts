@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import {
   CaptureSession,
+  clearCapturedRequest,
   createCaptureBinding,
   normalizePathQuery,
 } from '@/lib/zktls/capture'
@@ -9,6 +10,7 @@ import {
   interpretCaptured,
   validateConnector,
 } from '@/lib/zktls/interpreter'
+import { activateCaptureTab } from '@/lib/zktls/runtime'
 
 const provider = {
   interpreter_version: 2,
@@ -56,8 +58,28 @@ function session(): CaptureSession {
 }
 
 describe('zkTLS v2 capture', () => {
-  test('binds one exact tab/frame/provider GET and clears secrets after take', () => {
+  test('ignores unrelated GETs and fails on a duplicate exact match', () => {
     const capture = session()
+    expect(() =>
+      capture.observe({
+        requestId: 'unrelated',
+        tabId: 7,
+        frameId: 0,
+        method: 'GET',
+        url: 'https://github.com/notifications',
+        requestHeaders: [{ name: 'Cookie', value: 'unrelated' }],
+      }),
+    ).not.toThrow()
+    expect(() =>
+      capture.observe({
+        requestId: 'cross-origin',
+        tabId: 7,
+        frameId: 0,
+        method: 'GET',
+        url: 'https://example.com/anything',
+        requestHeaders: [{ name: 'Cookie', value: 'unrelated' }],
+      }),
+    ).not.toThrow()
     capture.observe({
       requestId: 'r1',
       tabId: 7,
@@ -67,11 +89,6 @@ describe('zkTLS v2 capture', () => {
       requestHeaders: [{ name: 'Cookie', value: 'user_session=private' }],
     })
     expect(capture.completes('r1')).toBe(true)
-    expect(capture.take()).toEqual({
-      path: provider.request.path,
-      secrets: { cookie: 'user_session=private' },
-    })
-    expect(() => capture.take()).toThrow('no provider request was captured')
     expect(() =>
       capture.observe({
         requestId: 'r2',
@@ -82,45 +99,19 @@ describe('zkTLS v2 capture', () => {
         requestHeaders: [{ name: 'Cookie', value: 'second' }],
       }),
     ).toThrow('capture already completed')
+    expect(capture.take()).toEqual({
+      path: provider.request.path,
+      secrets: { cookie: 'user_session=private' },
+    })
+    expect(() => capture.take()).toThrow('no provider request was captured')
   })
 
-  test('rejects altered URL, noncanonical encoding, duplicate query, and secret leaks', () => {
+  test('rejects noncanonical configured paths and requires replay evidence', () => {
     expect(() => normalizePathQuery('/x?a=1&a=2')).toThrow('duplicate query')
     expect(() => normalizePathQuery('/x?name=%7e')).toThrow(
       'noncanonical encoding',
     )
     expect(() => normalizePathQuery('/x#fragment')).toThrow('fragment')
-    const capture = session()
-    expect(() =>
-      capture.observe({
-        requestId: 'r1',
-        tabId: 7,
-        frameId: 0,
-        method: 'GET',
-        url: `https://github.com${provider.request.path}&extra=1`,
-        requestHeaders: [{ name: 'Cookie', value: 'private' }],
-      }),
-    ).toThrow('did not match')
-    expect(() =>
-      capture.observe({
-        requestId: 'r-cross',
-        tabId: 7,
-        frameId: 0,
-        method: 'GET',
-        url: `https://example.com${provider.request.path}`,
-        requestHeaders: [{ name: 'Cookie', value: 'private' }],
-      }),
-    ).toThrow('did not match')
-    expect(() =>
-      capture.observe({
-        requestId: 'r2',
-        tabId: 8,
-        frameId: 0,
-        method: 'GET',
-        url: `https://github.com${provider.request.path}`,
-        requestHeaders: [{ name: 'Cookie', value: 'private' }],
-      }),
-    ).not.toThrow()
     expect(() =>
       validateConnector({
         ...provider,
@@ -133,6 +124,32 @@ describe('zkTLS v2 capture', () => {
         request: { ...provider.request, secret_headers: [] },
       }),
     ).toThrow('secret_headers')
+  })
+
+  test('activates the provider tab without navigating to the signed path', async () => {
+    const original = chrome.tabs.update
+    const update = vi.fn().mockResolvedValue({ id: 7 })
+    Object.defineProperty(chrome.tabs, 'update', {
+      configurable: true,
+      value: update,
+    })
+    try {
+      await activateCaptureTab(7)
+      expect(update).toHaveBeenCalledWith(7, { active: true })
+    } finally {
+      Object.defineProperty(chrome.tabs, 'update', {
+        configurable: true,
+        value: original,
+      })
+    }
+  })
+
+  test('clears captured secrets at the send-request boundary', () => {
+    const secrets = { cookie: 'private' }
+    const captured = { path: provider.request.path, secrets }
+    clearCapturedRequest(captured)
+    expect(secrets).toEqual({ cookie: '' })
+    expect(captured.secrets).toEqual({})
   })
 
   test('rejects redirects and retries before any secret can be replayed', () => {

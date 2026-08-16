@@ -2,6 +2,7 @@ import { WEB_ENDPOINT } from '@/lib/env'
 import {
   type CapturedRequest,
   CaptureSession,
+  clearCapturedRequest,
   createCaptureBinding,
   type RequestDetails,
 } from './capture'
@@ -203,6 +204,10 @@ function waitForCapture(active: V2Job): Promise<CapturedRequest | null> {
   })
 }
 
+export function activateCaptureTab(tabId: number): Promise<chrome.tabs.Tab> {
+  return chrome.tabs.update(tabId, { active: true })
+}
+
 async function proveCapturedRequest(
   request: ReturnType<typeof parseZkTlsRuntimeRequest>,
   config: V2Connector,
@@ -244,10 +249,7 @@ async function proveCapturedRequest(
   }
   job = active
   const captured = waitForCapture(active)
-  await chrome.tabs.update(tab.id, {
-    active: true,
-    url: `${config.origin}${config.request.path}`,
-  })
+  await activateCaptureTab(tab.id)
   const value = await captured
   clearJob()
   if (!value)
@@ -258,14 +260,23 @@ async function proveCapturedRequest(
       code: 'ZKTLS_CAPTURE_FAILED',
     }
   await ensureOffscreen()
-  const result = (await chrome.runtime.sendMessage({
-    type: 'zktls-offscreen-prove',
-    sessionId: request.sessionId,
-    connectorId: request.connectorId,
-    config,
-    ticket,
-    captured: value,
-  })) as { status: 'submitted' | 'error'; code?: string }
+  let pending: Promise<unknown>
+  try {
+    pending = chrome.runtime.sendMessage({
+      type: 'zktls-offscreen-prove',
+      sessionId: request.sessionId,
+      connectorId: request.connectorId,
+      config,
+      ticket,
+      captured: value,
+    })
+  } finally {
+    clearCapturedRequest(value)
+  }
+  const result = (await pending) as {
+    status: 'submitted' | 'error'
+    code?: string
+  }
   return {
     type: 'zktls-prove-result',
     correlationId: request.correlationId,
