@@ -182,5 +182,10 @@ host and concurrency limits, and must not expose the upstream open proxy as-is.
 - public constrained verifier deployment;
 - callback/receipt delivery;
 - Firefox zkTLS runtime;
+- XPath: it requires a separately reviewed safe DOM parser/runtime;
+- JSONPath worker disclosure: v3 parses only bounded typed scalar paths in the
+  independent interpreter. The worker rejects JSON connectors until a later
+  transcript byte-range design can prove the disclosed scalar without exposing
+  unrelated JSON;
 - broader connector semantics beyond the currently implemented strict GET and
   limited JSON/HTML extraction model.

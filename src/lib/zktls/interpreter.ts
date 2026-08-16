@@ -98,14 +98,22 @@ export type V3Connector = {
     max_recv_data: number
     replay_safety_evidence: string
   }
-  response_format: 'html'
+  response_format: 'html' | 'json'
   response_status: number
-  extraction: {
-    kind: 'html_between'
-    prefix: string
-    suffix: string
-    max_bytes: number
-  }
+  extraction:
+    | {
+        kind: 'html_between'
+        prefix: string
+        suffix: string
+        max_bytes: number
+      }
+    | { kind: 'regex'; pattern: string; max_bytes: number }
+    | {
+        kind: 'json_path'
+        path: string
+        value_type: 'string' | 'number' | 'boolean'
+        max_bytes: number
+      }
   verifier_profile_id: string
 }
 
@@ -263,6 +271,132 @@ function parsePointer(pointer: string): string[] {
             : fail('JSON Pointer token is invalid.'),
       )
     })
+}
+
+type JsonPathToken = string | number
+
+function parseJsonPath(path: string): JsonPathToken[] {
+  if (path === '$') return []
+  if (!path.startsWith('$')) fail('JSONPath must start with $.')
+  const tokens: JsonPathToken[] = []
+  let at = 1
+  while (at < path.length) {
+    if (path[at] === '.') {
+      const match = /^[A-Za-z_$][A-Za-z0-9_$-]*/.exec(path.slice(at + 1))
+      if (!match) fail('JSONPath has an invalid object key.')
+      tokens.push(match[0])
+      at += match[0].length + 1
+    } else if (path[at] === '[') {
+      const rest = path.slice(at)
+      const index = /^\[(0|[1-9]\d*)\]/.exec(rest)
+      if (index) {
+        tokens.push(Number(index[1]))
+        at += index[0].length
+      } else {
+        const key = /^\[['"]([A-Za-z0-9_$-]+)['"]\]/.exec(rest)
+        if (!key) fail('JSONPath has an invalid bracket key.')
+        tokens.push(key[1])
+        at += key[0].length
+      }
+    } else {
+      fail('JSONPath has unsupported syntax.')
+    }
+    if (tokens.length > 32) fail('JSONPath is too deep.')
+  }
+  return tokens
+}
+
+function validateRegex(pattern: string): void {
+  if (
+    pattern.includes('\n') ||
+    pattern.includes('\r') ||
+    pattern.includes('\\n') ||
+    pattern.includes('\\r') ||
+    pattern.includes('(?')
+  )
+    fail('regex has unsupported syntax.')
+  let captures = 0
+  let escaped = false
+  let inClass = false
+  for (let at = 0; at < pattern.length; at += 1) {
+    const char = pattern[at]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+    if (char === '[') {
+      inClass = true
+      continue
+    }
+    if (char === ']') {
+      inClass = false
+      continue
+    }
+    if (inClass) continue
+    if (char === '(') captures += 1
+    if (char === ')' && /[+*{]/.test(pattern[at + 1] ?? ''))
+      fail('regex cannot quantify its capture.')
+  }
+  if (escaped || captures !== 1) fail('regex must have one capture group.')
+  try {
+    new RegExp(pattern, 'd')
+  } catch {
+    fail('regex is invalid.')
+  }
+}
+
+function validateHtmlBetween(value: Record<string, unknown>): void {
+  keys(value, ['kind', 'prefix', 'suffix', 'max_bytes'], 'extraction')
+  required(value, ['kind', 'prefix', 'suffix', 'max_bytes'], 'extraction')
+  if (value.kind !== 'html_between') fail('extraction.kind is unsupported.')
+  string(value.prefix, 'extraction.prefix', 256)
+  string(value.suffix, 'extraction.suffix', 256)
+  if (value.prefix === value.suffix) fail('extraction bounds must differ.')
+  positiveInteger(value.max_bytes, 'extraction.max_bytes', 1024)
+}
+
+function validateV3Extraction(value: unknown, responseFormat: unknown): void {
+  object(value, 'extraction')
+  const extraction = value as Record<string, unknown>
+  string(extraction.kind, 'extraction.kind', 64)
+  if (extraction.kind === 'html_between') {
+    if (responseFormat !== 'html') fail('HTML extraction requires HTML.')
+    validateHtmlBetween(extraction)
+    return
+  }
+  if (extraction.kind === 'regex') {
+    if (responseFormat !== 'html') fail('regex extraction requires HTML.')
+    keys(extraction, ['kind', 'pattern', 'max_bytes'], 'extraction')
+    required(extraction, ['kind', 'pattern', 'max_bytes'], 'extraction')
+    string(extraction.pattern, 'extraction.pattern', 256)
+    validateRegex(extraction.pattern)
+    positiveInteger(extraction.max_bytes, 'extraction.max_bytes', 1024)
+    return
+  }
+  if (extraction.kind === 'json_path') {
+    if (responseFormat !== 'json') fail('JSONPath extraction requires JSON.')
+    keys(extraction, ['kind', 'path', 'value_type', 'max_bytes'], 'extraction')
+    required(
+      extraction,
+      ['kind', 'path', 'value_type', 'max_bytes'],
+      'extraction',
+    )
+    string(extraction.path, 'extraction.path', 512)
+    parseJsonPath(extraction.path)
+    if (
+      extraction.value_type !== 'string' &&
+      extraction.value_type !== 'number' &&
+      extraction.value_type !== 'boolean'
+    )
+      fail('JSONPath value_type is unsupported.')
+    positiveInteger(extraction.max_bytes, 'extraction.max_bytes', 1024)
+    return
+  }
+  fail('extraction.kind is unsupported.')
 }
 
 function validateExtraction(config: Record<string, unknown>): void {
@@ -483,7 +617,11 @@ function validateCapturedConnector(value: unknown, version: 2 | 3): void {
     fail('expires_at is invalid.')
   validateOrigin(value.origin)
   validateCapturedRequest(value.request, version)
-  if (value.response_format !== 'html') fail('response_format is unsupported.')
+  if (
+    value.response_format !== 'html' &&
+    (version !== 3 || value.response_format !== 'json')
+  )
+    fail('response_format is unsupported.')
   if (
     typeof value.response_status !== 'number' ||
     !Number.isInteger(value.response_status) ||
@@ -491,24 +629,9 @@ function validateCapturedConnector(value: unknown, version: 2 | 3): void {
     value.response_status > 599
   )
     fail('response_status must be an HTTP status code.')
-  keys(
-    value.extraction,
-    ['kind', 'prefix', 'suffix', 'max_bytes'],
-    'extraction',
-  )
   object(value.extraction, 'extraction')
-  required(
-    value.extraction,
-    ['kind', 'prefix', 'suffix', 'max_bytes'],
-    'extraction',
-  )
-  if (value.extraction.kind !== 'html_between')
-    fail('extraction.kind is unsupported.')
-  string(value.extraction.prefix, 'extraction.prefix', 256)
-  string(value.extraction.suffix, 'extraction.suffix', 256)
-  if (value.extraction.prefix === value.extraction.suffix)
-    fail('extraction bounds must differ.')
-  positiveInteger(value.extraction.max_bytes, 'extraction.max_bytes', 1024)
+  if (version === 2) validateHtmlBetween(value.extraction)
+  else validateV3Extraction(value.extraction, value.response_format)
   string(value.verifier_profile_id, 'verifier_profile_id', 128)
 }
 
@@ -704,7 +827,10 @@ export function htmlBetweenDisclosureRanges(
   claim: string
 } {
   validateConnector(config)
-  const { prefix, suffix, max_bytes: maxBytes } = config.extraction
+  const extraction = config.extraction
+  if (extraction.kind !== 'html_between')
+    fail('HTML disclosure requires html_between.')
+  const { prefix, suffix, max_bytes: maxBytes } = extraction
   const prefixAt = response.indexOf(prefix)
   if (prefixAt < 0 || response.indexOf(prefix, prefixAt + prefix.length) >= 0)
     fail('HTML prefix was ambiguous.')
@@ -728,6 +854,78 @@ export function htmlBetweenDisclosureRanges(
   }
 }
 
+export function regexDisclosureRanges(
+  config: V3Connector,
+  response: string,
+): {
+  prefix: { start: number; end: number }
+  value: { start: number; end: number }
+  suffix: { start: number; end: number }
+  claim: string
+} {
+  validateConnector(config)
+  if (config.response_format !== 'html' || config.extraction.kind !== 'regex')
+    fail('regex disclosure requires an HTML regex.')
+  const matches = new RegExp(config.extraction.pattern, 'gd')
+  const first = matches.exec(response)
+  const second = matches.exec(response)
+  const indices = first?.indices?.[1]
+  if (!first || second || !indices || first[1] === undefined || !first[1])
+    fail('regex result was ambiguous.')
+  if (bytes(first[1]) > config.extraction.max_bytes)
+    fail('regex result exceeds its limit.')
+  const range = (start: number, end: number) => ({
+    start: bytes(response.slice(0, start)),
+    end: bytes(response.slice(0, end)),
+  })
+  return {
+    prefix: range(first.index, indices[0]),
+    value: range(indices[0], indices[1]),
+    suffix: range(indices[1], first.index + first[0].length),
+    claim: first[1],
+  }
+}
+
+export function jsonPathClaim(config: V3Connector, response: string): string {
+  validateConnector(config)
+  if (
+    config.response_format !== 'json' ||
+    config.extraction.kind !== 'json_path'
+  )
+    fail('JSONPath claim requires a JSON selector.')
+  let value: unknown
+  try {
+    value = JSON.parse(response)
+  } catch {
+    fail('JSON response could not be parsed.')
+  }
+  for (const token of parseJsonPath(config.extraction.path)) {
+    if (typeof token === 'number') {
+      if (!Array.isArray(value) || token >= value.length)
+        fail('JSONPath did not resolve.')
+      value = value[token]
+    } else {
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        !Object.hasOwn(value, token)
+      )
+        fail('JSONPath did not resolve.')
+      value = (value as Record<string, unknown>)[token]
+    }
+  }
+  if (
+    typeof value !== config.extraction.value_type ||
+    (typeof value === 'number' && !Number.isFinite(value))
+  )
+    fail('JSONPath result has the wrong type.')
+  const claim = String(value)
+  if (bytes(claim) > config.extraction.max_bytes)
+    fail('JSONPath result exceeds its limit.')
+  return claim
+}
+
 export function interpretCaptured(
   config: CapturedConnector,
   input: {
@@ -745,7 +943,12 @@ export function interpretCaptured(
     input.status !== config.response_status
   )
     fail('response did not match the signed provider.')
-  const disclosure = htmlBetweenDisclosureRanges(config, input.response)
+  const disclosure =
+    config.interpreter_version === 3 && config.extraction.kind === 'json_path'
+      ? { claim: jsonPathClaim(config, input.response) }
+      : config.interpreter_version === 3 && config.extraction.kind === 'regex'
+        ? regexDisclosureRanges(config, input.response)
+        : htmlBetweenDisclosureRanges(config, input.response)
   return {
     request_target: input.request_target,
     status: String(input.status),
