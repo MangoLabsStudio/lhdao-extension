@@ -4,6 +4,7 @@ import {
   CaptureSession,
   clearCapturedRequest,
   createCaptureBinding,
+  type RequestBodyDetails,
   type RequestDetails,
 } from './capture'
 import {
@@ -242,9 +243,15 @@ async function proveCapturedRequest(
         providerId: config.connector_id,
         revision: config.revision,
         origin: config.origin,
+        method: config.request.method,
         ...(config.interpreter_version === 2
           ? { path: config.request.path }
-          : { matcher: config.request.matcher }),
+          : {
+              matcher: config.request.matcher,
+              ...(config.request.method === 'POST'
+                ? { bodyMatcher: config.request.body }
+                : {}),
+            }),
         secretHeaders: config.request.secret_headers,
       }),
     ),
@@ -394,6 +401,19 @@ export async function handleZkTlsProof(
 
 export function registerZkTlsRuntime(): void {
   if (/firefox/i.test(navigator.userAgent)) return
+  chrome.webRequest.onBeforeRequest.addListener(
+    (details) => {
+      const active = job
+      if (active?.kind !== 'capture') return
+      try {
+        active.capture.observeBody(details as RequestBodyDetails)
+      } catch {
+        active.done?.(null)
+      }
+    },
+    { urls: ['https://*/*'] },
+    ['requestBody'],
+  )
   chrome.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
       const active = job

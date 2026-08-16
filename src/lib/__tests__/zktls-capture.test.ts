@@ -65,6 +65,25 @@ const matcherProvider = {
   },
 } as const
 
+const postProvider = {
+  ...matcherProvider,
+  revision: 4,
+  request: {
+    ...matcherProvider.request,
+    method: 'POST',
+    matcher: {
+      ...matcherProvider.request.matcher,
+      query: { required: { from: '2026-01-01' }, optional: {}, capture: {} },
+    },
+    body: {
+      content_type: 'application/json',
+      required: { action: 'profile' },
+      capture: { account: 'account' },
+    },
+    replay_safety_evidence: 'The POST is explicitly idempotent and read-only.',
+  },
+} as const
+
 function session(): CaptureSession {
   return new CaptureSession(
     createCaptureBinding({
@@ -90,6 +109,38 @@ function matcherSession(): CaptureSession {
       revision: matcherProvider.revision,
       origin: matcherProvider.origin,
       matcher: matcherProvider.request.matcher,
+      secretHeaders: ['cookie'],
+    }),
+  )
+}
+
+function postSession(
+  contentType:
+    | 'application/json'
+    | 'application/x-www-form-urlencoded' = 'application/json',
+): CaptureSession {
+  const request =
+    contentType === 'application/json'
+      ? postProvider.request
+      : {
+          ...postProvider.request,
+          body: {
+            content_type: 'application/x-www-form-urlencoded' as const,
+            required: { action: 'profile' },
+            capture: { account: 'account' },
+          },
+        }
+  return new CaptureSession(
+    createCaptureBinding({
+      tabId: 7,
+      frameId: 0,
+      sessionId: 'session1',
+      providerId: postProvider.connector_id,
+      revision: postProvider.revision,
+      origin: postProvider.origin,
+      method: 'POST',
+      matcher: request.matcher,
+      bodyMatcher: request.body,
       secretHeaders: ['cookie'],
     }),
   )
@@ -162,6 +213,19 @@ describe('zkTLS v2 capture', () => {
         request: { ...provider.request, secret_headers: [] },
       }),
     ).toThrow('secret_headers')
+    expect(validateConnector(postProvider).interpreter_version).toBe(3)
+    expect(() =>
+      validateConnector({
+        ...postProvider,
+        request: { ...postProvider.request, body: undefined },
+      }),
+    ).toThrow('request.body is invalid')
+    expect(() =>
+      validateConnector({
+        ...postProvider,
+        request: { ...postProvider.request, replay_safety_evidence: '' },
+      }),
+    ).toThrow('replay_safety_evidence')
   })
 
   test('matches a canonical v3 query and captures named slots', () => {
@@ -241,6 +305,152 @@ describe('zkTLS v2 capture', () => {
     )
   })
 
+  test('canonicalizes JSON POST bodies and captures body slots', () => {
+    const capture = postSession()
+    const raw = new TextEncoder().encode(
+      '{"action":"profile","account":"octocat"}',
+    )
+    capture.observeBody({
+      requestId: 'post-json',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://github.com/users/octocat?from=2026-01-01',
+      type: 'fetch',
+      requestBody: { raw: [{ bytes: raw.buffer }] },
+    })
+    capture.observe({
+      requestId: 'post-json',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://github.com/users/octocat?from=2026-01-01',
+      type: 'fetch',
+      requestHeaders: [
+        { name: 'Content-Type', value: 'application/json; charset=UTF-8' },
+        { name: 'Cookie', value: 'private' },
+      ],
+    })
+    expect(capture.take()).toEqual({
+      method: 'POST',
+      path: '/users/octocat?from=2026-01-01',
+      body: '{"account":"octocat","action":"profile"}',
+      content_type: 'application/json',
+      slots: { account: 'octocat' },
+      resource_type: 'fetch',
+      secrets: { cookie: 'private' },
+    })
+  })
+
+  test('canonicalizes form POST bodies and rejects duplicate form keys', () => {
+    const capture = postSession('application/x-www-form-urlencoded')
+    capture.observeBody({
+      requestId: 'post-form',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://github.com/users/octocat?from=2026-01-01',
+      type: 'fetch',
+      requestBody: { formData: { account: ['octocat'], action: ['profile'] } },
+    })
+    capture.observe({
+      requestId: 'post-form',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://github.com/users/octocat?from=2026-01-01',
+      type: 'fetch',
+      requestHeaders: [
+        { name: 'Content-Type', value: 'application/x-www-form-urlencoded' },
+        { name: 'Cookie', value: 'private' },
+      ],
+    })
+    expect(capture.take()).toMatchObject({
+      body: 'account=octocat&action=profile',
+      content_type: 'application/x-www-form-urlencoded',
+      slots: { account: 'octocat' },
+    })
+
+    const duplicate = postSession('application/x-www-form-urlencoded')
+    duplicate.observeBody({
+      requestId: 'duplicate-form',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://github.com/users/octocat?from=2026-01-01',
+      type: 'fetch',
+      requestBody: {
+        formData: { account: ['octocat', 'other'], action: ['profile'] },
+      },
+    })
+    expect(() =>
+      duplicate.observe({
+        requestId: 'duplicate-form',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url: 'https://github.com/users/octocat?from=2026-01-01',
+        type: 'fetch',
+        requestHeaders: [
+          { name: 'Content-Type', value: 'application/x-www-form-urlencoded' },
+          { name: 'Cookie', value: 'private' },
+        ],
+      }),
+    ).toThrow('duplicate fields')
+  })
+
+  test('rejects unsupported POST content types and duplicate POST matches', () => {
+    const capture = postSession()
+    const raw = new TextEncoder().encode(
+      '{"action":"profile","account":"octocat"}',
+    )
+    capture.observeBody({
+      requestId: 'bad-type',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://github.com/users/octocat?from=2026-01-01',
+      type: 'fetch',
+      requestBody: { raw: [{ bytes: raw.buffer }] },
+    })
+    expect(() =>
+      capture.observe({
+        requestId: 'bad-type',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url: 'https://github.com/users/octocat?from=2026-01-01',
+        type: 'fetch',
+        requestHeaders: [
+          { name: 'Content-Type', value: 'multipart/form-data' },
+          { name: 'Cookie', value: 'private' },
+        ],
+      }),
+    ).toThrow('content type is unsupported')
+
+    const duplicate = postSession()
+    duplicate.observeBody({
+      requestId: 'first-post',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://github.com/users/octocat?from=2026-01-01',
+      type: 'fetch',
+      requestBody: { raw: [{ bytes: raw.buffer }] },
+    })
+    expect(() =>
+      duplicate.observeBody({
+        requestId: 'second-post',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url: 'https://github.com/users/octocat?from=2026-01-01',
+        type: 'fetch',
+        requestBody: { raw: [{ bytes: raw.buffer }] },
+      }),
+    ).toThrow('capture already completed')
+  })
+
   test('activates the provider tab without navigating to the signed path', async () => {
     const original = chrome.tabs.update
     const update = vi.fn().mockResolvedValue({ id: 7 })
@@ -259,16 +469,25 @@ describe('zkTLS v2 capture', () => {
     }
   })
 
-  test('clears captured secrets at the send-request boundary', () => {
+  test('clears captured secrets and bodies at the send-request boundary', () => {
     const secrets = { cookie: 'private' }
     const slots = { account: 'octocat' }
-    const captured = { path: provider.request.path, secrets, slots }
+    const captured = {
+      method: 'POST' as const,
+      path: provider.request.path,
+      body: '{"account":"octocat"}',
+      content_type: 'application/json' as const,
+      secrets,
+      slots,
+    }
     clearCapturedRequest(captured)
     expect(secrets).toEqual({ cookie: '' })
     expect(captured.secrets).toEqual({})
     expect(slots).toEqual({ account: '' })
     expect(captured.slots).toEqual({})
     expect(captured.path).toBe('')
+    expect(captured.body).toBe('')
+    expect(captured.content_type).toBeUndefined()
   })
 
   test('rejects redirects and retries before any secret can be replayed', () => {
