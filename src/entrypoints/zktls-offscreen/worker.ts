@@ -1,9 +1,13 @@
+import type { CapturedRequest } from '@/lib/zktls/capture'
 import {
   assertConnectorAvailable,
-  type Connector,
+  htmlBetweenDisclosureRanges,
   htmlDisclosureRanges,
   interpret,
+  interpretCaptured,
   requestTarget,
+  type V1Connector,
+  type V2Connector,
 } from '@/lib/zktls/interpreter'
 import { assertVerifierProfile, ZKTLS_PROFILE } from '@/lib/zktls/profile'
 import { assertTicketAvailable, type Ticket } from '@/lib/zktls/signed-config'
@@ -12,15 +16,26 @@ const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 const TOKEN = /^[A-Za-z0-9_-]{1,128}$/
 
-type ProveMessage = {
+type CommonProveMessage = {
   id: string
   type: 'zktls-worker-prove'
   sessionId: string
   connectorId: string
-  config: Connector
   ticket: Ticket
+}
+type V1ProveMessage = CommonProveMessage & {
+  config: V1Connector
   identity: string
   cookie: string
+}
+type V2ProveMessage = CommonProveMessage & {
+  config: V2Connector
+  captured: CapturedRequest
+}
+type ProveMessage = V1ProveMessage | V2ProveMessage
+
+function isV1Message(message: ProveMessage): message is V1ProveMessage {
+  return message.config.interpreter_version === 1
 }
 
 type SocketIo = {
@@ -212,19 +227,42 @@ export function revealConfig(
 ): { sent: RevealRange[]; recv: RevealRange[] } {
   if (message.config.response_format !== 'html')
     throw new Error('JSON connectors are unsupported by this runtime')
-  const path = requestTarget(message.config, message.identity)
   const response = decoder.decode(received)
-  const disclosure = htmlDisclosureRanges(
-    message.config,
-    response,
-    message.identity,
-  )
-  interpret(message.config, {
-    response,
-    status: status(received),
-    identity: message.identity,
-    now: new Date().toISOString(),
-  })
+  const parsedStatus = status(received)
+  let path: string
+  let disclosure: {
+    prefix: Range
+    value: Range
+    suffix: Range
+  }
+  if (isV1Message(message)) {
+    path = requestTarget(message.config, message.identity)
+    const ranges = htmlDisclosureRanges(
+      message.config,
+      response,
+      message.identity,
+    )
+    interpret(message.config, {
+      response,
+      status: parsedStatus,
+      identity: message.identity,
+      now: new Date().toISOString(),
+    })
+    disclosure = {
+      prefix: ranges.marker,
+      value: ranges.claim,
+      suffix: ranges.end,
+    }
+  } else {
+    path = message.captured.path
+    const ranges = htmlBetweenDisclosureRanges(message.config, response)
+    interpretCaptured(message.config, {
+      response,
+      status: parsedStatus,
+      now: new Date().toISOString(),
+    })
+    disclosure = ranges
+  }
   return {
     sent: [
       {
@@ -246,15 +284,15 @@ export function revealConfig(
         },
       },
       {
-        ...disclosure.marker,
+        ...disclosure.prefix,
         handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
       {
-        ...disclosure.end,
+        ...disclosure.suffix,
         handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
       {
-        ...disclosure.claim,
+        ...disclosure.value,
         handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
     ],
@@ -268,6 +306,25 @@ function assertAvailable(message: ProveMessage): void {
   assertVerifierProfile(message.config)
 }
 
+function assertCapturedRequest(message: V2ProveMessage): void {
+  if (message.captured.path !== message.config.request.path)
+    throw new Error('captured request did not match the signed provider')
+  const names = Object.keys(message.captured.secrets)
+  if (
+    names.length !== message.config.request.secret_headers.length ||
+    names.some(
+      (name) =>
+        !message.config.request.secret_headers.includes(
+          name as (typeof message.config.request.secret_headers)[number],
+        ) ||
+        !message.captured.secrets[
+          name as keyof typeof message.captured.secrets
+        ],
+    )
+  )
+    throw new Error('captured secret headers were invalid')
+}
+
 async function prove(message: ProveMessage): Promise<void> {
   if (message.config.response_format !== 'html')
     throw new Error('JSON connectors are unsupported by this runtime')
@@ -276,6 +333,7 @@ async function prove(message: ProveMessage): Promise<void> {
   await wasm.initialize(null, 1)
   const origin = new URL(message.config.origin)
   assertAvailable(message)
+  if (!isV1Message(message)) assertCapturedRequest(message)
   const registration = await registerSession(message, origin.hostname)
   const prover = new wasm.Prover({
     server_name: origin.hostname,
@@ -293,16 +351,24 @@ async function prove(message: ProveMessage): Promise<void> {
   try {
     await prover.setup(await websocketIo(registration.verifierUrl))
     assertAvailable(message)
-    const path = requestTarget(message.config, message.identity)
+    const path = isV1Message(message)
+      ? requestTarget(message.config, message.identity)
+      : message.captured.path
+    const secrets = isV1Message(message)
+      ? { cookie: message.cookie }
+      : message.captured.secrets
     await prover.send_request(await websocketIo(registration.proxyUrl), {
       uri: path,
       method: 'GET',
       headers: new Map<string, number[]>([
         ['host', Array.from(encoder.encode(origin.hostname))],
-        ['cookie', Array.from(encoder.encode(message.cookie))],
         ['accept-encoding', Array.from(encoder.encode('identity'))],
         ['connection', Array.from(encoder.encode('close'))],
         ...Object.entries(message.config.request.headers).map(
+          ([key, value]) =>
+            [key, Array.from(encoder.encode(value))] as [string, number[]],
+        ),
+        ...Object.entries(secrets).map(
           ([key, value]) =>
             [key, Array.from(encoder.encode(value))] as [string, number[]],
         ),
@@ -339,26 +405,37 @@ async function prove(message: ProveMessage): Promise<void> {
 self.addEventListener('message', (event: MessageEvent<ProveMessage>) => {
   const message = event.data
   if (!message || message.type !== 'zktls-worker-prove') return
-  let cookie = message.cookie
-  message.cookie = ''
-  void prove({ ...message, cookie })
-    .then(
-      () =>
-        self.postMessage({ id: message.id, result: { status: 'submitted' } }),
-      (error: unknown) =>
-        self.postMessage({
-          id: message.id,
-          result: {
-            status: 'error',
-            code:
-              error instanceof Error &&
-              error.message.includes('JSON connectors')
-                ? 'UNSUPPORTED_CONNECTOR'
-                : 'PROVER_FAILED',
-          },
-        }),
-    )
-    .finally(() => {
-      cookie = ''
-    })
+  const task = isV1Message(message)
+    ? (() => {
+        const cookie = message.cookie
+        message.cookie = ''
+        return prove({ ...message, cookie }).finally(() => {
+          message.cookie = ''
+        })
+      })()
+    : (() => {
+        const secrets = message.captured.secrets
+        message.captured.secrets = {}
+        return prove({
+          ...message,
+          captured: { ...message.captured, secrets },
+        }).finally(() => {
+          for (const key of Object.keys(secrets))
+            secrets[key as keyof typeof secrets] = ''
+        })
+      })()
+  void task.then(
+    () => self.postMessage({ id: message.id, result: { status: 'submitted' } }),
+    (error: unknown) =>
+      self.postMessage({
+        id: message.id,
+        result: {
+          status: 'error',
+          code:
+            error instanceof Error && error.message.includes('JSON connectors')
+              ? 'UNSUPPORTED_CONNECTOR'
+              : 'PROVER_FAILED',
+        },
+      }),
+  )
 })

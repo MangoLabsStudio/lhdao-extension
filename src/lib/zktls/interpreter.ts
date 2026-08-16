@@ -1,3 +1,5 @@
+import { normalizePathQuery, SECRET_HEADERS } from './capture'
+
 const encoder = new TextEncoder()
 const MAX_SENT_DATA = 8192
 const MAX_RECV_DATA = 65536
@@ -7,7 +9,7 @@ const ALLOWED_HEADERS: Record<string, Set<string>> = {
   'x-requested-with': new Set(['XMLHttpRequest']),
 }
 
-export type Connector = {
+export type V1Connector = {
   interpreter_version: 1
   connector_id: string
   revision: number
@@ -34,6 +36,40 @@ export type Connector = {
       }
   verifier_profile_id: string
 }
+
+export type V2Connector = {
+  interpreter_version: 2
+  connector_id: string
+  revision: number
+  disabled: boolean
+  expires_at: string
+  origin: string
+  request: {
+    method: 'GET'
+    path: string
+    headers: Record<string, string>
+    secret_headers: (
+      | 'cookie'
+      | 'authorization'
+      | 'x-csrf-token'
+      | 'x-xsrf-token'
+    )[]
+    max_sent_data: number
+    max_recv_data: number
+    replay_safety_evidence: string
+  }
+  response_format: 'html'
+  response_status: number
+  extraction: {
+    kind: 'html_between'
+    prefix: string
+    suffix: string
+    max_bytes: number
+  }
+  verifier_profile_id: string
+}
+
+export type Connector = V1Connector | V2Connector
 
 function fail(message: string): never {
   throw new Error(message)
@@ -217,7 +253,7 @@ function validateExtraction(config: Record<string, unknown>): void {
   fail('extraction.kind is unsupported.')
 }
 
-export function validateConnector(value: unknown): Connector {
+function validateV1Connector(value: unknown): V1Connector {
   keys(
     value,
     [
@@ -303,7 +339,159 @@ export function validateConnector(value: unknown): Connector {
     fail('response_status must be an HTTP status code.')
   validateExtraction(value)
   string(value.verifier_profile_id, 'verifier_profile_id', 128)
-  return value as Connector
+  return value as V1Connector
+}
+
+function validateV2Headers(value: unknown): void {
+  keys(value, Object.keys(ALLOWED_HEADERS), 'request.headers')
+  object(value, 'request.headers')
+  for (const [name, headerValue] of Object.entries(value))
+    if (!ALLOWED_HEADERS[name]?.has(headerValue as string))
+      fail('request.headers contains a non-allowlisted literal.')
+}
+
+function validateV2Connector(value: unknown): V2Connector {
+  keys(
+    value,
+    [
+      'interpreter_version',
+      'connector_id',
+      'revision',
+      'disabled',
+      'expires_at',
+      'origin',
+      'request',
+      'response_format',
+      'response_status',
+      'extraction',
+      'verifier_profile_id',
+    ],
+    'connector',
+  )
+  object(value, 'connector')
+  required(
+    value,
+    [
+      'interpreter_version',
+      'connector_id',
+      'revision',
+      'disabled',
+      'expires_at',
+      'origin',
+      'request',
+      'response_format',
+      'response_status',
+      'extraction',
+      'verifier_profile_id',
+    ],
+    'connector',
+  )
+  if (value.interpreter_version !== 2)
+    fail('interpreter_version is unsupported.')
+  string(value.connector_id, 'connector_id', 128)
+  positiveInteger(value.revision, 'revision', Number.MAX_SAFE_INTEGER)
+  if (typeof value.disabled !== 'boolean') fail('disabled must be boolean.')
+  string(value.expires_at, 'expires_at', 64)
+  if (
+    !Number.isFinite(Date.parse(value.expires_at)) ||
+    new Date(value.expires_at).toISOString() !== value.expires_at
+  )
+    fail('expires_at is invalid.')
+  validateOrigin(value.origin)
+  keys(
+    value.request,
+    [
+      'method',
+      'path',
+      'headers',
+      'secret_headers',
+      'max_sent_data',
+      'max_recv_data',
+      'replay_safety_evidence',
+    ],
+    'request',
+  )
+  object(value.request, 'request')
+  required(
+    value.request,
+    [
+      'method',
+      'path',
+      'headers',
+      'secret_headers',
+      'max_sent_data',
+      'max_recv_data',
+      'replay_safety_evidence',
+    ],
+    'request',
+  )
+  if (value.request.method !== 'GET') fail('request.method must be GET.')
+  string(value.request.path, 'request.path', 2048)
+  normalizePathQuery(value.request.path)
+  validateV2Headers(value.request.headers)
+  if (!Array.isArray(value.request.secret_headers))
+    fail('request.secret_headers must be an array.')
+  if (
+    value.request.secret_headers.length === 0 ||
+    value.request.secret_headers.some(
+      (header) =>
+        typeof header !== 'string' ||
+        !SECRET_HEADERS.includes(header as (typeof SECRET_HEADERS)[number]),
+    ) ||
+    new Set(value.request.secret_headers).size !==
+      value.request.secret_headers.length
+  )
+    fail('request.secret_headers contains an unsupported header.')
+  positiveInteger(
+    value.request.max_sent_data,
+    'request.max_sent_data',
+    MAX_SENT_DATA,
+  )
+  positiveInteger(
+    value.request.max_recv_data,
+    'request.max_recv_data',
+    MAX_RECV_DATA,
+  )
+  string(
+    value.request.replay_safety_evidence,
+    'request.replay_safety_evidence',
+    1024,
+  )
+  if (value.response_format !== 'html') fail('response_format is unsupported.')
+  if (
+    typeof value.response_status !== 'number' ||
+    !Number.isInteger(value.response_status) ||
+    value.response_status < 100 ||
+    value.response_status > 599
+  )
+    fail('response_status must be an HTTP status code.')
+  keys(
+    value.extraction,
+    ['kind', 'prefix', 'suffix', 'max_bytes'],
+    'extraction',
+  )
+  object(value.extraction, 'extraction')
+  required(
+    value.extraction,
+    ['kind', 'prefix', 'suffix', 'max_bytes'],
+    'extraction',
+  )
+  if (value.extraction.kind !== 'html_between')
+    fail('extraction.kind is unsupported.')
+  string(value.extraction.prefix, 'extraction.prefix', 256)
+  string(value.extraction.suffix, 'extraction.suffix', 256)
+  if (value.extraction.prefix === value.extraction.suffix)
+    fail('extraction bounds must differ.')
+  positiveInteger(value.extraction.max_bytes, 'extraction.max_bytes', 1024)
+  string(value.verifier_profile_id, 'verifier_profile_id', 128)
+  return value as V2Connector
+}
+
+export function validateConnector(value: unknown): Connector {
+  object(value, 'connector')
+  if (value.interpreter_version === 1) return validateV1Connector(value)
+  if (value.interpreter_version === 2) return validateV2Connector(value)
+  fail('interpreter_version is unsupported.')
 }
 
 export function assertConnectorAvailable(config: Connector, now: string): void {
@@ -347,7 +535,7 @@ export async function configDigest(config: unknown): Promise<string> {
   ).join('')
 }
 
-export function extractIdentity(config: Connector, entries: unknown): string {
+export function extractIdentity(config: V1Connector, entries: unknown): string {
   validateConnector(config)
   if (!Array.isArray(entries)) fail('metaEntries must be an array.')
   let identity: string | undefined
@@ -366,7 +554,7 @@ export function extractIdentity(config: Connector, entries: unknown): string {
   return identity
 }
 
-export function requestTarget(config: Connector, identity: string): string {
+export function requestTarget(config: V1Connector, identity: string): string {
   validateConnector(config)
   string(identity, 'identity', 256)
   const target = config.request.path_template.replaceAll(
@@ -384,7 +572,7 @@ export function requestTarget(config: Connector, identity: string): string {
 }
 
 export function htmlDisclosureRanges(
-  config: Connector,
+  config: V1Connector,
   response: string,
   identity: string,
 ): {
@@ -425,7 +613,7 @@ export function htmlDisclosureRanges(
 }
 
 export function interpret(
-  config: Connector,
+  config: V1Connector,
   input: { response: string; status: number; identity: string; now: string },
 ): { request_target: string; status: string; marker: string; claim: string } {
   validateConnector(config)
@@ -467,5 +655,59 @@ export function interpret(
     status: String(input.status),
     marker,
     claim,
+  }
+}
+
+export function htmlBetweenDisclosureRanges(
+  config: V2Connector,
+  response: string,
+): {
+  prefix: { start: number; end: number }
+  value: { start: number; end: number }
+  suffix: { start: number; end: number }
+  claim: string
+} {
+  validateConnector(config)
+  const { prefix, suffix, max_bytes: maxBytes } = config.extraction
+  const prefixAt = response.indexOf(prefix)
+  if (prefixAt < 0 || response.indexOf(prefix, prefixAt + prefix.length) >= 0)
+    fail('HTML prefix was ambiguous.')
+  const valueAt = prefixAt + prefix.length
+  const suffixAt = response.indexOf(suffix, valueAt)
+  if (
+    suffixAt < 0 ||
+    response.indexOf(suffix, suffixAt + suffix.length) >= 0 ||
+    bytes(response.slice(valueAt, suffixAt)) > maxBytes
+  )
+    fail('HTML suffix was ambiguous.')
+  const range = (at: number, value: string) => ({
+    start: bytes(response.slice(0, at)),
+    end: bytes(response.slice(0, at)) + bytes(value),
+  })
+  return {
+    prefix: range(prefixAt, prefix),
+    value: range(valueAt, response.slice(valueAt, suffixAt)),
+    suffix: range(suffixAt, suffix),
+    claim: response.slice(valueAt, suffixAt),
+  }
+}
+
+export function interpretCaptured(
+  config: V2Connector,
+  input: { response: string; status: number; now: string },
+): { request_target: string; status: string; claim: string } {
+  validateConnector(config)
+  assertConnectorAvailable(config, input.now)
+  if (
+    typeof input.response !== 'string' ||
+    bytes(input.response) > config.request.max_recv_data ||
+    input.status !== config.response_status
+  )
+    fail('response did not match the signed provider.')
+  const disclosure = htmlBetweenDisclosureRanges(config, input.response)
+  return {
+    request_target: config.request.path,
+    status: String(input.status),
+    claim: disclosure.claim,
   }
 }

@@ -1,8 +1,16 @@
 import { WEB_ENDPOINT } from '@/lib/env'
 import {
+  type CapturedRequest,
+  CaptureSession,
+  createCaptureBinding,
+  type RequestDetails,
+} from './capture'
+import {
   assertConnectorAvailable,
   type Connector,
   extractIdentity,
+  type V1Connector,
+  type V2Connector,
 } from './interpreter'
 import { assertVerifierProfile, ZKTLS_PROFILE } from './profile'
 import { parseZkTlsRuntimeRequest } from './runtime-request'
@@ -12,16 +20,29 @@ import {
   type Ticket,
 } from './signed-config'
 
-type Job = {
+type V1Job = {
+  kind: 'v1'
   sessionId: string
   connectorId: string
-  config: Connector
+  config: V1Connector
   ticket: Ticket
   origin: string
   tabId: number
   cookie?: string
   done?: (cookie: string | null) => void
 }
+type V2Job = {
+  kind: 'v2'
+  sessionId: string
+  connectorId: string
+  config: V2Connector
+  ticket: Ticket
+  origin: string
+  tabId: number
+  capture: CaptureSession
+  done?: (captured: CapturedRequest | null) => void
+}
+type Job = V1Job | V2Job
 type Permission = {
   requestId: string
   origin: string
@@ -37,7 +58,8 @@ function exactOriginPattern(origin: string): string {
   return `${new URL(origin).origin}/*`
 }
 function clearJob(): void {
-  if (job) job.cookie = undefined
+  if (job?.kind === 'v1') job.cookie = undefined
+  if (job?.kind === 'v2') job.capture.clear()
   job = null
 }
 function permissionUrl(): string {
@@ -116,7 +138,7 @@ async function connectorTab(origin: string): Promise<chrome.tabs.Tab | null> {
 
 async function collectIdentity(
   tabId: number,
-  config: Connector,
+  config: V1Connector,
 ): Promise<string | null> {
   const result = await chrome.scripting.executeScript({
     target: { tabId },
@@ -153,6 +175,7 @@ async function ensureOffscreen(): Promise<void> {
 }
 
 function waitForCookie(active: Job): Promise<string | null> {
+  if (active.kind !== 'v1') throw new Error('invalid v1 capture job')
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       active.done = undefined
@@ -164,6 +187,91 @@ function waitForCookie(active: Job): Promise<string | null> {
       resolve(cookie)
     }
   })
+}
+
+function waitForCapture(active: V2Job): Promise<CapturedRequest | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      active.done = undefined
+      resolve(null)
+    }, 60_000)
+    active.done = (captured) => {
+      clearTimeout(timer)
+      active.done = undefined
+      resolve(captured)
+    }
+  })
+}
+
+async function proveCapturedRequest(
+  request: ReturnType<typeof parseZkTlsRuntimeRequest>,
+  config: V2Connector,
+  ticket: Ticket,
+): Promise<unknown> {
+  if (!request) return null
+  await ensurePermission(config.origin, request.connectorId)
+  assertAvailable(config, ticket)
+  const tab = await connectorTab(config.origin)
+  if (!tab?.id) {
+    await chrome.tabs.create({ url: config.origin })
+    return {
+      type: 'zktls-prove-result',
+      correlationId: request.correlationId,
+      status: 'pending_login',
+    }
+  }
+  clearJob()
+  const active: V2Job = {
+    kind: 'v2',
+    sessionId: request.sessionId,
+    connectorId: request.connectorId,
+    config,
+    ticket,
+    origin: config.origin,
+    tabId: tab.id,
+    capture: new CaptureSession(
+      createCaptureBinding({
+        tabId: tab.id,
+        frameId: 0,
+        sessionId: request.sessionId,
+        providerId: config.connector_id,
+        revision: config.revision,
+        origin: config.origin,
+        path: config.request.path,
+        secretHeaders: config.request.secret_headers,
+      }),
+    ),
+  }
+  job = active
+  const captured = waitForCapture(active)
+  await chrome.tabs.update(tab.id, {
+    active: true,
+    url: `${config.origin}${config.request.path}`,
+  })
+  const value = await captured
+  clearJob()
+  if (!value)
+    return {
+      type: 'zktls-prove-result',
+      correlationId: request.correlationId,
+      status: 'error',
+      code: 'ZKTLS_CAPTURE_FAILED',
+    }
+  await ensureOffscreen()
+  const result = (await chrome.runtime.sendMessage({
+    type: 'zktls-offscreen-prove',
+    sessionId: request.sessionId,
+    connectorId: request.connectorId,
+    config,
+    ticket,
+    captured: value,
+  })) as { status: 'submitted' | 'error'; code?: string }
+  return {
+    type: 'zktls-prove-result',
+    correlationId: request.correlationId,
+    status: result.status,
+    ...(result.code ? { code: result.code } : {}),
+  }
 }
 
 export async function handleZkTlsProof(
@@ -187,6 +295,8 @@ export async function handleZkTlsProof(
       request.sessionId,
       request.connectorId,
     )
+    if (config.interpreter_version === 2)
+      return await proveCapturedRequest(request, config, ticket)
     if (config.response_format !== 'html')
       return {
         type: 'zktls-prove-result',
@@ -216,7 +326,8 @@ export async function handleZkTlsProof(
     }
     assertAvailable(config, ticket)
     clearJob()
-    const active: Job = {
+    const active: V1Job = {
+      kind: 'v1',
       sessionId: request.sessionId,
       connectorId: request.connectorId,
       config,
@@ -267,22 +378,64 @@ export function registerZkTlsRuntime(): void {
   if (/firefox/i.test(navigator.userAgent)) return
   chrome.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
-      if (
-        !job ||
-        details.method !== job.config.request.method ||
-        new URL(details.url).origin !== job.origin
-      )
+      const active = job
+      if (!active || details.tabId !== active.tabId) return
+      if (active.kind === 'v1') {
+        if (
+          details.method !== active.config.request.method ||
+          new URL(details.url).origin !== active.origin
+        )
+          return
+        const cookie = details.requestHeaders?.find(
+          (header) => header.name.toLowerCase() === 'cookie',
+        )?.value
+        if (cookie) {
+          active.cookie = cookie
+          active.done?.(cookie)
+        }
         return
-      const cookie = details.requestHeaders?.find(
-        (header) => header.name.toLowerCase() === 'cookie',
-      )?.value
-      if (cookie) {
-        job.cookie = cookie
-        job.done?.(cookie)
+      }
+      try {
+        active.capture.observe(details as RequestDetails)
+      } catch {
+        active.done?.(null)
       }
     },
     { urls: ['https://*/*'] },
     ['requestHeaders', 'extraHeaders'],
+  )
+  chrome.webRequest.onBeforeRedirect.addListener(
+    (details) => {
+      const active = job
+      if (active?.kind !== 'v2') return
+      if (
+        active.capture.reject(details.requestId, 'captured request redirected')
+      )
+        active.done?.(null)
+    },
+    { urls: ['https://*/*'] },
+  )
+  chrome.webRequest.onErrorOccurred.addListener(
+    (details) => {
+      const active = job
+      if (active?.kind !== 'v2') return
+      if (active.capture.reject(details.requestId, 'captured request failed'))
+        active.done?.(null)
+    },
+    { urls: ['https://*/*'] },
+  )
+  chrome.webRequest.onCompleted.addListener(
+    (details) => {
+      const active = job
+      if (active?.kind !== 'v2' || !active.capture.completes(details.requestId))
+        return
+      try {
+        active.done?.(active.capture.take())
+      } catch {
+        active.done?.(null)
+      }
+    },
+    { urls: ['https://*/*'] },
   )
 
   chrome.runtime.onMessage.addListener((message: unknown, sender) => {
