@@ -357,25 +357,28 @@ async function prove(message: ProveMessage): Promise<void> {
     const secrets = isV1Message(message)
       ? { cookie: message.cookie }
       : message.captured.secrets
-    await prover.send_request(await websocketIo(registration.proxyUrl), {
-      uri: path,
-      method: 'GET',
-      headers: new Map<string, number[]>([
-        ['host', Array.from(encoder.encode(origin.hostname))],
-        ['accept-encoding', Array.from(encoder.encode('identity'))],
-        ['connection', Array.from(encoder.encode('close'))],
-        ...Object.entries(message.config.request.headers).map(
-          ([key, value]) =>
-            [key, Array.from(encoder.encode(value))] as [string, number[]],
-        ),
-        ...Object.entries(secrets).map(
-          ([key, value]) =>
-            [key, Array.from(encoder.encode(value))] as [string, number[]],
-        ),
-      ]),
-      body: undefined,
-    })
-    clearSecrets(secrets)
+    try {
+      await prover.send_request(await websocketIo(registration.proxyUrl), {
+        uri: path,
+        method: 'GET',
+        headers: new Map<string, number[]>([
+          ['host', Array.from(encoder.encode(origin.hostname))],
+          ['accept-encoding', Array.from(encoder.encode('identity'))],
+          ['connection', Array.from(encoder.encode('close'))],
+          ...Object.entries(message.config.request.headers).map(
+            ([key, value]) =>
+              [key, Array.from(encoder.encode(value))] as [string, number[]],
+          ),
+          ...Object.entries(secrets).map(
+            ([key, value]) =>
+              [key, Array.from(encoder.encode(value))] as [string, number[]],
+          ),
+        ]),
+        body: undefined,
+      })
+    } finally {
+      clearSecrets(secrets)
+    }
     const transcript = prover.transcript()
     const received = new Uint8Array(transcript.recv)
     if (received.length >= message.config.request.max_recv_data)

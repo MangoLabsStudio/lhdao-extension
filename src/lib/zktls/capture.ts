@@ -148,8 +148,10 @@ export class CaptureSession {
   }
 
   reject(requestId: string, reason: string): boolean {
-    if (!this.completes(requestId)) return false
+    const captured = this.#captured
+    if (this.#requestId !== requestId || !captured) return false
     this.#failed = new Error(reason)
+    clearCapturedRequest(captured)
     this.#captured = null
     return true
   }
