@@ -96,6 +96,7 @@ import {
   type UserProfile,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
+import { handleZkTlsProof, registerZkTlsRuntime } from '@/lib/zktls/runtime'
 import type {
   MsgRequest,
   MsgResponse,
@@ -405,6 +406,7 @@ export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
   const productExperienceController = createProductExperienceController()
+  registerZkTlsRuntime()
   void productExperienceController.resumePendingSubmit()
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -427,6 +429,9 @@ export default defineBackground(() => {
   })
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
+    if (req.type === 'zktls-prove') {
+      return (await handleZkTlsProof(req, sender)) as MsgResponse
+    }
     const binanceProbeResponse = await handleBinanceProbeRequest(req)
     if (binanceProbeResponse) return binanceProbeResponse
 

@@ -33,6 +33,12 @@ export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
 
 export type MsgRequest =
   | {
+      type: 'zktls-prove'
+      correlationId: string
+      sessionId: string
+      connectorId: string
+    }
+  | {
       type: 'save-product-experience-task'
       task: ProductExperienceTaskRef
       correlationId: string
@@ -195,6 +201,12 @@ export type MsgRequest =
 // ── Responses ────────────────────────────────────────────────────────
 
 export type MsgResponse =
+  | {
+      type: 'zktls-prove-result'
+      correlationId: string
+      status: 'submitted' | 'pending_login' | 'error' | 'unsupported'
+      code?: string
+    }
   | {
       type: 'save-product-experience-task-result'
       ok: true

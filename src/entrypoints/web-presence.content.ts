@@ -15,6 +15,10 @@ import {
   PRODUCT_EXPERIENCE_PAGE_CHANNEL,
   parseProductExperiencePageRequest,
 } from '@/lib/product-experience-task-bridge'
+import {
+  parseZkTlsPageRequest,
+  ZKTLS_PAGE_CHANNEL,
+} from '@/lib/zktls/page-bridge'
 import type { MsgResponse } from '@/types/messages'
 
 const MARK_ATTR = 'data-lhdao-ext'
@@ -146,8 +150,56 @@ export default defineContentScript({
       return true
     }
 
+    const forwardZkTlsRequest = (e: MessageEvent): boolean => {
+      const request = parseZkTlsPageRequest(
+        e,
+        window,
+        LIGHTHOUSE_ORIGIN,
+        window.location.pathname,
+      )
+      if (!request) return false
+      void chrome.runtime
+        .sendMessage({
+          type: 'zktls-prove',
+          correlationId: request.correlationId,
+          sessionId: request.sessionId,
+          connectorId: request.connectorId,
+        })
+        .then((response: MsgResponse) => {
+          const result =
+            response.type === 'zktls-prove-result' &&
+            response.correlationId === request.correlationId
+              ? response
+              : { status: 'error' as const, code: 'EXTENSION_ERROR' }
+          window.postMessage(
+            {
+              channel: ZKTLS_PAGE_CHANNEL,
+              type: 'prove-result',
+              correlationId: request.correlationId,
+              status: result.status,
+              ...(result.code ? { code: result.code } : {}),
+            },
+            LIGHTHOUSE_ORIGIN,
+          )
+        })
+        .catch(() => {
+          window.postMessage(
+            {
+              channel: ZKTLS_PAGE_CHANNEL,
+              type: 'prove-result',
+              correlationId: request.correlationId,
+              status: 'error',
+              code: 'EXTENSION_ERROR',
+            },
+            LIGHTHOUSE_ORIGIN,
+          )
+        })
+      return true
+    }
+
     const onWindowMessage = (e: MessageEvent): void => {
       if (e.source !== window || e.origin !== LIGHTHOUSE_ORIGIN) return
+      if (forwardZkTlsRequest(e)) return
       if (forwardProductRequest(e)) return
       const d = e.data as
         | {

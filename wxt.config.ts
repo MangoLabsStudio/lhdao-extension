@@ -2,6 +2,8 @@ import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'wxt'
 // @ts-expect-error -- Node ESM release helper intentionally has no TS surface.
 import { resolveEndpointPolicy } from './scripts/verify-product-manifests.mjs'
+// @ts-expect-error -- Node ESM build profile helper intentionally has no TS surface.
+import { buildZkTlsProfile } from './scripts/zktls-profile.mjs'
 
 // ── env resolution ───────────────────────────────────────────────────
 //
@@ -26,16 +28,29 @@ const WEB_ENDPOINT = endpointPolicy.webEndpoint
 const API_HOST_PATTERN = endpointPolicy.apiHostPattern
 const WEB_HOST_PATTERN = endpointPolicy.webHostPattern
 
+const ZKTLS_PROFILE = buildZkTlsProfile({
+  env: process.env,
+  endpointPolicy,
+  existingApiEndpoint: API_ENDPOINT,
+})
+
 // See https://wxt.dev/api/config.html
 export default defineConfig({
-  modules: ['@wxt-dev/module-react'],
+  modules: ['@wxt-dev/module-react', './modules/tlsn-wasm.mjs'],
   srcDir: 'src',
   outDir: '.output',
 
-  manifest: {
+  manifest: ({ browser }) => ({
     name: 'Lighthouse',
     description: 'Complete Lighthouse engagement and product-experience tasks',
-    permissions: ['storage', 'alarms', 'activeTab', 'scripting'],
+    permissions: [
+      'storage',
+      'alarms',
+      'activeTab',
+      'scripting',
+      ...(browser === 'firefox' ? [] : ['offscreen', 'webRequest']),
+    ],
+    optional_host_permissions: browser === 'firefox' ? [] : ['https://*/*'],
     host_permissions: [
       'https://x.com/*',
       'https://twitter.com/*',
@@ -55,7 +70,15 @@ export default defineConfig({
         matches: ['*://x.com/*', '*://twitter.com/*'],
       },
     ],
-  },
+    ...(browser === 'firefox'
+      ? {}
+      : {
+          content_security_policy: {
+            extension_pages:
+              "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
+          },
+        }),
+  }),
 
   vite: () => ({
     plugins: [tailwindcss()],
@@ -63,6 +86,7 @@ export default defineConfig({
       __API_ENDPOINT__: JSON.stringify(API_ENDPOINT),
       __WEB_ENDPOINT__: JSON.stringify(WEB_ENDPOINT),
       __WEB_MATCH_PATTERN__: JSON.stringify(WEB_HOST_PATTERN),
+      __ZKTLS_PROFILE__: JSON.stringify(ZKTLS_PROFILE),
     },
   }),
 })
