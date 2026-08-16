@@ -19,8 +19,24 @@ export type RequestMatcher = {
   resource_types: readonly ResourceType[]
 }
 
+export const BODY_CONTENT_TYPES = [
+  'application/json',
+  'application/x-www-form-urlencoded',
+] as const
+export type BodyContentType = (typeof BODY_CONTENT_TYPES)[number]
+const MAX_CAPTURED_BODY_BYTES = 8192
+
+export type BodyMatcher = {
+  content_type: BodyContentType
+  required: Record<string, string>
+  capture: Record<string, string>
+}
+
 export type CapturedRequest = {
+  method?: 'GET' | 'POST'
   path: string
+  body?: string
+  content_type?: BodyContentType
   secrets: Partial<Record<SecretHeader, string>>
   slots?: Record<string, string>
   resource_type?: ResourceType
@@ -40,6 +56,9 @@ export function clearCapturedRequest(captured: CapturedRequest): void {
     captured.slots = {}
   }
   captured.path = ''
+  captured.body = ''
+  captured.content_type = undefined
+  captured.method = undefined
   captured.resource_type = undefined
 }
 
@@ -50,8 +69,10 @@ export type CaptureBinding = {
   providerId: string
   revision: number
   origin: string
+  method?: 'GET' | 'POST'
   path?: string
   matcher?: RequestMatcher
+  bodyMatcher?: BodyMatcher
   secretHeaders: SecretHeader[]
 }
 
@@ -63,6 +84,13 @@ export type RequestDetails = {
   url: string
   type?: string
   requestHeaders?: { name: string; value?: string }[]
+}
+
+export type RequestBodyDetails = RequestDetails & {
+  requestBody?: {
+    formData?: Record<string, string[]>
+    raw?: { bytes?: ArrayBuffer }[]
+  }
 }
 
 function fail(message: string): never {
@@ -121,6 +149,58 @@ function boundedPairMap(
     result[key] = boundedString(item, name, valueMax)
   }
   return result
+}
+
+function canonicalJson(value: unknown): string {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    typeof value === 'number'
+  ) {
+    if (typeof value === 'number' && !Number.isFinite(value))
+      fail('captured JSON body is invalid')
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value))
+    return `[${value.map((item) => canonicalJson(item)).join(',')}]`
+  if (!value || typeof value !== 'object') fail('captured JSON body is invalid')
+  return `{${Object.keys(value as Record<string, unknown>)
+    .sort()
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${canonicalJson(
+          (value as Record<string, unknown>)[key],
+        )}`,
+    )
+    .join(',')}}`
+}
+
+export function validateBodyMatcher(value: unknown): BodyMatcher {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    fail('request.body is invalid')
+  const matcher = value as Record<string, unknown>
+  if (
+    Object.keys(matcher).some(
+      (key) => !['content_type', 'required', 'capture'].includes(key),
+    )
+  )
+    fail('request.body is invalid')
+  if (
+    typeof matcher.content_type !== 'string' ||
+    !BODY_CONTENT_TYPES.includes(matcher.content_type as BodyContentType)
+  )
+    fail('request.body.content_type is invalid')
+  const required = boundedPairMap(matcher.required, 'request.body.required')
+  const capture = boundedPairMap(matcher.capture, 'request.body.capture', 128)
+  const bodyKeys = [...Object.keys(required), ...Object.values(capture)]
+  if (new Set(bodyKeys).size !== bodyKeys.length)
+    fail('request.body is ambiguous')
+  return {
+    content_type: matcher.content_type as BodyContentType,
+    required,
+    capture,
+  }
 }
 
 export function validateRequestMatcher(value: unknown): RequestMatcher {
@@ -225,6 +305,14 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
     input.matcher === undefined
       ? undefined
       : validateRequestMatcher(input.matcher)
+  const method = input.method ?? 'GET'
+  if (method !== 'GET' && method !== 'POST') fail('capture method is invalid')
+  const bodyMatcher =
+    input.bodyMatcher === undefined
+      ? undefined
+      : validateBodyMatcher(input.bodyMatcher)
+  if ((method === 'POST') !== (bodyMatcher !== undefined))
+    fail('capture body is invalid')
   if (
     !Number.isInteger(input.tabId) ||
     !Number.isInteger(input.frameId) ||
@@ -240,7 +328,7 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
     new Set(input.secretHeaders).size !== input.secretHeaders.length
   )
     fail('capture secret headers are invalid')
-  return { ...input, origin: origin.origin, path, matcher }
+  return { ...input, origin: origin.origin, method, path, matcher, bodyMatcher }
 }
 
 function requestPath(url: string, origin: string): string | null {
@@ -295,9 +383,113 @@ export function matchRequest(
   return slots
 }
 
+function canonicalForm(entries: Record<string, string[]>): {
+  body: string
+  values: Map<string, string>
+} {
+  const values = new Map<string, string>()
+  for (const [name, items] of Object.entries(entries)) {
+    if (items.length !== 1 || values.has(name))
+      fail('captured form body has duplicate fields')
+    const [value] = items
+    if (typeof value !== 'string') fail('captured form body is invalid')
+    values.set(name, value)
+  }
+  const form = new URLSearchParams()
+  for (const name of [...values.keys()].sort())
+    form.set(name, values.get(name)!)
+  const body = form.toString()
+  if (new TextEncoder().encode(body).length > MAX_CAPTURED_BODY_BYTES)
+    fail('captured body exceeds its limit')
+  return { body, values }
+}
+
+function canonicalJsonBody(raw: BufferSource): {
+  body: string
+  values: Map<string, string>
+} {
+  if (raw.byteLength > MAX_CAPTURED_BODY_BYTES)
+    fail('captured body exceeds its limit')
+  let value: unknown
+  try {
+    value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw))
+  } catch {
+    fail('captured JSON body is invalid')
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    fail('captured JSON body is invalid')
+  const values = new Map<string, string>()
+  for (const [name, item] of Object.entries(value)) {
+    if (typeof item !== 'string')
+      fail('captured JSON body fields must be strings')
+    values.set(name, item)
+  }
+  const body = canonicalJson(value)
+  if (new TextEncoder().encode(body).length > MAX_CAPTURED_BODY_BYTES)
+    fail('captured body exceeds its limit')
+  return { body, values }
+}
+
+function contentType(
+  headers: RequestDetails['requestHeaders'],
+): BodyContentType | null {
+  const header = headers?.find(
+    (item) => item.name.toLowerCase() === 'content-type',
+  )?.value
+  const value = header?.split(';', 1)[0]?.trim().toLowerCase()
+  return BODY_CONTENT_TYPES.includes(value as BodyContentType)
+    ? (value as BodyContentType)
+    : null
+}
+
+export function matchRequestBody(
+  body: string,
+  type: BodyContentType,
+  matcher: BodyMatcher,
+): Record<string, string> | null {
+  if (type !== matcher.content_type) return null
+  let values: Map<string, string>
+  try {
+    if (type === 'application/json') {
+      const parsed = canonicalJsonBody(new TextEncoder().encode(body))
+      if (parsed.body !== body) return null
+      values = parsed.values
+    } else {
+      const form = new URLSearchParams(body)
+      const entries: Record<string, string[]> = {}
+      for (const [name, value] of form) {
+        const values = entries[name] ?? []
+        values.push(value)
+        entries[name] = values
+      }
+      const parsed = canonicalForm(entries)
+      if (parsed.body !== body) return null
+      values = parsed.values
+    }
+  } catch {
+    return null
+  }
+  const allowed = new Set([
+    ...Object.keys(matcher.required),
+    ...Object.values(matcher.capture),
+  ])
+  if ([...values.keys()].some((name) => !allowed.has(name))) return null
+  for (const [name, value] of Object.entries(matcher.required))
+    if (values.get(name) !== value) return null
+  const slots: Record<string, string> = {}
+  for (const [slot, name] of Object.entries(matcher.capture)) {
+    const value = values.get(name)
+    if (value === undefined) return null
+    slots[slot] = value
+  }
+  return slots
+}
+
 export class CaptureSession {
   #binding: CaptureBinding
   #requestId: string | null = null
+  #candidate: CapturedRequest | null = null
+  #requestBody: RequestBodyDetails['requestBody'] | undefined
   #captured: CapturedRequest | null = null
   #failed: Error | null = null
   #used = false
@@ -310,19 +502,18 @@ export class CaptureSession {
     if (
       details.tabId !== this.#binding.tabId ||
       details.frameId !== this.#binding.frameId ||
-      details.method !== 'GET'
+      details.method !== this.#binding.method
     )
       return
     const path = requestPath(details.url, this.#binding.origin)
     if (path === null) return
-    const slots = this.#binding.matcher
-      ? matchRequest(path, details.type, this.#binding.matcher)
-      : path === this.#binding.path
-        ? {}
-        : null
-    if (slots === null) return
-    if (this.#used || this.#failed || this.#captured)
-      fail('capture already completed')
+    const candidate = this.#candidate
+    if (!candidate || this.#requestId !== details.requestId) {
+      if (this.#binding.method === 'POST') return
+      this.observeBody(details)
+    }
+    const matched = this.#candidate
+    if (!matched || this.#requestId !== details.requestId) return
     const secrets: Partial<Record<SecretHeader, string>> = {}
     for (const header of details.requestHeaders ?? []) {
       const name = header.name.toLowerCase() as SecretHeader
@@ -333,12 +524,72 @@ export class CaptureSession {
     }
     for (const name of this.#binding.secretHeaders)
       if (!secrets[name]) fail('captured secret headers were missing')
-    this.#requestId = details.requestId
+    if (this.#binding.method === 'POST') {
+      const type = contentType(details.requestHeaders)
+      if (!type || !this.#binding.bodyMatcher)
+        fail('captured request content type is unsupported')
+      let body: string
+      if (type === 'application/json') {
+        if (
+          !this.#requestBody?.raw ||
+          this.#requestBody.raw.length !== 1 ||
+          !this.#requestBody.raw[0]?.bytes
+        )
+          fail('captured JSON body is invalid')
+        body = canonicalJsonBody(this.#requestBody.raw[0].bytes).body
+      } else {
+        if (!this.#requestBody?.formData) fail('captured form body is invalid')
+        body = canonicalForm(this.#requestBody.formData).body
+      }
+      const bodySlots = matchRequestBody(body, type, this.#binding.bodyMatcher)
+      if (bodySlots === null) fail('captured request body did not match')
+      const slots = { ...(matched.slots ?? {}), ...bodySlots }
+      if (
+        Object.keys(slots).length !==
+        Object.keys(matched.slots ?? {}).length + Object.keys(bodySlots).length
+      )
+        fail('captured request slots are ambiguous')
+      matched.body = body
+      matched.content_type = type
+      matched.slots = slots
+    }
     this.#captured = {
-      path,
+      ...matched,
       secrets,
+    }
+  }
+
+  observeBody(details: RequestBodyDetails): void {
+    if (
+      details.tabId !== this.#binding.tabId ||
+      details.frameId !== this.#binding.frameId ||
+      details.method !== this.#binding.method
+    )
+      return
+    const path = requestPath(details.url, this.#binding.origin)
+    if (path === null) return
+    const querySlots = this.#binding.matcher
+      ? matchRequest(path, details.type, this.#binding.matcher)
+      : path === this.#binding.path
+        ? {}
+        : null
+    if (querySlots === null) return
+    if (this.#used || this.#failed || this.#candidate || this.#captured)
+      fail('capture already completed')
+    if (this.#binding.method === 'POST') {
+      const requestBody = details.requestBody
+      if (!requestBody) fail('captured POST body is invalid')
+      this.#requestBody = requestBody
+    } else if (details.requestBody) {
+      fail('GET request body is unsupported')
+    }
+    this.#requestId = details.requestId
+    this.#candidate = {
+      path,
+      secrets: {},
+      ...(this.#binding.method === 'POST' ? { method: 'POST' as const } : {}),
       ...(this.#binding.matcher
-        ? { slots, resource_type: details.type as ResourceType }
+        ? { slots: querySlots, resource_type: details.type as ResourceType }
         : {}),
     }
   }
@@ -349,9 +600,13 @@ export class CaptureSession {
 
   reject(requestId: string, reason: string): boolean {
     const captured = this.#captured
-    if (this.#requestId !== requestId || !captured) return false
+    const candidate = this.#candidate
+    if (this.#requestId !== requestId || (!captured && !candidate)) return false
     this.#failed = new Error(reason)
-    clearCapturedRequest(captured)
+    if (captured) clearCapturedRequest(captured)
+    if (candidate) clearCapturedRequest(candidate)
+    this.#candidate = null
+    this.#requestBody = undefined
     this.#captured = null
     return true
   }
@@ -362,13 +617,18 @@ export class CaptureSession {
     const captured = this.#captured
     this.#used = true
     this.#captured = null
+    this.#candidate = null
+    this.#requestBody = undefined
     this.#requestId = null
     return captured
   }
 
   clear(): void {
     if (this.#captured) clearCapturedRequest(this.#captured)
+    if (this.#candidate) clearCapturedRequest(this.#candidate)
     this.#captured = null
+    this.#candidate = null
+    this.#requestBody = undefined
     this.#requestId = null
   }
 }

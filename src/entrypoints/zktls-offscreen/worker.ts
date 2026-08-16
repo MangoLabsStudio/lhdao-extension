@@ -3,6 +3,7 @@ import {
   clearCapturedRequest,
   clearSecrets,
   matchRequest,
+  matchRequestBody,
 } from '@/lib/zktls/capture'
 import {
   assertConnectorAvailable,
@@ -317,14 +318,39 @@ function assertCapturedRequest(message: CapturedProveMessage): void {
     if (message.captured.path !== message.config.request.path)
       throw new Error('captured request did not match the signed provider')
   } else {
-    const slots = matchRequest(
+    const querySlots = matchRequest(
       message.captured.path,
       message.captured.resource_type,
       message.config.request.matcher,
     )
-    if (
-      slots === null ||
-      JSON.stringify(slots) !== JSON.stringify(message.captured.slots ?? {})
+    if (querySlots === null)
+      throw new Error('captured request did not match the signed provider')
+    if (message.config.request.method === 'POST') {
+      if (
+        !message.captured.body ||
+        !message.captured.content_type ||
+        !message.config.request.body
+      )
+        throw new Error('captured POST body was missing')
+      const bodySlots = matchRequestBody(
+        message.captured.body,
+        message.captured.content_type,
+        message.config.request.body,
+      )
+      if (bodySlots === null)
+        throw new Error('captured request did not match the signed provider')
+      const slots = { ...querySlots, ...bodySlots }
+      if (
+        Object.keys(slots).length !==
+          Object.keys(querySlots).length + Object.keys(bodySlots).length ||
+        JSON.stringify(slots) !== JSON.stringify(message.captured.slots ?? {})
+      )
+        throw new Error('captured request did not match the signed provider')
+    } else if (
+      message.captured.body !== undefined ||
+      message.captured.content_type !== undefined ||
+      JSON.stringify(querySlots) !==
+        JSON.stringify(message.captured.slots ?? {})
     )
       throw new Error('captured request did not match the signed provider')
   }
@@ -376,14 +402,29 @@ async function prove(message: ProveMessage): Promise<void> {
     const secrets = isV1Message(message)
       ? { cookie: message.cookie }
       : message.captured.secrets
+    const method = message.config.request.method
+    const body =
+      !isV1Message(message) && method === 'POST'
+        ? message.captured.body
+        : undefined
+    if (method === 'POST' && !body)
+      throw new Error('captured POST body was missing')
     try {
       await prover.send_request(await websocketIo(registration.proxyUrl), {
         uri: path,
-        method: 'GET',
+        method,
         headers: new Map<string, number[]>([
           ['host', Array.from(encoder.encode(origin.hostname))],
           ['accept-encoding', Array.from(encoder.encode('identity'))],
           ['connection', Array.from(encoder.encode('close'))],
+          ...(!isV1Message(message) && method === 'POST'
+            ? [
+                [
+                  'content-type',
+                  Array.from(encoder.encode(message.captured.content_type!)),
+                ] as [string, number[]],
+              ]
+            : []),
           ...Object.entries(message.config.request.headers).map(
             ([key, value]) =>
               [key, Array.from(encoder.encode(value))] as [string, number[]],
@@ -393,7 +434,7 @@ async function prove(message: ProveMessage): Promise<void> {
               [key, Array.from(encoder.encode(value))] as [string, number[]],
           ),
         ]),
-        body: undefined,
+        body: body ? Array.from(encoder.encode(body)) : undefined,
       })
     } finally {
       clearSecrets(secrets)

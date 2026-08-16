@@ -1,7 +1,9 @@
 import {
+  type BodyMatcher,
   normalizePathQuery,
   type RequestMatcher,
   SECRET_HEADERS,
+  validateBodyMatcher,
   validateRequestMatcher,
 } from './capture'
 
@@ -82,8 +84,9 @@ export type V3Connector = {
   expires_at: string
   origin: string
   request: {
-    method: 'GET'
+    method: 'GET' | 'POST'
     matcher: RequestMatcher
+    body?: BodyMatcher
     headers: Record<string, string>
     secret_headers: (
       | 'cookie'
@@ -389,9 +392,15 @@ function validateV2Headers(value: unknown): void {
 }
 
 function validateCapturedRequest(value: unknown, version: 2 | 3): void {
+  object(value, 'request')
+  const request = value as Record<string, unknown>
+  const method = request.method
+  if (method !== 'GET' && (version !== 3 || method !== 'POST'))
+    fail('request.method is unsupported.')
   const allowed = [
     'method',
     ...(version === 2 ? ['path'] : ['matcher']),
+    ...(method === 'POST' ? ['body'] : []),
     'headers',
     'secret_headers',
     'max_sent_data',
@@ -399,13 +408,14 @@ function validateCapturedRequest(value: unknown, version: 2 | 3): void {
     'replay_safety_evidence',
   ]
   keys(value, allowed, 'request')
-  object(value, 'request')
   required(value, allowed, 'request')
-  if (value.method !== 'GET') fail('request.method must be GET.')
   if (version === 2) {
     string(value.path, 'request.path', 2048)
     normalizePathQuery(value.path)
-  } else validateRequestMatcher(value.matcher)
+  } else {
+    validateRequestMatcher(value.matcher)
+    if (method === 'POST') validateBodyMatcher(value.body)
+  }
   validateV2Headers(value.headers)
   if (!Array.isArray(value.secret_headers))
     fail('request.secret_headers must be an array.')
