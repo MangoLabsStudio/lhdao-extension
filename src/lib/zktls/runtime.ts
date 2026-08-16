@@ -8,10 +8,10 @@ import {
 } from './capture'
 import {
   assertConnectorAvailable,
+  type CapturedConnector,
   type Connector,
   extractIdentity,
   type V1Connector,
-  type V2Connector,
 } from './interpreter'
 import { assertVerifierProfile, ZKTLS_PROFILE } from './profile'
 import { parseZkTlsRuntimeRequest } from './runtime-request'
@@ -32,18 +32,18 @@ type V1Job = {
   cookie?: string
   done?: (cookie: string | null) => void
 }
-type V2Job = {
-  kind: 'v2'
+type CaptureJob = {
+  kind: 'capture'
   sessionId: string
   connectorId: string
-  config: V2Connector
+  config: CapturedConnector
   ticket: Ticket
   origin: string
   tabId: number
   capture: CaptureSession
   done?: (captured: CapturedRequest | null) => void
 }
-type Job = V1Job | V2Job
+type Job = V1Job | CaptureJob
 type Permission = {
   requestId: string
   origin: string
@@ -60,7 +60,7 @@ function exactOriginPattern(origin: string): string {
 }
 function clearJob(): void {
   if (job?.kind === 'v1') job.cookie = undefined
-  if (job?.kind === 'v2') job.capture.clear()
+  if (job?.kind === 'capture') job.capture.clear()
   job = null
 }
 function permissionUrl(): string {
@@ -190,7 +190,7 @@ function waitForCookie(active: Job): Promise<string | null> {
   })
 }
 
-function waitForCapture(active: V2Job): Promise<CapturedRequest | null> {
+function waitForCapture(active: CaptureJob): Promise<CapturedRequest | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       active.done = undefined
@@ -210,7 +210,7 @@ export function activateCaptureTab(tabId: number): Promise<chrome.tabs.Tab> {
 
 async function proveCapturedRequest(
   request: ReturnType<typeof parseZkTlsRuntimeRequest>,
-  config: V2Connector,
+  config: CapturedConnector,
   ticket: Ticket,
 ): Promise<unknown> {
   if (!request) return null
@@ -226,8 +226,8 @@ async function proveCapturedRequest(
     }
   }
   clearJob()
-  const active: V2Job = {
-    kind: 'v2',
+  const active: CaptureJob = {
+    kind: 'capture',
     sessionId: request.sessionId,
     connectorId: request.connectorId,
     config,
@@ -242,15 +242,24 @@ async function proveCapturedRequest(
         providerId: config.connector_id,
         revision: config.revision,
         origin: config.origin,
-        path: config.request.path,
+        ...(config.interpreter_version === 2
+          ? { path: config.request.path }
+          : { matcher: config.request.matcher }),
         secretHeaders: config.request.secret_headers,
       }),
     ),
   }
   job = active
   const captured = waitForCapture(active)
-  await activateCaptureTab(tab.id)
-  const value = await captured
+  let value: CapturedRequest | null
+  try {
+    await activateCaptureTab(tab.id)
+    value = await captured
+  } catch (error) {
+    active.done?.(null)
+    clearJob()
+    throw error
+  }
   clearJob()
   if (!value)
     return {
@@ -259,29 +268,27 @@ async function proveCapturedRequest(
       status: 'error',
       code: 'ZKTLS_CAPTURE_FAILED',
     }
-  await ensureOffscreen()
-  let pending: Promise<unknown>
   try {
-    pending = chrome.runtime.sendMessage({
+    await ensureOffscreen()
+    const result = (await chrome.runtime.sendMessage({
       type: 'zktls-offscreen-prove',
       sessionId: request.sessionId,
       connectorId: request.connectorId,
       config,
       ticket,
       captured: value,
-    })
+    })) as {
+      status: 'submitted' | 'error'
+      code?: string
+    }
+    return {
+      type: 'zktls-prove-result',
+      correlationId: request.correlationId,
+      status: result.status,
+      ...(result.code ? { code: result.code } : {}),
+    }
   } finally {
     clearCapturedRequest(value)
-  }
-  const result = (await pending) as {
-    status: 'submitted' | 'error'
-    code?: string
-  }
-  return {
-    type: 'zktls-prove-result',
-    correlationId: request.correlationId,
-    status: result.status,
-    ...(result.code ? { code: result.code } : {}),
   }
 }
 
@@ -306,7 +313,7 @@ export async function handleZkTlsProof(
       request.sessionId,
       request.connectorId,
     )
-    if (config.interpreter_version === 2)
+    if (config.interpreter_version === 2 || config.interpreter_version === 3)
       return await proveCapturedRequest(request, config, ticket)
     if (config.response_format !== 'html')
       return {
@@ -418,7 +425,7 @@ export function registerZkTlsRuntime(): void {
   chrome.webRequest.onBeforeRedirect.addListener(
     (details) => {
       const active = job
-      if (active?.kind !== 'v2') return
+      if (active?.kind !== 'capture') return
       if (
         active.capture.reject(details.requestId, 'captured request redirected')
       )
@@ -429,7 +436,7 @@ export function registerZkTlsRuntime(): void {
   chrome.webRequest.onErrorOccurred.addListener(
     (details) => {
       const active = job
-      if (active?.kind !== 'v2') return
+      if (active?.kind !== 'capture') return
       if (active.capture.reject(details.requestId, 'captured request failed'))
         active.done?.(null)
     },
@@ -438,7 +445,10 @@ export function registerZkTlsRuntime(): void {
   chrome.webRequest.onCompleted.addListener(
     (details) => {
       const active = job
-      if (active?.kind !== 'v2' || !active.capture.completes(details.requestId))
+      if (
+        active?.kind !== 'capture' ||
+        !active.capture.completes(details.requestId)
+      )
         return
       try {
         active.done?.(active.capture.take())

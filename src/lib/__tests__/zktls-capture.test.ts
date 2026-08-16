@@ -42,6 +42,29 @@ const provider = {
   verifier_profile_id: 'lighthouse-v1',
 } as const
 
+const matcherProvider = {
+  ...provider,
+  interpreter_version: 3,
+  revision: 3,
+  request: {
+    method: 'GET',
+    matcher: {
+      path: { kind: 'prefix', value: '/users/' },
+      query: {
+        required: { from: '2026-01-01' },
+        optional: { format: 'compact' },
+        capture: { account: 'username' },
+      },
+      resource_types: ['xmlhttprequest', 'fetch'],
+    },
+    headers: provider.request.headers,
+    secret_headers: provider.request.secret_headers,
+    max_sent_data: 8192,
+    max_recv_data: 65536,
+    replay_safety_evidence: 'The matched profile GET is read-only.',
+  },
+} as const
+
 function session(): CaptureSession {
   return new CaptureSession(
     createCaptureBinding({
@@ -52,6 +75,21 @@ function session(): CaptureSession {
       revision: provider.revision,
       origin: provider.origin,
       path: provider.request.path,
+      secretHeaders: ['cookie'],
+    }),
+  )
+}
+
+function matcherSession(): CaptureSession {
+  return new CaptureSession(
+    createCaptureBinding({
+      tabId: 7,
+      frameId: 0,
+      sessionId: 'session1',
+      providerId: matcherProvider.connector_id,
+      revision: matcherProvider.revision,
+      origin: matcherProvider.origin,
+      matcher: matcherProvider.request.matcher,
       secretHeaders: ['cookie'],
     }),
   )
@@ -126,6 +164,83 @@ describe('zkTLS v2 capture', () => {
     ).toThrow('secret_headers')
   })
 
+  test('matches a canonical v3 query and captures named slots', () => {
+    const capture = matcherSession()
+    for (const url of [
+      'https://github.com/users/octocat?from=2026-01-01&username=octocat&extra=1',
+      'https://github.com/users/octocat?from=2026-01-01&username=octocat&username=other',
+      'https://github.com/users/octocat?from=2026-01-01&username=octocat',
+    ]) {
+      capture.observe({
+        requestId: `ignored-${url.length}`,
+        tabId: 7,
+        frameId: 0,
+        method: 'GET',
+        url,
+        type: url.includes('&extra=') ? 'xmlhttprequest' : 'main_frame',
+        requestHeaders: [{ name: 'Cookie', value: 'unrelated' }],
+      })
+    }
+    capture.observe({
+      requestId: 'matched',
+      tabId: 7,
+      frameId: 0,
+      method: 'GET',
+      url: 'https://github.com/users/octocat?from=2026-01-01&username=octocat',
+      type: 'fetch',
+      requestHeaders: [{ name: 'Cookie', value: 'private' }],
+    })
+    expect(capture.take()).toEqual({
+      path: '/users/octocat?from=2026-01-01&username=octocat',
+      slots: { account: 'octocat' },
+      resource_type: 'fetch',
+      secrets: { cookie: 'private' },
+    })
+  })
+
+  test('rejects ambiguous v3 matcher schemas and duplicate provider matches', () => {
+    expect(() =>
+      validateConnector({
+        ...matcherProvider,
+        request: {
+          ...matcherProvider.request,
+          matcher: {
+            ...matcherProvider.request.matcher,
+            path: { kind: 'exact', value: '/users?from=2026-01-01' },
+          },
+        },
+      }),
+    ).toThrow('request.matcher.path')
+    expect(() =>
+      validateConnector({
+        ...matcherProvider,
+        request: {
+          ...matcherProvider.request,
+          matcher: {
+            ...matcherProvider.request.matcher,
+            query: {
+              ...matcherProvider.request.matcher.query,
+              optional: { from: '2026-01-01' },
+            },
+          },
+        },
+      }),
+    ).toThrow('request.matcher.query is ambiguous')
+    const capture = matcherSession()
+    const details = {
+      tabId: 7,
+      frameId: 0,
+      method: 'GET',
+      url: 'https://github.com/users/octocat?from=2026-01-01&username=octocat',
+      type: 'xmlhttprequest',
+      requestHeaders: [{ name: 'Cookie', value: 'private' }],
+    }
+    capture.observe({ ...details, requestId: 'first' })
+    expect(() => capture.observe({ ...details, requestId: 'second' })).toThrow(
+      'capture already completed',
+    )
+  })
+
   test('activates the provider tab without navigating to the signed path', async () => {
     const original = chrome.tabs.update
     const update = vi.fn().mockResolvedValue({ id: 7 })
@@ -146,10 +261,14 @@ describe('zkTLS v2 capture', () => {
 
   test('clears captured secrets at the send-request boundary', () => {
     const secrets = { cookie: 'private' }
-    const captured = { path: provider.request.path, secrets }
+    const slots = { account: 'octocat' }
+    const captured = { path: provider.request.path, secrets, slots }
     clearCapturedRequest(captured)
     expect(secrets).toEqual({ cookie: '' })
     expect(captured.secrets).toEqual({})
+    expect(slots).toEqual({ account: '' })
+    expect(captured.slots).toEqual({})
+    expect(captured.path).toBe('')
   })
 
   test('rejects redirects and retries before any secret can be replayed', () => {
@@ -188,6 +307,7 @@ describe('zkTLS v2 capture', () => {
         response,
         status: 200,
         now: '2026-08-16T00:00:00.000Z',
+        request_target: provider.request.path,
       }),
     ).toEqual({
       request_target: provider.request.path,

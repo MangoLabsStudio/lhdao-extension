@@ -1,4 +1,9 @@
-import { normalizePathQuery, SECRET_HEADERS } from './capture'
+import {
+  normalizePathQuery,
+  type RequestMatcher,
+  SECRET_HEADERS,
+  validateRequestMatcher,
+} from './capture'
 
 const encoder = new TextEncoder()
 const MAX_SENT_DATA = 8192
@@ -69,7 +74,40 @@ export type V2Connector = {
   verifier_profile_id: string
 }
 
-export type Connector = V1Connector | V2Connector
+export type V3Connector = {
+  interpreter_version: 3
+  connector_id: string
+  revision: number
+  disabled: boolean
+  expires_at: string
+  origin: string
+  request: {
+    method: 'GET'
+    matcher: RequestMatcher
+    headers: Record<string, string>
+    secret_headers: (
+      | 'cookie'
+      | 'authorization'
+      | 'x-csrf-token'
+      | 'x-xsrf-token'
+    )[]
+    max_sent_data: number
+    max_recv_data: number
+    replay_safety_evidence: string
+  }
+  response_format: 'html'
+  response_status: number
+  extraction: {
+    kind: 'html_between'
+    prefix: string
+    suffix: string
+    max_bytes: number
+  }
+  verifier_profile_id: string
+}
+
+export type CapturedConnector = V2Connector | V3Connector
+export type Connector = V1Connector | CapturedConnector
 
 function fail(message: string): never {
   throw new Error(message)
@@ -350,7 +388,43 @@ function validateV2Headers(value: unknown): void {
       fail('request.headers contains a non-allowlisted literal.')
 }
 
-function validateV2Connector(value: unknown): V2Connector {
+function validateCapturedRequest(value: unknown, version: 2 | 3): void {
+  const allowed = [
+    'method',
+    ...(version === 2 ? ['path'] : ['matcher']),
+    'headers',
+    'secret_headers',
+    'max_sent_data',
+    'max_recv_data',
+    'replay_safety_evidence',
+  ]
+  keys(value, allowed, 'request')
+  object(value, 'request')
+  required(value, allowed, 'request')
+  if (value.method !== 'GET') fail('request.method must be GET.')
+  if (version === 2) {
+    string(value.path, 'request.path', 2048)
+    normalizePathQuery(value.path)
+  } else validateRequestMatcher(value.matcher)
+  validateV2Headers(value.headers)
+  if (!Array.isArray(value.secret_headers))
+    fail('request.secret_headers must be an array.')
+  if (
+    value.secret_headers.length === 0 ||
+    value.secret_headers.some(
+      (header) =>
+        typeof header !== 'string' ||
+        !SECRET_HEADERS.includes(header as (typeof SECRET_HEADERS)[number]),
+    ) ||
+    new Set(value.secret_headers).size !== value.secret_headers.length
+  )
+    fail('request.secret_headers contains an unsupported header.')
+  positiveInteger(value.max_sent_data, 'request.max_sent_data', MAX_SENT_DATA)
+  positiveInteger(value.max_recv_data, 'request.max_recv_data', MAX_RECV_DATA)
+  string(value.replay_safety_evidence, 'request.replay_safety_evidence', 1024)
+}
+
+function validateCapturedConnector(value: unknown, version: 2 | 3): void {
   keys(
     value,
     [
@@ -386,7 +460,7 @@ function validateV2Connector(value: unknown): V2Connector {
     ],
     'connector',
   )
-  if (value.interpreter_version !== 2)
+  if (value.interpreter_version !== version)
     fail('interpreter_version is unsupported.')
   string(value.connector_id, 'connector_id', 128)
   positiveInteger(value.revision, 'revision', Number.MAX_SAFE_INTEGER)
@@ -398,65 +472,7 @@ function validateV2Connector(value: unknown): V2Connector {
   )
     fail('expires_at is invalid.')
   validateOrigin(value.origin)
-  keys(
-    value.request,
-    [
-      'method',
-      'path',
-      'headers',
-      'secret_headers',
-      'max_sent_data',
-      'max_recv_data',
-      'replay_safety_evidence',
-    ],
-    'request',
-  )
-  object(value.request, 'request')
-  required(
-    value.request,
-    [
-      'method',
-      'path',
-      'headers',
-      'secret_headers',
-      'max_sent_data',
-      'max_recv_data',
-      'replay_safety_evidence',
-    ],
-    'request',
-  )
-  if (value.request.method !== 'GET') fail('request.method must be GET.')
-  string(value.request.path, 'request.path', 2048)
-  normalizePathQuery(value.request.path)
-  validateV2Headers(value.request.headers)
-  if (!Array.isArray(value.request.secret_headers))
-    fail('request.secret_headers must be an array.')
-  if (
-    value.request.secret_headers.length === 0 ||
-    value.request.secret_headers.some(
-      (header) =>
-        typeof header !== 'string' ||
-        !SECRET_HEADERS.includes(header as (typeof SECRET_HEADERS)[number]),
-    ) ||
-    new Set(value.request.secret_headers).size !==
-      value.request.secret_headers.length
-  )
-    fail('request.secret_headers contains an unsupported header.')
-  positiveInteger(
-    value.request.max_sent_data,
-    'request.max_sent_data',
-    MAX_SENT_DATA,
-  )
-  positiveInteger(
-    value.request.max_recv_data,
-    'request.max_recv_data',
-    MAX_RECV_DATA,
-  )
-  string(
-    value.request.replay_safety_evidence,
-    'request.replay_safety_evidence',
-    1024,
-  )
+  validateCapturedRequest(value.request, version)
   if (value.response_format !== 'html') fail('response_format is unsupported.')
   if (
     typeof value.response_status !== 'number' ||
@@ -484,13 +500,23 @@ function validateV2Connector(value: unknown): V2Connector {
     fail('extraction bounds must differ.')
   positiveInteger(value.extraction.max_bytes, 'extraction.max_bytes', 1024)
   string(value.verifier_profile_id, 'verifier_profile_id', 128)
+}
+
+function validateV2Connector(value: unknown): V2Connector {
+  validateCapturedConnector(value, 2)
   return value as V2Connector
+}
+
+function validateV3Connector(value: unknown): V3Connector {
+  validateCapturedConnector(value, 3)
+  return value as V3Connector
 }
 
 export function validateConnector(value: unknown): Connector {
   object(value, 'connector')
   if (value.interpreter_version === 1) return validateV1Connector(value)
   if (value.interpreter_version === 2) return validateV2Connector(value)
+  if (value.interpreter_version === 3) return validateV3Connector(value)
   fail('interpreter_version is unsupported.')
 }
 
@@ -659,7 +685,7 @@ export function interpret(
 }
 
 export function htmlBetweenDisclosureRanges(
-  config: V2Connector,
+  config: CapturedConnector,
   response: string,
 ): {
   prefix: { start: number; end: number }
@@ -693,8 +719,13 @@ export function htmlBetweenDisclosureRanges(
 }
 
 export function interpretCaptured(
-  config: V2Connector,
-  input: { response: string; status: number; now: string },
+  config: CapturedConnector,
+  input: {
+    response: string
+    status: number
+    now: string
+    request_target: string
+  },
 ): { request_target: string; status: string; claim: string } {
   validateConnector(config)
   assertConnectorAvailable(config, input.now)
@@ -706,7 +737,7 @@ export function interpretCaptured(
     fail('response did not match the signed provider.')
   const disclosure = htmlBetweenDisclosureRanges(config, input.response)
   return {
-    request_target: config.request.path,
+    request_target: input.request_target,
     status: String(input.status),
     claim: disclosure.claim,
   }
