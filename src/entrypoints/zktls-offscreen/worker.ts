@@ -1,13 +1,18 @@
-import { type CapturedRequest, clearSecrets } from '@/lib/zktls/capture'
+import {
+  type CapturedRequest,
+  clearCapturedRequest,
+  clearSecrets,
+  matchRequest,
+} from '@/lib/zktls/capture'
 import {
   assertConnectorAvailable,
+  type CapturedConnector,
   htmlBetweenDisclosureRanges,
   htmlDisclosureRanges,
   interpret,
   interpretCaptured,
   requestTarget,
   type V1Connector,
-  type V2Connector,
 } from '@/lib/zktls/interpreter'
 import { assertVerifierProfile, ZKTLS_PROFILE } from '@/lib/zktls/profile'
 import { assertTicketAvailable, type Ticket } from '@/lib/zktls/signed-config'
@@ -28,11 +33,11 @@ type V1ProveMessage = CommonProveMessage & {
   identity: string
   cookie: string
 }
-type V2ProveMessage = CommonProveMessage & {
-  config: V2Connector
+type CapturedProveMessage = CommonProveMessage & {
+  config: CapturedConnector
   captured: CapturedRequest
 }
-type ProveMessage = V1ProveMessage | V2ProveMessage
+type ProveMessage = V1ProveMessage | CapturedProveMessage
 
 function isV1Message(message: ProveMessage): message is V1ProveMessage {
   return message.config.interpreter_version === 1
@@ -260,6 +265,7 @@ export function revealConfig(
       response,
       status: parsedStatus,
       now: new Date().toISOString(),
+      request_target: path,
     })
     disclosure = ranges
   }
@@ -306,9 +312,22 @@ function assertAvailable(message: ProveMessage): void {
   assertVerifierProfile(message.config)
 }
 
-function assertCapturedRequest(message: V2ProveMessage): void {
-  if (message.captured.path !== message.config.request.path)
-    throw new Error('captured request did not match the signed provider')
+function assertCapturedRequest(message: CapturedProveMessage): void {
+  if (message.config.interpreter_version === 2) {
+    if (message.captured.path !== message.config.request.path)
+      throw new Error('captured request did not match the signed provider')
+  } else {
+    const slots = matchRequest(
+      message.captured.path,
+      message.captured.resource_type,
+      message.config.request.matcher,
+    )
+    if (
+      slots === null ||
+      JSON.stringify(slots) !== JSON.stringify(message.captured.slots ?? {})
+    )
+      throw new Error('captured request did not match the signed provider')
+  }
   const names = Object.keys(message.captured.secrets)
   if (
     names.length !== message.config.request.secret_headers.length ||
@@ -418,13 +437,13 @@ self.addEventListener('message', (event: MessageEvent<ProveMessage>) => {
         })
       })()
     : (() => {
-        const secrets = message.captured.secrets
-        message.captured.secrets = {}
+        const captured = message.captured
+        message.captured = { path: '', secrets: {} }
         return prove({
           ...message,
-          captured: { ...message.captured, secrets },
+          captured,
         }).finally(() => {
-          clearSecrets(secrets)
+          clearCapturedRequest(captured)
         })
       })()
   void task.then(

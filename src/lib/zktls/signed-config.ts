@@ -15,7 +15,7 @@ export type Ticket = {
   session_id: string
   connector_id: string
   revision: number
-  interpreter_version: 1 | 2
+  interpreter_version: 1 | 2 | 3
   config_digest: string
   issued_at: string
   expires_at: string
@@ -136,7 +136,9 @@ function validateTicket(value: unknown): Ticket {
     if (!(field in value)) fail(`ticket.${field} is required.`)
   if (
     value.schema !== 1 ||
-    (value.interpreter_version !== 1 && value.interpreter_version !== 2) ||
+    (value.interpreter_version !== 1 &&
+      value.interpreter_version !== 2 &&
+      value.interpreter_version !== 3) ||
     typeof value.revision !== 'number' ||
     !Number.isInteger(value.revision) ||
     value.revision < 1

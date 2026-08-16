@@ -6,9 +6,24 @@ export const SECRET_HEADERS = [
 ] as const
 
 export type SecretHeader = (typeof SECRET_HEADERS)[number]
+export const RESOURCE_TYPES = ['main_frame', 'xmlhttprequest', 'fetch'] as const
+export type ResourceType = (typeof RESOURCE_TYPES)[number]
+
+export type RequestMatcher = {
+  path: { kind: 'exact' | 'prefix'; value: string }
+  query: {
+    required: Record<string, string>
+    optional: Record<string, string>
+    capture: Record<string, string>
+  }
+  resource_types: readonly ResourceType[]
+}
+
 export type CapturedRequest = {
   path: string
   secrets: Partial<Record<SecretHeader, string>>
+  slots?: Record<string, string>
+  resource_type?: ResourceType
 }
 
 export function clearSecrets(
@@ -20,6 +35,12 @@ export function clearSecrets(
 export function clearCapturedRequest(captured: CapturedRequest): void {
   clearSecrets(captured.secrets)
   captured.secrets = {}
+  if (captured.slots) {
+    for (const key of Object.keys(captured.slots)) captured.slots[key] = ''
+    captured.slots = {}
+  }
+  captured.path = ''
+  captured.resource_type = undefined
 }
 
 export type CaptureBinding = {
@@ -29,7 +50,8 @@ export type CaptureBinding = {
   providerId: string
   revision: number
   origin: string
-  path: string
+  path?: string
+  matcher?: RequestMatcher
   secretHeaders: SecretHeader[]
 }
 
@@ -39,6 +61,7 @@ export type RequestDetails = {
   frameId: number
   method: string
   url: string
+  type?: string
   requestHeaders?: { name: string; value?: string }[]
 }
 
@@ -75,10 +98,133 @@ export function normalizePathQuery(value: string): string {
   return normalized
 }
 
+function boundedString(value: unknown, name: string, max = 256): string {
+  if (
+    typeof value !== 'string' ||
+    !value ||
+    new TextEncoder().encode(value).length > max
+  )
+    fail(`${name} is invalid`)
+  return value
+}
+
+function boundedPairMap(
+  value: unknown,
+  name: string,
+  valueMax = 256,
+): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    fail(`${name} is invalid`)
+  const result: Record<string, string> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key)) fail(`${name} is invalid`)
+    result[key] = boundedString(item, name, valueMax)
+  }
+  return result
+}
+
+export function validateRequestMatcher(value: unknown): RequestMatcher {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    fail('request.matcher is invalid')
+  const matcher = value as Record<string, unknown>
+  if (
+    Object.keys(matcher).some(
+      (key) => !['path', 'query', 'resource_types'].includes(key),
+    )
+  )
+    fail('request.matcher is invalid')
+  if (
+    !matcher.path ||
+    typeof matcher.path !== 'object' ||
+    Array.isArray(matcher.path)
+  )
+    fail('request.matcher.path is invalid')
+  const path = matcher.path as Record<string, unknown>
+  if (
+    Object.keys(path).some((key) => !['kind', 'value'].includes(key)) ||
+    (path.kind !== 'exact' && path.kind !== 'prefix')
+  )
+    fail('request.matcher.path is invalid')
+  const pathValue = boundedString(
+    path.value,
+    'request.matcher.path.value',
+    2048,
+  )
+  const pathUrl = new URL(pathValue, 'https://capture.invalid')
+  if (
+    !pathValue.startsWith('/') ||
+    pathValue.startsWith('//') ||
+    pathUrl.search ||
+    pathUrl.hash ||
+    pathUrl.pathname !== pathValue
+  )
+    fail('request.matcher.path is invalid')
+  normalizePathQuery(pathValue)
+  if (
+    !matcher.query ||
+    typeof matcher.query !== 'object' ||
+    Array.isArray(matcher.query)
+  )
+    fail('request.matcher.query is invalid')
+  const query = matcher.query as Record<string, unknown>
+  if (
+    Object.keys(query).some(
+      (key) => !['required', 'optional', 'capture'].includes(key),
+    )
+  )
+    fail('request.matcher.query is invalid')
+  const required = boundedPairMap(
+    query.required,
+    'request.matcher.query.required',
+  )
+  const optional = boundedPairMap(
+    query.optional,
+    'request.matcher.query.optional',
+  )
+  const capture = boundedPairMap(
+    query.capture,
+    'request.matcher.query.capture',
+    128,
+  )
+  const queryKeys = [
+    ...Object.keys(required),
+    ...Object.keys(optional),
+    ...Object.values(capture),
+  ]
+  if (new Set(queryKeys).size !== queryKeys.length)
+    fail('request.matcher.query is ambiguous')
+  if (
+    !Array.isArray(matcher.resource_types) ||
+    matcher.resource_types.length === 0
+  )
+    fail('request.matcher.resource_types is invalid')
+  if (
+    matcher.resource_types.some(
+      (type) =>
+        typeof type !== 'string' ||
+        !RESOURCE_TYPES.includes(type as ResourceType),
+    ) ||
+    new Set(matcher.resource_types).size !== matcher.resource_types.length
+  )
+    fail('request.matcher.resource_types is invalid')
+  return {
+    path: { kind: path.kind, value: pathValue },
+    query: { required, optional, capture },
+    resource_types: matcher.resource_types as ResourceType[],
+  }
+}
+
 export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
   const origin = new URL(input.origin)
   if (origin.href !== `${origin.origin}/`) fail('capture origin is invalid')
-  const path = normalizePathQuery(input.path)
+  if ((input.path === undefined) === (input.matcher === undefined))
+    fail('capture target is invalid')
+  const path =
+    input.path === undefined ? undefined : normalizePathQuery(input.path)
+  const matcher =
+    input.matcher === undefined
+      ? undefined
+      : validateRequestMatcher(input.matcher)
   if (
     !Number.isInteger(input.tabId) ||
     !Number.isInteger(input.frameId) ||
@@ -94,7 +240,7 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
     new Set(input.secretHeaders).size !== input.secretHeaders.length
   )
     fail('capture secret headers are invalid')
-  return { ...input, origin: origin.origin, path }
+  return { ...input, origin: origin.origin, path, matcher }
 }
 
 function requestPath(url: string, origin: string): string | null {
@@ -105,6 +251,48 @@ function requestPath(url: string, origin: string): string | null {
   } catch {
     return null
   }
+}
+
+export function matchRequest(
+  path: string,
+  type: string | undefined,
+  matcher: RequestMatcher,
+): Record<string, string> | null {
+  if (!type || !matcher.resource_types.includes(type as ResourceType))
+    return null
+  try {
+    if (normalizePathQuery(path) !== path) return null
+  } catch {
+    return null
+  }
+  const url = new URL(path, 'https://capture.invalid')
+  const matchesPath =
+    matcher.path.kind === 'exact'
+      ? url.pathname === matcher.path.value
+      : url.pathname.startsWith(matcher.path.value)
+  if (!matchesPath) return null
+  const values = new Map<string, string>()
+  for (const [name, value] of url.searchParams) {
+    if (values.has(name)) return null
+    values.set(name, value)
+  }
+  const allowed = new Set([
+    ...Object.keys(matcher.query.required),
+    ...Object.keys(matcher.query.optional),
+    ...Object.values(matcher.query.capture),
+  ])
+  if ([...values.keys()].some((name) => !allowed.has(name))) return null
+  for (const [name, value] of Object.entries(matcher.query.required))
+    if (values.get(name) !== value) return null
+  for (const [name, value] of Object.entries(matcher.query.optional))
+    if (values.has(name) && values.get(name) !== value) return null
+  const slots: Record<string, string> = {}
+  for (const [slot, name] of Object.entries(matcher.query.capture)) {
+    const value = values.get(name)
+    if (value === undefined) return null
+    slots[slot] = value
+  }
+  return slots
 }
 
 export class CaptureSession {
@@ -126,7 +314,13 @@ export class CaptureSession {
     )
       return
     const path = requestPath(details.url, this.#binding.origin)
-    if (path === null || path !== this.#binding.path) return
+    if (path === null) return
+    const slots = this.#binding.matcher
+      ? matchRequest(path, details.type, this.#binding.matcher)
+      : path === this.#binding.path
+        ? {}
+        : null
+    if (slots === null) return
     if (this.#used || this.#failed || this.#captured)
       fail('capture already completed')
     const secrets: Partial<Record<SecretHeader, string>> = {}
@@ -140,7 +334,13 @@ export class CaptureSession {
     for (const name of this.#binding.secretHeaders)
       if (!secrets[name]) fail('captured secret headers were missing')
     this.#requestId = details.requestId
-    this.#captured = { path, secrets }
+    this.#captured = {
+      path,
+      secrets,
+      ...(this.#binding.matcher
+        ? { slots, resource_type: details.type as ResourceType }
+        : {}),
+    }
   }
 
   completes(requestId: string): boolean {
