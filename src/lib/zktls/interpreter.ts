@@ -6,6 +6,10 @@ import {
   validateBodyMatcher,
   validateRequestMatcher,
 } from './capture'
+import {
+  type ProviderAction,
+  validateProviderActions,
+} from './provider-actions'
 
 const encoder = new TextEncoder()
 const MAX_SENT_DATA = 8192
@@ -114,6 +118,7 @@ export type V3Connector = {
         value_type: 'string' | 'number' | 'boolean'
         max_bytes: number
       }
+  actions?: ProviderAction[]
   verifier_profile_id: string
 }
 
@@ -582,6 +587,7 @@ function validateCapturedConnector(value: unknown, version: 2 | 3): void {
       'response_format',
       'response_status',
       'extraction',
+      ...(version === 3 ? ['actions'] : []),
       'verifier_profile_id',
     ],
     'connector',
@@ -617,6 +623,8 @@ function validateCapturedConnector(value: unknown, version: 2 | 3): void {
     fail('expires_at is invalid.')
   validateOrigin(value.origin)
   validateCapturedRequest(value.request, version)
+  if (version === 3 && 'actions' in value)
+    validateProviderActions(value.actions)
   if (
     value.response_format !== 'html' &&
     (version !== 3 || value.response_format !== 'json')
