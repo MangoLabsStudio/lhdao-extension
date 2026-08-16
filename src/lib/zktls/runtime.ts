@@ -15,6 +15,10 @@ import {
   type V1Connector,
 } from './interpreter'
 import { assertVerifierProfile, ZKTLS_PROFILE } from './profile'
+import {
+  type ProviderAction,
+  runProviderActionsInPage,
+} from './provider-actions'
 import { parseZkTlsRuntimeRequest } from './runtime-request'
 import {
   assertTicketAvailable,
@@ -209,6 +213,18 @@ export function activateCaptureTab(tabId: number): Promise<chrome.tabs.Tab> {
   return chrome.tabs.update(tabId, { active: true })
 }
 
+export async function runProviderActions(
+  tabId: number,
+  actions: ProviderAction[] | undefined,
+): Promise<void> {
+  if (!actions?.length) return
+  await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    func: runProviderActionsInPage,
+    args: [actions],
+  })
+}
+
 async function proveCapturedRequest(
   request: ReturnType<typeof parseZkTlsRuntimeRequest>,
   config: CapturedConnector,
@@ -261,11 +277,20 @@ async function proveCapturedRequest(
   let value: CapturedRequest | null
   try {
     await activateCaptureTab(tab.id)
+    await runProviderActions(
+      tab.id,
+      config.interpreter_version === 3 ? config.actions : undefined,
+    )
     value = await captured
-  } catch (error) {
+  } catch {
     active.done?.(null)
     clearJob()
-    throw error
+    return {
+      type: 'zktls-prove-result',
+      correlationId: request.correlationId,
+      status: 'error',
+      code: 'ZKTLS_CAPTURE_FAILED',
+    }
   }
   clearJob()
   if (!value)

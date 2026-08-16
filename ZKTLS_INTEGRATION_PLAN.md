@@ -36,6 +36,13 @@ The plugin owns only:
 - strict request construction and disclosure ranges;
 - safe status reporting to the Lighthouse page.
 
+For v3 connectors it also owns a fixed, signed action interpreter that can
+wait for a CSS selector, click, input text, or submit a form in the permitted
+provider tab before the existing network capture completes. Actions are not
+proof claims: the exact signed request matcher and TLS replay remain the only
+capture/proof boundary. Arbitrary JavaScript, `eval`, remote scripts, XPath
+DOM actions and page-provided actions are unsupported.
+
 The plugin must never accept a verifier endpoint, Cookie/header, connector
 config, public key, callback, JavaScript, selector or claim from page input.
 
@@ -188,4 +195,5 @@ host and concurrency limits, and must not expose the upstream open proxy as-is.
   transcript byte-range design can prove the disclosed scalar without exposing
   unrelated JSON;
 - broader connector semantics beyond the currently implemented strict GET and
-  limited JSON/HTML extraction model.
+  limited JSON/HTML extraction model, except bounded v3 GET/POST matcher,
+  selector and provider-action support.
