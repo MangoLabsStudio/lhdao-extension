@@ -12,6 +12,7 @@ import {
   htmlDisclosureRanges,
   interpret,
   interpretCaptured,
+  regexDisclosureRanges,
   requestTarget,
   type V1Connector,
 } from '@/lib/zktls/interpreter'
@@ -261,14 +262,17 @@ export function revealConfig(
     }
   } else {
     path = message.captured.path
-    const ranges = htmlBetweenDisclosureRanges(message.config, response)
     interpretCaptured(message.config, {
       response,
       status: parsedStatus,
       now: new Date().toISOString(),
       request_target: path,
     })
-    disclosure = ranges
+    disclosure =
+      message.config.interpreter_version === 3 &&
+      message.config.extraction.kind === 'regex'
+        ? regexDisclosureRanges(message.config, response)
+        : htmlBetweenDisclosureRanges(message.config, response)
   }
   return {
     sent: [
