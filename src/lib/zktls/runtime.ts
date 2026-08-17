@@ -215,13 +215,14 @@ export function activateCaptureTab(tabId: number): Promise<chrome.tabs.Tab> {
 
 export async function runProviderActions(
   tabId: number,
+  origin: string,
   actions: ProviderAction[] | undefined,
 ): Promise<void> {
   if (!actions?.length) return
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
     func: runProviderActionsInPage,
-    args: [actions],
+    args: [origin, actions],
   })
 }
 
@@ -279,6 +280,7 @@ async function proveCapturedRequest(
     await activateCaptureTab(tab.id)
     await runProviderActions(
       tab.id,
+      config.origin,
       config.interpreter_version === 3 ? config.actions : undefined,
     )
     value = await captured

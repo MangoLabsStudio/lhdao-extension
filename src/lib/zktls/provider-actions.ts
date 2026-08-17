@@ -3,6 +3,7 @@ export type ProviderAction =
   | { kind: 'click'; selector: string }
   | { kind: 'input'; selector: string; text: string }
   | { kind: 'submit'; selector: string }
+  | { kind: 'navigate'; path: string }
 
 const MAX_ACTIONS = 8
 const MAX_SELECTOR_BYTES = 256
@@ -30,6 +31,22 @@ function boundedString(value: unknown, name: string, max: number): string {
   )
     fail(`${name} must be a bounded string.`)
   return value
+}
+
+function boundedPath(value: unknown, name: string): string {
+  const path = boundedString(value, name, 512)
+  if (
+    !path.startsWith('/') ||
+    path.startsWith('//') ||
+    path.includes('#') ||
+    path.includes('\\') ||
+    Array.from(path).some((char) => {
+      const code = char.charCodeAt(0)
+      return code < 32 || code === 127
+    })
+  )
+    fail(`${name} must be a relative path.`)
+  return path
 }
 
 export function validateProviderActions(value: unknown): ProviderAction[] {
@@ -75,6 +92,11 @@ export function validateProviderActions(value: unknown): ProviderAction[] {
         ),
       }
     }
+    if (item.kind === 'navigate') {
+      if (Object.keys(item).some((key) => !['kind', 'path'].includes(key)))
+        fail(`${name} contains an unknown field.`)
+      return { kind: item.kind, path: boundedPath(item.path, `${name}.path`) }
+    }
     if (item.kind === 'input') {
       if (
         Object.keys(item).some(
@@ -99,8 +121,12 @@ export function validateProviderActions(value: unknown): ProviderAction[] {
 // This function is serialized by chrome.scripting.executeScript. Keep it
 // self-contained: no remote code, page-provided code, or outer closures.
 export async function runProviderActionsInPage(
+  expectedOrigin: string,
   actions: ProviderAction[],
 ): Promise<void> {
+  if (window.location.origin !== expectedOrigin)
+    throw new Error('provider action origin mismatch')
+
   const select = (selector: string): Element => {
     const element = document.querySelector(selector)
     if (!element) throw new Error('provider action selector was not found')
@@ -140,6 +166,10 @@ export async function runProviderActionsInPage(
     })
 
   for (const action of actions) {
+    if (action.kind === 'navigate') {
+      window.location.assign(action.path)
+      continue
+    }
     if (action.kind === 'wait_for_selector') {
       await waitForSelector(action.selector, action.timeout_ms)
       continue
