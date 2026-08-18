@@ -88,16 +88,15 @@ export function sessionRegistrationPayload(message: ProveMessage): object {
 export function verifierUrls(
   endpoint: string,
   registeredSessionId: string,
-  hostname: string,
 ): { verifierUrl: string; proxyUrl: string } {
-  if (!TOKEN.test(registeredSessionId) || !hostname) {
+  if (!TOKEN.test(registeredSessionId)) {
     throw new Error('verifier rejected session')
   }
   const base = new URL(endpoint)
   const verifier = new URL('/verifier', base)
   verifier.searchParams.set('sessionId', registeredSessionId)
   const proxy = new URL('/proxy', base)
-  proxy.searchParams.set('token', hostname)
+  proxy.searchParams.set('sessionId', registeredSessionId)
   return { verifierUrl: verifier.href, proxyUrl: proxy.href }
 }
 
@@ -136,10 +135,7 @@ function websocketIo(url: string): Promise<SocketIo> {
   })
 }
 
-async function registerSession(
-  message: ProveMessage,
-  hostname: string,
-): Promise<{
+async function registerSession(message: ProveMessage): Promise<{
   socket: WebSocket
   verifierUrl: string
   proxyUrl: string
@@ -184,7 +180,7 @@ async function registerSession(
         registered = true
         resolve({
           socket,
-          ...verifierUrls(endpoint, value.sessionId, hostname),
+          ...verifierUrls(endpoint, value.sessionId),
           completion,
         })
       } catch (error) {
@@ -392,7 +388,7 @@ async function prove(message: ProveMessage): Promise<void> {
   const origin = new URL(message.config.origin)
   assertAvailable(message)
   if (!isV1Message(message)) assertCapturedRequest(message)
-  const registration = await registerSession(message, origin.hostname)
+  const registration = await registerSession(message)
   const prover = new wasm.Prover({
     server_name: origin.hostname,
     mode: 'Mpc',
