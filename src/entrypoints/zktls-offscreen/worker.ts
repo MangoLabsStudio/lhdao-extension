@@ -17,7 +17,12 @@ import {
   type V1Connector,
 } from '@/lib/zktls/interpreter'
 import { assertVerifierProfile, ZKTLS_PROFILE } from '@/lib/zktls/profile'
-import { assertTicketAvailable, type Ticket } from '@/lib/zktls/signed-config'
+import {
+  assertTicketAvailable,
+  type ConfigEnvelope,
+  type Ticket,
+  type TicketEnvelope,
+} from '@/lib/zktls/signed-config'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -29,6 +34,8 @@ type CommonProveMessage = {
   sessionId: string
   connectorId: string
   ticket: Ticket
+  configEnvelope: ConfigEnvelope
+  ticketEnvelope: TicketEnvelope
 }
 type V1ProveMessage = CommonProveMessage & {
   config: V1Connector
@@ -65,6 +72,8 @@ export function sessionRegistrationPayload(message: ProveMessage): object {
     type: 'register',
     maxRecvData: message.config.request.max_recv_data,
     maxSentData: message.config.request.max_sent_data,
+    config_envelope: message.configEnvelope,
+    ticket_envelope: message.ticketEnvelope,
     sessionData: {
       session_id: message.sessionId,
       connector_id: message.connectorId,

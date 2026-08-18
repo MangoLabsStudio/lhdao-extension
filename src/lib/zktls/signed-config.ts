@@ -22,6 +22,19 @@ export type Ticket = {
   nonce: string
 }
 
+export type ConfigEnvelope = {
+  key_id: string
+  config: Connector
+  config_digest: string
+  signature: string
+}
+
+export type TicketEnvelope = {
+  key_id: string
+  ticket: Ticket
+  signature: string
+}
+
 function fail(message: string): never {
   throw new Error(message)
 }
@@ -225,7 +238,12 @@ export async function fetchAndVerifySignedConfig(
     now: string
     local: boolean
   },
-): Promise<{ config: Connector; ticket: Ticket }> {
+): Promise<{
+  config: Connector
+  ticket: Ticket
+  configEnvelope: ConfigEnvelope
+  ticketEnvelope: TicketEnvelope
+}> {
   const url = new URL(endpoint)
   if (
     url.username ||
@@ -255,5 +273,10 @@ export async function fetchAndVerifySignedConfig(
     now: options.now,
   })
   assertConnectorAvailable(config, options.now)
-  return { config, ticket }
+  return {
+    config,
+    ticket,
+    configEnvelope: payload.config_envelope as ConfigEnvelope,
+    ticketEnvelope: payload.ticket_envelope as TicketEnvelope,
+  }
 }

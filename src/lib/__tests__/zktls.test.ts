@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import {
   revealConfig,
   sessionRegistrationPayload,
@@ -6,6 +6,7 @@ import {
 } from '@/entrypoints/zktls-offscreen/worker'
 import {
   assertConnectorAvailable,
+  canonicalJson,
   configDigest,
   interpret,
   validateConnector,
@@ -15,7 +16,10 @@ import {
   ZKTLS_PAGE_CHANNEL,
 } from '@/lib/zktls/page-bridge'
 import { parseZkTlsRuntimeRequest } from '@/lib/zktls/runtime-request'
-import { assertTicketAvailable } from '@/lib/zktls/signed-config'
+import {
+  assertTicketAvailable,
+  fetchAndVerifySignedConfig,
+} from '@/lib/zktls/signed-config'
 
 const connector = {
   interpreter_version: 1,
@@ -66,6 +70,69 @@ const ticket = {
   nonce: 'n1',
 } as const
 
+const configEnvelope = {
+  key_id: 'k1',
+  config: htmlConnector,
+  config_digest: 'a'.repeat(64),
+  signature: 's'.repeat(86),
+}
+
+const ticketEnvelope = {
+  key_id: 'k1',
+  ticket,
+  signature: 't'.repeat(86),
+}
+
+function base64Url(value: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(value)))
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replaceAll('=', '')
+}
+
+async function signedEnvelopes(ticketDigest?: string) {
+  const config_digest = await configDigest(htmlConnector)
+  const key = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, [
+    'sign',
+    'verify',
+  ])
+  const config_envelope = {
+    key_id: 'k1',
+    config: htmlConnector,
+    config_digest,
+    signature: '',
+  }
+  config_envelope.signature = base64Url(
+    await crypto.subtle.sign(
+      'Ed25519',
+      key.privateKey,
+      new TextEncoder().encode(`lighthouse-zktls/config/v1:${config_digest}`),
+    ),
+  )
+  const signedTicket = {
+    ...ticket,
+    config_digest: ticketDigest ?? config_digest,
+  }
+  const ticket_envelope = {
+    key_id: 'k1',
+    ticket: signedTicket,
+    signature: base64Url(
+      await crypto.subtle.sign(
+        'Ed25519',
+        key.privateKey,
+        new TextEncoder().encode(
+          `lighthouse-zktls/session-ticket/v1:${canonicalJson(signedTicket)}`,
+        ),
+      ),
+    ),
+  }
+  return {
+    config_envelope,
+    ticket_envelope,
+    publicKeys: { k1: await crypto.subtle.exportKey('jwk', key.publicKey) },
+  }
+}
+
 describe('zkTLS strict boundaries', () => {
   test('accepts only the fixed connector language', async () => {
     expect(validateConnector(connector)).toMatchObject({
@@ -104,6 +171,47 @@ describe('zkTLS strict boundaries', () => {
     expect(() =>
       assertTicketAvailable(ticket, '2031-01-01T00:00:00.000Z'),
     ).toThrow('ticket is unavailable')
+  })
+
+  test('retains only the original envelopes after schema and binding checks', async () => {
+    const payload = await signedEnvelopes()
+    const { publicKeys, ...response } = payload
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({ ok: true, json: async () => response } as Response)
+    try {
+      const result = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        },
+      )
+      expect(result.configEnvelope).toBe(payload.config_envelope)
+      expect(result.ticketEnvelope).toBe(payload.ticket_envelope)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('rejects a signed ticket that does not bind the verified config', async () => {
+    const payload = await signedEnvelopes('b'.repeat(64))
+    const { publicKeys, ...response } = payload
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({ ok: true, json: async () => response } as Response)
+    try {
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        }),
+      ).rejects.toThrow('ticket did not bind the verified config.')
+    } finally {
+      fetch.mockRestore()
+    }
   })
 
   test('content parser rejects page-supplied config and extra fields', () => {
@@ -199,6 +307,8 @@ describe('zkTLS strict boundaries', () => {
       connectorId: 'github-login',
       config: htmlConnector,
       ticket,
+      configEnvelope,
+      ticketEnvelope,
       identity: 'octocat',
       cookie: 'session=secret',
     }
@@ -206,6 +316,8 @@ describe('zkTLS strict boundaries', () => {
       type: 'register',
       maxRecvData: 65536,
       maxSentData: 8192,
+      config_envelope: configEnvelope,
+      ticket_envelope: ticketEnvelope,
       sessionData: {
         session_id: 's1',
         connector_id: 'github-login',
@@ -215,6 +327,15 @@ describe('zkTLS strict boundaries', () => {
         nonce: 'n1',
       },
     })
+    const registration = sessionRegistrationPayload(message) as {
+      config_envelope: unknown
+      ticket_envelope: unknown
+    }
+    expect(registration.config_envelope).toBe(configEnvelope)
+    expect(registration.ticket_envelope).toBe(ticketEnvelope)
+    expect(JSON.stringify(sessionRegistrationPayload(message))).not.toContain(
+      'session=secret',
+    )
     expect(
       verifierUrls('ws://localhost:7047/session', 'registered1', 'github.com'),
     ).toEqual({
@@ -239,5 +360,30 @@ describe('zkTLS strict boundaries', () => {
     expect(() =>
       revealConfig({ ...message, config: connector }, sent, received),
     ).toThrow('JSON connectors are unsupported')
+  })
+
+  test('never registers captured request data or secret values', () => {
+    const message = {
+      id: 'job2',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: 'github-login',
+      config: htmlConnector,
+      ticket,
+      configEnvelope,
+      ticketEnvelope,
+      identity: 'octocat',
+      cookie: 'cookie=private',
+      captured: {
+        path: '/private',
+        body: '{"token":"private"}',
+        secrets: { authorization: 'Bearer private' },
+      },
+    }
+    const payload = JSON.stringify(sessionRegistrationPayload(message))
+    expect(payload).not.toContain('cookie=private')
+    expect(payload).not.toContain('Bearer private')
+    expect(payload).not.toContain('{"token":"private"}')
+    expect(payload).not.toContain('"captured"')
   })
 })
