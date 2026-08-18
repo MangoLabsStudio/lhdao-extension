@@ -22,8 +22,10 @@ import {
 import { parseZkTlsRuntimeRequest } from './runtime-request'
 import {
   assertTicketAvailable,
+  type ConfigEnvelope,
   fetchAndVerifySignedConfig,
   type Ticket,
+  type TicketEnvelope,
 } from './signed-config'
 
 type V1Job = {
@@ -82,7 +84,12 @@ function assertAvailable(config: Connector, ticket: Ticket): void {
 async function signedConnector(
   sessionId: string,
   connectorId: string,
-): Promise<{ config: Connector; ticket: Ticket }> {
+): Promise<{
+  config: Connector
+  ticket: Ticket
+  configEnvelope: ConfigEnvelope
+  ticketEnvelope: TicketEnvelope
+}> {
   if (!ZKTLS_PROFILE.enabled || !ZKTLS_PROFILE.apiEndpoint)
     throw new Error('zktls disabled')
   const endpoint = new URL(ZKTLS_PROFILE.apiEndpoint)
@@ -230,6 +237,8 @@ async function proveCapturedRequest(
   request: ReturnType<typeof parseZkTlsRuntimeRequest>,
   config: CapturedConnector,
   ticket: Ticket,
+  configEnvelope: ConfigEnvelope,
+  ticketEnvelope: TicketEnvelope,
 ): Promise<unknown> {
   if (!request) return null
   await ensurePermission(config.origin, request.connectorId)
@@ -310,6 +319,8 @@ async function proveCapturedRequest(
       connectorId: request.connectorId,
       config,
       ticket,
+      configEnvelope,
+      ticketEnvelope,
       captured: value,
     })) as {
       status: 'submitted' | 'error'
@@ -343,12 +354,16 @@ export async function handleZkTlsProof(
       status: 'unsupported',
     }
   try {
-    const { config, ticket } = await signedConnector(
-      request.sessionId,
-      request.connectorId,
-    )
+    const { config, ticket, configEnvelope, ticketEnvelope } =
+      await signedConnector(request.sessionId, request.connectorId)
     if (config.interpreter_version === 2 || config.interpreter_version === 3)
-      return await proveCapturedRequest(request, config, ticket)
+      return await proveCapturedRequest(
+        request,
+        config,
+        ticket,
+        configEnvelope,
+        ticketEnvelope,
+      )
     if (config.response_format !== 'html')
       return {
         type: 'zktls-prove-result',
@@ -407,6 +422,8 @@ export async function handleZkTlsProof(
       connectorId: request.connectorId,
       config,
       ticket,
+      configEnvelope,
+      ticketEnvelope,
       identity,
       cookie: value,
     })) as { status: 'submitted' | 'error'; code?: string }
