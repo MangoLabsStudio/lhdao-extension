@@ -16,8 +16,8 @@ import {
   parseProductExperiencePageRequest,
 } from '@/lib/product-experience-task-bridge'
 import {
+  createZkTlsPageResult,
   parseZkTlsPageRequest,
-  ZKTLS_PAGE_CHANNEL,
 } from '@/lib/zktls/page-bridge'
 import type { MsgResponse } from '@/types/messages'
 
@@ -172,25 +172,16 @@ export default defineContentScript({
               ? response
               : { status: 'error' as const, code: 'EXTENSION_ERROR' }
           window.postMessage(
-            {
-              channel: ZKTLS_PAGE_CHANNEL,
-              type: 'prove-result',
-              correlationId: request.correlationId,
-              status: result.status,
-              ...(result.code ? { code: result.code } : {}),
-            },
+            createZkTlsPageResult(request, result),
             LIGHTHOUSE_ORIGIN,
           )
         })
         .catch(() => {
           window.postMessage(
-            {
-              channel: ZKTLS_PAGE_CHANNEL,
-              type: 'prove-result',
-              correlationId: request.correlationId,
+            createZkTlsPageResult(request, {
               status: 'error',
               code: 'EXTENSION_ERROR',
-            },
+            }),
             LIGHTHOUSE_ORIGIN,
           )
         })
