@@ -90,6 +90,26 @@ describe('zkTLS v3 provider actions', () => {
         ],
       }),
     ).toThrow('timeout_ms')
+    expect(
+      validateConnector({
+        ...connector,
+        actions: [{ kind: 'navigate', path: '/settings/profile' }],
+      }),
+    ).toMatchObject({
+      actions: [{ kind: 'navigate', path: '/settings/profile' }],
+    })
+    expect(() =>
+      validateConnector({
+        ...connector,
+        actions: [{ kind: 'navigate', path: 'https://evil.example/' }],
+      }),
+    ).toThrow('relative path')
+    expect(() =>
+      validateConnector({
+        ...connector,
+        actions: [{ kind: 'navigate', path: '/\t/evil.example/' }],
+      }),
+    ).toThrow('relative path')
   })
 
   test('runs the fixed CSS action interpreter without executing configuration code', async () => {
@@ -97,11 +117,37 @@ describe('zkTLS v3 provider actions', () => {
       '<form id="form"><input id="profile"><button id="load-profile" type="button">Load</button></form>'
     const click = vi.fn()
     document.querySelector<HTMLButtonElement>('#load-profile')!.onclick = click
-    await runProviderActionsInPage(actions)
+    await runProviderActionsInPage(window.location.origin, actions)
     expect(document.querySelector<HTMLInputElement>('#profile')!.value).toBe(
       'octocat',
     )
     expect(click).toHaveBeenCalledOnce()
+  })
+
+  test('runs signed relative navigation without accepting an arbitrary origin', async () => {
+    const assign = vi.fn()
+    const original = window.location
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { assign, origin: 'https://github.com' },
+    })
+    try {
+      await runProviderActionsInPage('https://github.com', [
+        { kind: 'navigate', path: '/settings/profile' },
+      ])
+      expect(assign).toHaveBeenCalledWith('/settings/profile')
+    } finally {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: original,
+      })
+    }
+  })
+
+  test('refuses to run provider actions on the wrong origin', async () => {
+    await expect(
+      runProviderActionsInPage('https://github.com', actions),
+    ).rejects.toThrow('origin mismatch')
   })
 
   test('injects only the packaged interpreter into the provider tab', async () => {
@@ -112,11 +158,11 @@ describe('zkTLS v3 provider actions', () => {
       value: executeScript,
     })
     try {
-      await runProviderActions(7, actions)
+      await runProviderActions(7, 'https://github.com', actions)
       expect(executeScript).toHaveBeenCalledWith({
         target: { tabId: 7, frameIds: [0] },
         func: runProviderActionsInPage,
-        args: [actions],
+        args: ['https://github.com', actions],
       })
     } finally {
       Object.defineProperty(chrome.scripting, 'executeScript', {
