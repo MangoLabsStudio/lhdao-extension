@@ -404,12 +404,16 @@ describe('zkTLS strict boundaries', () => {
     expect(JSON.stringify(sessionRegistrationPayload(message))).not.toContain(
       'session=secret',
     )
-    expect(
-      verifierUrls('ws://localhost:7047/session', 'registered1', 'github.com'),
-    ).toEqual({
-      verifierUrl: 'ws://localhost:7047/verifier?sessionId=registered1',
-      proxyUrl: 'ws://localhost:7047/proxy?token=github.com',
-    })
+    const urls = verifierUrls('ws://localhost:7047/session', 'registered1')
+    const verifier = new URL(urls.verifierUrl)
+    const proxy = new URL(urls.proxyUrl)
+    expect(verifier.searchParams.get('sessionId')).toBe('registered1')
+    expect(proxy.searchParams.get('sessionId')).toBe('registered1')
+    expect(proxy.searchParams.has('token')).toBe(false)
+    expect(proxy.href).not.toContain('github.com')
+    expect(() => verifierUrls('ws://localhost:7047/session', 'bad/id')).toThrow(
+      'verifier rejected session',
+    )
     const sent = new TextEncoder().encode(
       'GET /profile/octocat HTTP/1.1\r\nHost: github.com\r\n\r\n',
     )
