@@ -214,6 +214,74 @@ describe('zkTLS strict boundaries', () => {
     }
   })
 
+  test('rejects malformed config and ticket envelope schemas before returning', async () => {
+    const cases: {
+      name: string
+      mutate: (payload: Awaited<ReturnType<typeof signedEnvelopes>>) => void
+    }[] = [
+      {
+        name: 'config envelope missing signature',
+        mutate: (payload) => {
+          delete (payload.config_envelope as Record<string, unknown>).signature
+        },
+      },
+      {
+        name: 'config envelope extra field',
+        mutate: (payload) => {
+          const envelope = payload.config_envelope as Record<string, unknown>
+          envelope.extra = true
+        },
+      },
+      {
+        name: 'config envelope wrong key type',
+        mutate: (payload) => {
+          const envelope = payload.config_envelope as Record<string, unknown>
+          envelope.key_id = 1
+        },
+      },
+      {
+        name: 'ticket envelope missing signature',
+        mutate: (payload) => {
+          delete (payload.ticket_envelope as Record<string, unknown>).signature
+        },
+      },
+      {
+        name: 'ticket envelope extra field',
+        mutate: (payload) => {
+          const envelope = payload.ticket_envelope as Record<string, unknown>
+          envelope.extra = true
+        },
+      },
+      {
+        name: 'ticket envelope wrong key type',
+        mutate: (payload) => {
+          const envelope = payload.ticket_envelope as Record<string, unknown>
+          envelope.key_id = 1
+        },
+      },
+    ]
+    for (const value of cases) {
+      const payload = await signedEnvelopes()
+      value.mutate(payload)
+      const { publicKeys, ...response } = payload
+      const fetch = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValue({ ok: true, json: async () => response } as Response)
+      try {
+        await expect(
+          fetchAndVerifySignedConfig('http://localhost/config', {
+            publicKeys,
+            now: '2026-08-15T00:00:00.000Z',
+            local: true,
+          }),
+          value.name,
+        ).rejects.toThrow()
+      } finally {
+        fetch.mockRestore()
+      }
+    }
+  })
+
   test('content parser rejects page-supplied config and extra fields', () => {
     const event = {
       source: globalThis.window,
