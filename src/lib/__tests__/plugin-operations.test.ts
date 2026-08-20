@@ -10,11 +10,14 @@ import {
   MintProductExperienceTicketOperationName,
   MY_RESERVED_ENGAGEMENTS_QUERY,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+  ProductZkTlsRuleProgressOperationName,
+  StartProductZkTlsProofOperationName,
+  StartProductZkTlsTestProofOperationName,
   SubmitProductExperienceProofOperationName,
 } from '../queries'
 
 const PRODUCT_EXPERIENCE_DOCUMENT_SHA256 =
-  '5e6af250a2b6f5a89aa578c9b622cdf4e49c4098b5e4295f0a854521c256c8bf'
+  'afa8256b861be2b084ac8976478a14bd716d50473c203ca87e62868cce720577'
 
 const PRODUCT_EXPERIENCE_OPERATIONS = [
   {
@@ -29,10 +32,22 @@ const PRODUCT_EXPERIENCE_OPERATIONS = [
     id: 'verify.product-experience.proof.v1',
     operationName: SubmitProductExperienceProofOperationName,
   },
+  {
+    id: 'verify.product-experience.zktls-start.v1',
+    operationName: StartProductZkTlsProofOperationName,
+  },
+  {
+    id: 'verify.product-experience.zktls-test-start.v1',
+    operationName: StartProductZkTlsTestProofOperationName,
+  },
+  {
+    id: 'verify.product-experience.zktls-progress.v1',
+    operationName: ProductZkTlsRuleProgressOperationName,
+  },
 ] as const
 
 describe('PLUGIN_OPERATIONS', () => {
-  it('contains exactly the approved 16 plugin operations', () => {
+  it('contains exactly the approved 19 plugin operations', () => {
     expect(
       PLUGIN_OPERATIONS.map((operation) => operation.operationName),
     ).toEqual([
@@ -52,6 +67,9 @@ describe('PLUGIN_OPERATIONS', () => {
       'MintProductExperienceTicket',
       'MintProductExperienceTestTicket',
       'SubmitProductExperienceProof',
+      'StartProductZkTlsProof',
+      'StartProductZkTlsTestProof',
+      'ProductZkTlsRuleProgress',
     ])
   })
 
@@ -99,7 +117,7 @@ describe('PLUGIN_OPERATIONS', () => {
     ).toBeUndefined()
   })
 
-  it('matches all three operations sharing the product document', async () => {
+  it('matches all six operations sharing the product document', async () => {
     await expect(sha256Hex(PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT)).resolves.toBe(
       PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
     )

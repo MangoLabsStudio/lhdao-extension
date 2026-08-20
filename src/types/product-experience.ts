@@ -1,5 +1,12 @@
 export type ProductTicketKind = 'PARTICIPANT' | 'TEST'
 export type ProductExperienceEvaluationMode = 'STRICT' | 'SELECTOR_ONLY'
+export type ProductExperienceVerificationMode = 'LEGACY_DOM' | 'ZKTLS'
+export type ProductZkTlsProgressStatus =
+  | 'PENDING'
+  | 'SUBMITTED'
+  | 'PARTIAL'
+  | 'VERIFIED'
+export type ProductZkTlsScalar = boolean | number | string | null
 
 export interface ProductExperienceTaskRef {
   campaignId: string
@@ -42,5 +49,21 @@ export interface ProductExperienceTicket {
   ruleSetVersion: number
   allowedOrigins: string[]
   completionMode: 'ALL'
+  verificationMode: ProductExperienceVerificationMode
   rules: ProductExperienceRule[]
+}
+
+export interface ProductZkTlsSession {
+  sessionId: string
+  connectorId: string
+  expiresAt: string
+}
+
+export interface ProductZkTlsRuleProgress {
+  ruleId: string
+  title: string
+  status: ProductZkTlsProgressStatus
+  current: ProductZkTlsScalar
+  target: ProductZkTlsScalar
+  unit: string | null
 }

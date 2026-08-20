@@ -3,6 +3,10 @@ import type {
   ProductExperienceCondition,
   ProductExperienceTicket,
   ProductRuleMatch,
+  ProductZkTlsProgressStatus,
+  ProductZkTlsRuleProgress,
+  ProductZkTlsScalar,
+  ProductZkTlsSession,
 } from '../types/product-experience'
 
 /**
@@ -545,7 +549,7 @@ export interface CreateAutoReinvestResult {
 
 // ── Product experience L2 ticket + proof ─────────────────────────────
 //
-// GraphQL document 的唯一来源是 product-experience.graphql。三个 operation
+// GraphQL document 的唯一来源是 product-experience.graphql。六个 operation
 // 共享同一份 raw document，调用 gql() 时通过 operationName 选择，避免 TS 与
 // contract-validation 文件出现两份可能漂移的 query。
 
@@ -556,12 +560,30 @@ export const MintProductExperienceTestTicketOperationName =
   'MintProductExperienceTestTicket'
 export const SubmitProductExperienceProofOperationName =
   'SubmitProductExperienceProof'
+export const StartProductZkTlsProofOperationName = 'StartProductZkTlsProof'
+export const StartProductZkTlsTestProofOperationName =
+  'StartProductZkTlsTestProof'
+export const ProductZkTlsRuleProgressOperationName = 'ProductZkTlsRuleProgress'
 
 export interface MintProductExperienceTicketVariables {
   campaignId: string
 }
 
 export interface MintProductExperienceTestTicketVariables {
+  campaignId: string
+}
+
+export interface StartProductZkTlsProofVariables {
+  campaignId: string
+  ruleId: string
+}
+
+export interface StartProductZkTlsTestProofVariables {
+  campaignId: string
+  ruleId: string
+}
+
+export interface ProductZkTlsRuleProgressVariables {
   campaignId: string
 }
 
@@ -615,6 +637,33 @@ export interface SubmitProductExperienceProofResult {
   }
 }
 
+export interface ProductZkTlsSessionWire {
+  sessionId: string
+  connectorId: string
+  expiresAt: string
+}
+
+export interface StartProductZkTlsProofResult {
+  startProductZkTlsProof: ProductZkTlsSession
+}
+
+export interface StartProductZkTlsTestProofResult {
+  startProductZkTlsTestProof: ProductZkTlsSession
+}
+
+export interface ProductZkTlsRuleProgressWire {
+  ruleId: string
+  title: string
+  status: ProductZkTlsProgressStatus
+  current: ProductZkTlsScalar
+  target: ProductZkTlsScalar
+  unit: string | null
+}
+
+export interface ProductZkTlsRuleProgressResult {
+  productZkTlsRuleProgress: ProductZkTlsRuleProgress[]
+}
+
 const INVALID_PRODUCT_EXPERIENCE_RESPONSE =
   'Invalid product experience GraphQL response'
 
@@ -627,6 +676,21 @@ function requireRecord(value: unknown): Record<string, unknown> {
     return invalidProductExperienceResponse()
   }
   return value as Record<string, unknown>
+}
+
+function requireExactRecord(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const record = requireRecord(value)
+  const actualKeys = Object.keys(record)
+  if (
+    actualKeys.length !== keys.length ||
+    keys.some((key) => !Object.hasOwn(record, key))
+  ) {
+    return invalidProductExperienceResponse()
+  }
+  return record
 }
 
 function requireString(record: Record<string, unknown>, key: string): string {
@@ -666,7 +730,11 @@ function requireNullableDateTime(
 ): string | null {
   const value = record[key]
   if (value === null) return null
-  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+  if (typeof value !== 'string') {
+    return invalidProductExperienceResponse()
+  }
+  const timestamp = Date.parse(value)
+  if (Number.isNaN(timestamp) || new Date(timestamp).toISOString() !== value) {
     return invalidProductExperienceResponse()
   }
   return value
@@ -676,6 +744,32 @@ function requireDateTime(record: Record<string, unknown>, key: string): string {
   const value = requireNullableDateTime(record, key)
   if (value === null) return invalidProductExperienceResponse()
   return value
+}
+
+function requireProductZkTlsScalar(value: unknown): ProductZkTlsScalar {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' &&
+      Number.isFinite(value) &&
+      Math.abs(value) <= Number.MAX_SAFE_INTEGER) ||
+    (typeof value === 'string' && value.length > 0)
+  ) {
+    return value
+  }
+  return invalidProductExperienceResponse()
+}
+
+function requireProductZkTlsStatus(value: unknown): ProductZkTlsProgressStatus {
+  if (
+    value === 'PENDING' ||
+    value === 'SUBMITTED' ||
+    value === 'PARTIAL' ||
+    value === 'VERIFIED'
+  ) {
+    return value
+  }
+  return invalidProductExperienceResponse()
 }
 
 function hasOnlyNullFields(
@@ -797,6 +891,12 @@ function parseProductExperienceTicket(value: unknown): ProductExperienceTicket {
   if (ticket.completionMode !== 'ALL') {
     return invalidProductExperienceResponse()
   }
+  if (
+    ticket.verificationMode !== 'LEGACY_DOM' &&
+    ticket.verificationMode !== 'ZKTLS'
+  ) {
+    return invalidProductExperienceResponse()
+  }
 
   const allowedOrigins = rawAllowedOrigins.map((origin) => {
     if (typeof origin !== 'string' || origin.length === 0) {
@@ -827,7 +927,46 @@ function parseProductExperienceTicket(value: unknown): ProductExperienceTicket {
     ruleSetVersion: requirePositiveInteger(ticket, 'ruleSetVersion'),
     allowedOrigins,
     completionMode: 'ALL',
+    verificationMode: ticket.verificationMode,
     rules,
+  }
+}
+
+function parseProductZkTlsSession(value: unknown): ProductZkTlsSession {
+  const session = requireExactRecord(value, [
+    'sessionId',
+    'connectorId',
+    'expiresAt',
+  ])
+  return {
+    sessionId: requireString(session, 'sessionId'),
+    connectorId: requireString(session, 'connectorId'),
+    expiresAt: requireDateTime(session, 'expiresAt'),
+  }
+}
+
+function parseProductZkTlsRuleProgress(
+  value: unknown,
+): ProductZkTlsRuleProgress {
+  const progress = requireExactRecord(value, [
+    'ruleId',
+    'title',
+    'status',
+    'current',
+    'target',
+    'unit',
+  ])
+  const unit = progress.unit
+  if (unit !== null && (typeof unit !== 'string' || unit.length === 0)) {
+    return invalidProductExperienceResponse()
+  }
+  return {
+    ruleId: requireString(progress, 'ruleId'),
+    title: requireString(progress, 'title'),
+    status: requireProductZkTlsStatus(progress.status),
+    current: requireProductZkTlsScalar(progress.current),
+    target: requireProductZkTlsScalar(progress.target),
+    unit,
   }
 }
 
@@ -877,5 +1016,38 @@ export function parseSubmitProductExperienceProofResult(
       verificationKind: proof.verificationKind,
       verifiedAt: requireNullableDateTime(proof, 'verifiedAt'),
     },
+  }
+}
+
+export function parseStartProductZkTlsProofResult(
+  value: unknown,
+): StartProductZkTlsProofResult {
+  const result = requireExactRecord(value, ['startProductZkTlsProof'])
+  return {
+    startProductZkTlsProof: parseProductZkTlsSession(
+      result.startProductZkTlsProof,
+    ),
+  }
+}
+
+export function parseStartProductZkTlsTestProofResult(
+  value: unknown,
+): StartProductZkTlsTestProofResult {
+  const result = requireExactRecord(value, ['startProductZkTlsTestProof'])
+  return {
+    startProductZkTlsTestProof: parseProductZkTlsSession(
+      result.startProductZkTlsTestProof,
+    ),
+  }
+}
+
+export function parseProductZkTlsRuleProgressResult(
+  value: unknown,
+): ProductZkTlsRuleProgressResult {
+  const result = requireExactRecord(value, ['productZkTlsRuleProgress'])
+  const progress = result.productZkTlsRuleProgress
+  if (!Array.isArray(progress)) return invalidProductExperienceResponse()
+  return {
+    productZkTlsRuleProgress: progress.map(parseProductZkTlsRuleProgress),
   }
 }

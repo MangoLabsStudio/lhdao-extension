@@ -65,6 +65,7 @@ function ticket(overrides: Partial<ProductExperienceTicket> = {}) {
     ruleSetVersion: 3,
     allowedOrigins: [CLIENT_ORIGIN, SECOND_ORIGIN],
     completionMode: 'ALL' as const,
+    verificationMode: 'LEGACY_DOM' as const,
     rules,
     ...overrides,
   }

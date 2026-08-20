@@ -615,6 +615,27 @@ describe('gql transport outcomes', () => {
         name: productQueries.SubmitProductExperienceProofOperationName,
         variables: { input: { campaignId: 'campaign-product-001' } },
       },
+      {
+        id: 'verify.product-experience.zktls-start.v1',
+        name: productQueries.StartProductZkTlsProofOperationName,
+        variables: {
+          campaignId: 'campaign-product-001',
+          ruleId: 'rule-a',
+        },
+      },
+      {
+        id: 'verify.product-experience.zktls-test-start.v1',
+        name: productQueries.StartProductZkTlsTestProofOperationName,
+        variables: {
+          campaignId: 'campaign-product-001',
+          ruleId: 'rule-a',
+        },
+      },
+      {
+        id: 'verify.product-experience.zktls-progress.v1',
+        name: productQueries.ProductZkTlsRuleProgressOperationName,
+        variables: { campaignId: 'campaign-product-001' },
+      },
     ]
 
     for (const operation of operations) {
@@ -625,7 +646,7 @@ describe('gql transport outcomes', () => {
       )
     }
 
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
     for (const [index, operation] of operations.entries()) {
       const init = fetchMock.mock.calls[index]?.[1] as RequestInit | undefined
       const headers = new Headers(init?.headers)
@@ -700,6 +721,7 @@ describe('product experience GraphQL document and response parsers', () => {
     ruleSetVersion: 3,
     allowedOrigins: ['https://client.example'],
     completionMode: 'ALL',
+    verificationMode: 'ZKTLS',
     rules: [
       {
         id: 'exists',
@@ -792,16 +814,21 @@ describe('product experience GraphQL document and response parsers', () => {
       "import productExperienceGraphql from '../graphql/product-experience.graphql?raw'",
     )
 
-    for (const operationName of [
-      'MintProductExperienceTicket',
-      'MintProductExperienceTestTicket',
-      'SubmitProductExperienceProof',
+    for (const [operationType, operationName] of [
+      ['mutation', 'MintProductExperienceTicket'],
+      ['mutation', 'MintProductExperienceTestTicket'],
+      ['mutation', 'SubmitProductExperienceProof'],
+      ['mutation', 'StartProductZkTlsProof'],
+      ['mutation', 'StartProductZkTlsTestProof'],
+      ['query', 'ProductZkTlsRuleProgress'],
     ]) {
       expect(
-        graphqlSource.match(new RegExp(`mutation ${operationName}\\b`, 'g')),
+        graphqlSource.match(
+          new RegExp(`${operationType} ${operationName}\\b`, 'g'),
+        ),
       ).toHaveLength(1)
       expect(queriesSource).not.toMatch(
-        new RegExp(`mutation\\s+${operationName}\\b`),
+        new RegExp(`${operationType}\\s+${operationName}\\b`),
       )
       expect(queryExports[`${operationName}OperationName`]).toBe(operationName)
     }
@@ -996,6 +1023,329 @@ describe('product experience GraphQL document and response parsers', () => {
       { type: 'TEXT_CONTAINS', expected: 'Complete' },
     )
     expect(testVariables).toEqual({ campaignId: 'campaign-product-001' })
+  })
+
+  it.each([
+    undefined,
+    'UNKNOWN',
+  ])('rejects a missing or unknown ticket verification mode', (verificationMode) => {
+    const parseResult = requireQueryExport<(value: unknown) => unknown>(
+      'parseMintProductExperienceTicketResult',
+      'function',
+    )
+    const wire = { ...ticketWire, verificationMode }
+    if (verificationMode === undefined) delete wire.verificationMode
+
+    expect(() => parseResult({ mintProductExperienceTicket: wire })).toThrow(
+      'Invalid product experience GraphQL response',
+    )
+  })
+
+  it.each([
+    'LEGACY_DOM',
+    'ZKTLS',
+  ])('accepts the %s ticket verification mode', (verificationMode) => {
+    const parseResult = requireQueryExport<(value: unknown) => unknown>(
+      'parseMintProductExperienceTicketResult',
+      'function',
+    )
+
+    expect(
+      parseResult({
+        mintProductExperienceTicket: { ...ticketWire, verificationMode },
+      }),
+    ).toHaveProperty(
+      'mintProductExperienceTicket.verificationMode',
+      verificationMode,
+    )
+  })
+
+  it.each([
+    [
+      'participant',
+      'parseStartProductZkTlsProofResult',
+      'startProductZkTlsProof',
+    ],
+    [
+      'test',
+      'parseStartProductZkTlsTestProofResult',
+      'startProductZkTlsTestProof',
+    ],
+  ])('strictly parses a %s zkTLS proof session', (_kind, exportName, field) => {
+    const parseResult = requireQueryExport<(value: unknown) => unknown>(
+      exportName,
+      'function',
+    )
+    const session = {
+      sessionId: 'session-001',
+      connectorId: 'connector-001',
+      expiresAt: '2026-07-13T10:30:00.000Z',
+    }
+
+    expect(parseResult({ [field]: session })).toEqual({ [field]: session })
+  })
+
+  it.each([
+    [{ connectorId: 'connector-001', expiresAt: '2026-07-13T10:30:00.000Z' }],
+    [
+      {
+        sessionId: 'session-001',
+        connectorId: 'connector-001',
+        expiresAt: '2026-07-13T10:30:00.000Z',
+        claim: 'must-not-leak',
+      },
+    ],
+    [
+      {
+        sessionId: '',
+        connectorId: 'connector-001',
+        expiresAt: '2026-07-13T10:30:00.000Z',
+      },
+    ],
+    [
+      {
+        sessionId: 'session-001',
+        connectorId: '',
+        expiresAt: '2026-07-13T10:30:00.000Z',
+      },
+    ],
+    [
+      {
+        sessionId: 'session-001',
+        connectorId: 'connector-001',
+        expiresAt: 'not-a-date',
+      },
+    ],
+    [
+      {
+        sessionId: 'session-001',
+        connectorId: 'connector-001',
+        expiresAt: '2026-02-31T10:30:00.000Z',
+      },
+    ],
+  ])('rejects a malformed zkTLS proof session %#', (session) => {
+    const parseResult = requireQueryExport<(value: unknown) => unknown>(
+      'parseStartProductZkTlsProofResult',
+      'function',
+    )
+
+    expect(() => parseResult({ startProductZkTlsProof: session })).toThrow(
+      'Invalid product experience GraphQL response',
+    )
+  })
+
+  it.each([
+    {},
+    {
+      startProductZkTlsProof: {
+        sessionId: 'session-001',
+        connectorId: 'connector-001',
+        expiresAt: '2026-07-13T10:30:00.000Z',
+      },
+      campaign: {},
+    },
+  ])('rejects an invalid zkTLS proof response envelope %#', (response) => {
+    const parseResult = requireQueryExport<(value: unknown) => unknown>(
+      'parseStartProductZkTlsProofResult',
+      'function',
+    )
+
+    expect(() => parseResult(response)).toThrow(
+      'Invalid product experience GraphQL response',
+    )
+  })
+
+  it('strictly parses zkTLS rule progress in stable wire order', () => {
+    const parseResult = requireQueryExport<(value: unknown) => unknown>(
+      'parseProductZkTlsRuleProgressResult',
+      'function',
+    )
+    const progress = [
+      {
+        ruleId: 'deposit',
+        title: 'Deposit at least 100 USDT',
+        status: 'VERIFIED',
+        current: 120,
+        target: 100,
+        unit: 'USDT',
+      },
+      {
+        ruleId: 'kyc',
+        title: 'KYC complete',
+        status: 'PENDING',
+        current: false,
+        target: true,
+        unit: null,
+      },
+      {
+        ruleId: 'tier',
+        title: 'Tier name',
+        status: 'PARTIAL',
+        current: 'basic',
+        target: 'pro',
+        unit: null,
+      },
+      {
+        ruleId: 'optional',
+        title: 'Optional fact',
+        status: 'SUBMITTED',
+        current: null,
+        target: null,
+        unit: null,
+      },
+    ]
+
+    expect(parseResult({ productZkTlsRuleProgress: progress })).toEqual({
+      productZkTlsRuleProgress: progress,
+    })
+  })
+
+  it.each([
+    [
+      'missing field',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 0,
+        target: 100,
+      },
+    ],
+    [
+      'extra field',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 0,
+        target: 100,
+        unit: 'USDT',
+        connectorId: 'must-not-leak',
+      },
+    ],
+    [
+      'empty rule id',
+      {
+        ruleId: '',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 0,
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'empty title',
+      {
+        ruleId: 'deposit',
+        title: '',
+        status: 'PENDING',
+        current: 0,
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'unknown status',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'FAILED',
+        current: 0,
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'object current',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: {},
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'array target',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 0,
+        target: [],
+        unit: 'USDT',
+      },
+    ],
+    [
+      'nonfinite current',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: Number.POSITIVE_INFINITY,
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'unsafe numeric magnitude',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: Number.MAX_VALUE,
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'empty scalar string',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: '',
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'invalid unit',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 0,
+        target: 100,
+        unit: '',
+      },
+    ],
+  ])('rejects progress with %s', (_label, item) => {
+    const parseResult = requireQueryExport<(value: unknown) => unknown>(
+      'parseProductZkTlsRuleProgressResult',
+      'function',
+    )
+
+    expect(() => parseResult({ productZkTlsRuleProgress: [item] })).toThrow(
+      'Invalid product experience GraphQL response',
+    )
+  })
+
+  it.each([
+    {},
+    { productZkTlsRuleProgress: null },
+    { productZkTlsRuleProgress: [], campaign: {} },
+  ])('rejects an invalid zkTLS progress response envelope %#', (response) => {
+    const parseResult = requireQueryExport<(value: unknown) => unknown>(
+      'parseProductZkTlsRuleProgressResult',
+      'function',
+    )
+
+    expect(() => parseResult(response)).toThrow(
+      'Invalid product experience GraphQL response',
+    )
   })
 
   it('parses the proof response and rejects malformed response fields', () => {

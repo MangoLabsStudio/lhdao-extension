@@ -12,14 +12,17 @@ import {
   POLL_EXTENSION_PAIRING_QUERY,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
+  ProductZkTlsRuleProgressOperationName,
   RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
+  StartProductZkTlsProofOperationName,
+  StartProductZkTlsTestProofOperationName,
   SUBMIT_ENGAGEMENT_PROOF_MUTATION,
   SubmitProductExperienceProofOperationName,
 } from './queries'
 
 const PRODUCT_EXPERIENCE_DOCUMENT_SHA256 =
-  '5e6af250a2b6f5a89aa578c9b622cdf4e49c4098b5e4295f0a854521c256c8bf'
+  'afa8256b861be2b084ac8976478a14bd716d50473c203ca87e62868cce720577'
 
 export type PluginOperationPermission =
   | 'public'
@@ -146,6 +149,27 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
   operation(
     'verify.product-experience.proof.v1',
     SubmitProductExperienceProofOperationName,
+    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+    'verify',
+  ),
+  operation(
+    'verify.product-experience.zktls-start.v1',
+    StartProductZkTlsProofOperationName,
+    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+    'verify',
+  ),
+  operation(
+    'verify.product-experience.zktls-test-start.v1',
+    StartProductZkTlsTestProofOperationName,
+    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+    'verify',
+  ),
+  operation(
+    'verify.product-experience.zktls-progress.v1',
+    ProductZkTlsRuleProgressOperationName,
     PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
     PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
     'verify',

@@ -6,6 +6,7 @@ mutation MintProductExperienceTicket($campaignId: String!) {
     ruleSetVersion
     allowedOrigins
     completionMode
+    verificationMode
     rules {
       id
       title
@@ -30,6 +31,7 @@ mutation MintProductExperienceTestTicket($campaignId: String!) {
     ruleSetVersion
     allowedOrigins
     completionMode
+    verificationMode
     rules {
       id
       title
@@ -56,5 +58,32 @@ mutation SubmitProductExperienceProof(
     configVersion
     verificationKind
     verifiedAt
+  }
+}
+
+mutation StartProductZkTlsProof($campaignId: String!, $ruleId: String!) {
+  startProductZkTlsProof(campaignId: $campaignId, ruleId: $ruleId) {
+    sessionId
+    connectorId
+    expiresAt
+  }
+}
+
+mutation StartProductZkTlsTestProof($campaignId: String!, $ruleId: String!) {
+  startProductZkTlsTestProof(campaignId: $campaignId, ruleId: $ruleId) {
+    sessionId
+    connectorId
+    expiresAt
+  }
+}
+
+query ProductZkTlsRuleProgress($campaignId: String!) {
+  productZkTlsRuleProgress(campaignId: $campaignId) {
+    ruleId
+    title
+    status
+    current
+    target
+    unit
   }
 }
