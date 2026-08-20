@@ -1322,6 +1322,84 @@ describe('product experience GraphQL document and response parsers', () => {
         unit: '',
       },
     ],
+    [
+      'overlong rule id',
+      {
+        ruleId: 'r'.repeat(129),
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 0,
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'overlong title',
+      {
+        ruleId: 'deposit',
+        title: 't'.repeat(257),
+        status: 'PENDING',
+        current: 0,
+        target: 100,
+        unit: 'USDT',
+      },
+    ],
+    [
+      'overlong unit',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 0,
+        target: 100,
+        unit: 'u'.repeat(65),
+      },
+    ],
+    [
+      'overlong current string',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 'c'.repeat(1025),
+        target: 'target',
+        unit: null,
+      },
+    ],
+    [
+      'overlong target string',
+      {
+        ruleId: 'deposit',
+        title: 'Deposit',
+        status: 'PENDING',
+        current: 'current',
+        target: 't'.repeat(1025),
+        unit: null,
+      },
+    ],
+    ...(
+      [
+        ['rule id', 'ruleId'],
+        ['title', 'title'],
+        ['unit', 'unit'],
+        ['current string', 'current'],
+        ['target string', 'target'],
+      ] as const
+    ).map(
+      ([label, field]) =>
+        [
+          `${label} control character`,
+          {
+            ruleId: 'deposit',
+            title: 'Deposit',
+            status: 'PENDING',
+            current: 'current',
+            target: 'target',
+            unit: 'USDT',
+            [field]: `unsafe\u202e${field}`,
+          },
+        ] as [string, Record<string, unknown>],
+    ),
   ])('rejects progress with %s', (_label, item) => {
     const parseResult = requireQueryExport<(value: unknown) => unknown>(
       'parseProductZkTlsRuleProgressResult',

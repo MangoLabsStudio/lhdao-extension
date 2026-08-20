@@ -142,10 +142,20 @@ function projectCopy(
 }
 
 function displayText(value: string): string {
-  return Array.from(value, (character) => {
-    const code = character.charCodeAt(0)
-    return code <= 31 || (code >= 127 && code <= 159) ? ' ' : character
-  }).join('')
+  let result = ''
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    const unsafe =
+      code <= 31 ||
+      (code >= 127 && code <= 159) ||
+      code === 0x061c ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069)
+    result += unsafe ? ' ' : value[index]
+  }
+  return result
 }
 
 function scalarLabel(value: ProductZkTlsScalar): string {
@@ -183,10 +193,13 @@ export function ProductExperienceCard({
   const total = Math.max(0, state.totalRuleCount)
   const progress = total === 0 ? 0 : Math.round((completed / total) * 100)
   const action = busy ? null : actionLabel(state)
-  const originLabel = state.currentOriginAllowed
-    ? '当前网站可验证'
-    : state.status === 'origin-mismatch'
-      ? '当前网站不在允许范围'
+  const originMismatch =
+    state.status === 'origin-mismatch' || state.error === 'ORIGIN_NOT_ALLOWED'
+  const originAllowed = state.currentOriginAllowed && !originMismatch
+  const originLabel = originMismatch
+    ? '当前网站不匹配'
+    : originAllowed
+      ? '当前网站可验证'
       : '等待当前网站授权'
 
   return (
@@ -234,8 +247,9 @@ export function ProductExperienceCard({
             </p>
           </div>
           <span
+            data-testid="product-origin-status"
             className={`rounded-md border px-2 py-1 text-[9px] font-semibold ${
-              state.currentOriginAllowed
+              originAllowed
                 ? 'border-teal-400/20 bg-teal-400/10 text-teal-200'
                 : 'border-slate-600 bg-slate-900 text-slate-400'
             }`}

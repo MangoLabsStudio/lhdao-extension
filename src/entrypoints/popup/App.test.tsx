@@ -406,6 +406,10 @@ describe('product experience popup', () => {
     await vi.waitFor(() => {
       expect(harness.container.textContent).toContain('当前网站不匹配')
       expect(findButton(harness.container, '检查当前网站')).toBeTruthy()
+      expect(
+        harness.container.querySelector('[data-testid="product-origin-status"]')
+          ?.textContent,
+      ).toBe('当前网站不匹配')
     })
     expect(harness.container.textContent).not.toContain('重新授权')
 
@@ -471,7 +475,10 @@ describe('product experience popup', () => {
         zkTlsProgress: [
           {
             ruleId: 'deposit',
-            title: '入金\u0000余额\n超长标题'.repeat(20),
+            title:
+              '入金\u0000余额\n超长\u202e标题\u2066隔离\u200f文本\u061c'.repeat(
+                20,
+              ),
             status: 'SUBMITTED',
             current: null,
             target: 100,
@@ -487,7 +494,15 @@ describe('product experience popup', () => {
       expect(
         Array.from(container.textContent ?? '').every((character) => {
           const code = character.charCodeAt(0)
-          return code > 31 && (code < 127 || code > 159)
+          return (
+            code > 31 &&
+            (code < 127 || code > 159) &&
+            code !== 0x061c &&
+            code !== 0x200e &&
+            code !== 0x200f &&
+            (code < 0x202a || code > 0x202e) &&
+            (code < 0x2066 || code > 0x2069)
+          )
         }),
       ).toBe(true)
     })

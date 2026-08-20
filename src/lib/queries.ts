@@ -666,6 +666,10 @@ export interface ProductZkTlsRuleProgressResult {
 
 const INVALID_PRODUCT_EXPERIENCE_RESPONSE =
   'Invalid product experience GraphQL response'
+const MAX_PRODUCT_PROGRESS_RULE_ID_LENGTH = 128
+const MAX_PRODUCT_PROGRESS_TITLE_LENGTH = 256
+const MAX_PRODUCT_PROGRESS_UNIT_LENGTH = 64
+const MAX_PRODUCT_PROGRESS_SCALAR_LENGTH = 1024
 
 function invalidProductExperienceResponse(): never {
   throw new Error(INVALID_PRODUCT_EXPERIENCE_RESPONSE)
@@ -696,6 +700,41 @@ function requireExactRecord(
 function requireString(record: Record<string, unknown>, key: string): string {
   const value = record[key]
   if (typeof value !== 'string' || value.length === 0) {
+    return invalidProductExperienceResponse()
+  }
+  return value
+}
+
+function hasUnsafeTextCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (
+      code <= 31 ||
+      (code >= 127 && code <= 159) ||
+      code === 0x061c ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function requireBoundedText(
+  record: Record<string, unknown>,
+  key: string,
+  maximumLength: number,
+): string {
+  const value = record[key]
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > maximumLength ||
+    hasUnsafeTextCharacter(value)
+  ) {
     return invalidProductExperienceResponse()
   }
   return value
@@ -753,7 +792,10 @@ function requireProductZkTlsScalar(value: unknown): ProductZkTlsScalar {
     (typeof value === 'number' &&
       Number.isFinite(value) &&
       Math.abs(value) <= Number.MAX_SAFE_INTEGER) ||
-    (typeof value === 'string' && value.length > 0)
+    (typeof value === 'string' &&
+      value.length > 0 &&
+      value.length <= MAX_PRODUCT_PROGRESS_SCALAR_LENGTH &&
+      !hasUnsafeTextCharacter(value))
   ) {
     return value
   }
@@ -957,12 +999,26 @@ function parseProductZkTlsRuleProgress(
     'unit',
   ])
   const unit = progress.unit
-  if (unit !== null && (typeof unit !== 'string' || unit.length === 0)) {
+  if (
+    unit !== null &&
+    (typeof unit !== 'string' ||
+      unit.length === 0 ||
+      unit.length > MAX_PRODUCT_PROGRESS_UNIT_LENGTH ||
+      hasUnsafeTextCharacter(unit))
+  ) {
     return invalidProductExperienceResponse()
   }
   return {
-    ruleId: requireString(progress, 'ruleId'),
-    title: requireString(progress, 'title'),
+    ruleId: requireBoundedText(
+      progress,
+      'ruleId',
+      MAX_PRODUCT_PROGRESS_RULE_ID_LENGTH,
+    ),
+    title: requireBoundedText(
+      progress,
+      'title',
+      MAX_PRODUCT_PROGRESS_TITLE_LENGTH,
+    ),
     status: requireProductZkTlsStatus(progress.status),
     current: requireProductZkTlsScalar(progress.current),
     target: requireProductZkTlsScalar(progress.target),
