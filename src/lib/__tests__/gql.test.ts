@@ -601,17 +601,17 @@ describe('gql transport outcomes', () => {
     vi.stubGlobal('fetch', fetchMock)
     const operations = [
       {
-        id: 'verify.product-experience.ticket.v1',
+        id: 'verify.product-experience.ticket.v2',
         name: productQueries.MintProductExperienceTicketOperationName,
         variables: { campaignId: 'campaign-product-001' },
       },
       {
-        id: 'verify.product-experience.test-ticket.v1',
+        id: 'verify.product-experience.test-ticket.v2',
         name: productQueries.MintProductExperienceTestTicketOperationName,
         variables: { campaignId: 'campaign-product-001' },
       },
       {
-        id: 'verify.product-experience.proof.v1',
+        id: 'verify.product-experience.proof.v2',
         name: productQueries.SubmitProductExperienceProofOperationName,
         variables: { input: { campaignId: 'campaign-product-001' } },
       },

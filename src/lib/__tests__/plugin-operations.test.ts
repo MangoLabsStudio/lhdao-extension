@@ -18,20 +18,22 @@ import {
 
 const PRODUCT_EXPERIENCE_DOCUMENT_SHA256 =
   'afa8256b861be2b084ac8976478a14bd716d50473c203ca87e62868cce720577'
+const LEGACY_PRODUCT_EXPERIENCE_DOCUMENT_SHA256 =
+  '5e6af250a2b6f5a89aa578c9b622cdf4e49c4098b5e4295f0a854521c256c8bf'
 
 const PRODUCT_EXPERIENCE_OPERATIONS = [
   {
-    id: 'verify.product-experience.ticket.v1',
+    id: 'verify.product-experience.ticket.v2',
     operationName: MintProductExperienceTicketOperationName,
     permission: 'verify',
   },
   {
-    id: 'verify.product-experience.test-ticket.v1',
+    id: 'verify.product-experience.test-ticket.v2',
     operationName: MintProductExperienceTestTicketOperationName,
     permission: 'verify',
   },
   {
-    id: 'verify.product-experience.proof.v1',
+    id: 'verify.product-experience.proof.v2',
     operationName: SubmitProductExperienceProofOperationName,
     permission: 'verify',
   },
@@ -90,6 +92,27 @@ describe('PLUGIN_OPERATIONS', () => {
           operation.operationName,
         )?.id,
       ).toBe(operation.id)
+    }
+  })
+
+  it('versions existing operation IDs when their shared document hash changes', () => {
+    expect(PRODUCT_EXPERIENCE_DOCUMENT_SHA256).not.toBe(
+      LEGACY_PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
+    )
+    const ids = PLUGIN_OPERATIONS.map((operation) => operation.id)
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'verify.product-experience.ticket.v2',
+        'verify.product-experience.test-ticket.v2',
+        'verify.product-experience.proof.v2',
+      ]),
+    )
+    for (const legacyId of [
+      'verify.product-experience.ticket.v1',
+      'verify.product-experience.test-ticket.v1',
+      'verify.product-experience.proof.v1',
+    ]) {
+      expect(ids).not.toContain(legacyId)
     }
   })
 
