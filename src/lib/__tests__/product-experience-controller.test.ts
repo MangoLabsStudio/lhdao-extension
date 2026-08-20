@@ -1465,6 +1465,80 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     })
   })
 
+  it.each([
+    'PARTIAL',
+    'VERIFIED',
+  ] as const)('stops queued work when late backend %s arrives after reauthorization', async (backendStatus) => {
+    harness.readZkTlsProgress.mockResolvedValueOnce([
+      {
+        ruleId: 'rule-a',
+        title: 'First step',
+        status: backendStatus,
+        current: backendStatus === 'PARTIAL' ? 1 : true,
+        target: backendStatus === 'PARTIAL' ? 3 : true,
+        unit: backendStatus === 'PARTIAL' ? 'days' : null,
+      },
+      {
+        ruleId: 'rule-b',
+        title: 'Second step',
+        status: 'PENDING',
+        current: null,
+        target: true,
+        unit: null,
+      },
+    ])
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+      match('rule-b'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted'),
+    )
+    await harness.controller.handleTabUpdated(7, { status: 'complete' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushAsync()
+
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.storage.session).toMatchObject({
+      status: 'reauthorize',
+      currentOriginAllowed: false,
+      error: 'AUTHORIZATION_REQUIRED',
+      verifiedRuleIds: backendStatus === 'VERIFIED' ? ['rule-a'] : [],
+      zkTlsQueue: [
+        {
+          ruleId: 'rule-b',
+          status: 'queued',
+          sessionId: null,
+          connectorId: null,
+          expiresAt: null,
+        },
+      ],
+      zkTlsProgress: [
+        expect.objectContaining({
+          ruleId: 'rule-a',
+          status: backendStatus,
+        }),
+        expect.objectContaining({
+          ruleId: 'rule-b',
+          status: 'PENDING',
+        }),
+      ],
+    })
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'reauthorize',
+      authorizationRequired: true,
+      error: 'AUTHORIZATION_REQUIRED',
+    })
+
+    await harness.controller.start()
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+    expect(harness.startZkTls).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ruleId: 'rule-b' }),
+    )
+  })
+
   it('closes a TEST proof only after reading backend VERIFIED progress', async () => {
     await harness.controller.cancel()
     await harness.controller.saveTask(task('TEST'))

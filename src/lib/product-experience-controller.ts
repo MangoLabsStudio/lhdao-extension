@@ -1163,6 +1163,10 @@ export class ProductExperienceController {
         (entry) => entry.ruleId === activeRuleId,
       )
       const updated = await this.mutateZkTlsSession(sessionId, (current) => {
+        const authorizationRequired =
+          current.status === 'reauthorize' ||
+          !current.currentOriginAllowed ||
+          current.error === 'AUTHORIZATION_REQUIRED'
         current.zkTlsProgress = clone(progress)
         const durableVerified = new Set([
           ...current.verifiedRuleIds,
@@ -1178,12 +1182,15 @@ export class ProductExperienceController {
           current.zkTlsQueue = current.zkTlsQueue.filter(
             (item) => item.ruleId !== activeRuleId,
           )
-          current.status = current.zkTlsQueue.some(
-            (item) => item.status === 'submitted' || item.status === 'proving',
-          )
-            ? 'submitting'
-            : 'observing'
-          current.error = null
+          if (!authorizationRequired) {
+            current.status = current.zkTlsQueue.some(
+              (item) =>
+                item.status === 'submitted' || item.status === 'proving',
+            )
+              ? 'submitting'
+              : 'observing'
+            current.error = null
+          }
         }
       })
       if (!updated) return false
@@ -1198,6 +1205,15 @@ export class ProductExperienceController {
           currentOriginAllowed: true,
           error: null,
         })
+        return false
+      }
+      if (
+        updated.status === 'reauthorize' ||
+        !updated.currentOriginAllowed ||
+        updated.error === 'AUTHORIZATION_REQUIRED'
+      ) {
+        this.zkTlsDrainRequested = false
+        await this.notify()
         return false
       }
       if (activeProgress?.status === 'PARTIAL') {
