@@ -1368,6 +1368,103 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     })
   })
 
+  it.each([
+    'start-throw',
+    'prove-throw',
+    'permission-denied',
+    'capture-failed',
+  ] as const)('does not let a late %s replace navigation reauthorization', async (failureStage) => {
+    let finishFailure: (() => void) | undefined
+    if (failureStage === 'start-throw') {
+      harness.startZkTls.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            finishFailure = () => reject(new Error('late setup failure'))
+          }),
+      )
+    } else {
+      harness.proveZkTls.mockImplementationOnce(
+        (input) =>
+          new Promise((resolve, reject) => {
+            if (failureStage === 'prove-throw') {
+              finishFailure = () => reject(new Error('late capture failure'))
+              return
+            }
+            finishFailure = () =>
+              resolve({
+                type: 'zktls-prove-result',
+                correlationId: input.correlationId,
+                status: 'error',
+                code:
+                  failureStage === 'permission-denied'
+                    ? 'PERMISSION_DENIED'
+                    : 'REQUEST_NOT_CAPTURED',
+              })
+          }),
+      )
+    }
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => {
+      if (failureStage === 'start-throw') {
+        expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+      } else {
+        expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+      }
+    })
+    await harness.controller.handleTabUpdated(7, { status: 'complete' })
+    const notificationsBeforeFailure =
+      harness.notifyStateChanged.mock.calls.length
+    finishFailure?.()
+    await vi.waitFor(() =>
+      expect(harness.notifyStateChanged.mock.calls.length).toBeGreaterThan(
+        notificationsBeforeFailure,
+      ),
+    )
+
+    expect(harness.storage.session).toMatchObject({
+      status: 'reauthorize',
+      currentOriginAllowed: false,
+      error: 'AUTHORIZATION_REQUIRED',
+    })
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'reauthorize',
+      authorizationRequired: true,
+      error: 'AUTHORIZATION_REQUIRED',
+    })
+  })
+
+  it('does not let late submitted-session expiry replace navigation reauthorization', async () => {
+    harness.startZkTls.mockResolvedValueOnce({
+      sessionId: 'expires-after-navigation',
+      connectorId: 'trusted-connector-1',
+      expiresAt: new Date(NOW).toISOString(),
+    })
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted'),
+    )
+    await harness.controller.handleTabUpdated(7, { status: 'complete' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushAsync()
+
+    expect(harness.storage.session).toMatchObject({
+      status: 'reauthorize',
+      currentOriginAllowed: false,
+      error: 'AUTHORIZATION_REQUIRED',
+    })
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'reauthorize',
+      authorizationRequired: true,
+      error: 'AUTHORIZATION_REQUIRED',
+    })
+  })
+
   it('closes a TEST proof only after reading backend VERIFIED progress', async () => {
     await harness.controller.cancel()
     await harness.controller.saveTask(task('TEST'))

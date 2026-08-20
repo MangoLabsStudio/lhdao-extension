@@ -410,17 +410,51 @@ describe('Product zkTLS jobs', () => {
       complete?.({ requestId })
       return result
     }
-    const internal = await run(proveZkTlsSession(request), 'internal', 1)
-    const page = await run(
-      handleZkTlsProof({ type: 'zktls-prove', ...request }, sender),
-      'page',
-      2,
+    const pageProof = handleZkTlsProof(
+      { type: 'zktls-prove', ...request },
+      sender,
     )
+    await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(1))
+    const productProof = proveZkTlsSession({
+      ...request,
+      correlationId: 'product-waits-for-page',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    })
+    await expect(
+      proveZkTlsSession({
+        ...request,
+        correlationId: 'second-product-waiter',
+        expiresAt: '2030-01-01T00:00:00.000Z',
+      }),
+    ).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'second-product-waiter',
+      status: 'error',
+      code: 'ZKTLS_BUSY',
+    })
+    expect(signed).toHaveBeenCalledTimes(1)
+    observe?.({
+      requestId: 'page',
+      tabId: 7,
+      frameId: 0,
+      method: 'GET',
+      url: 'https://github.com/viewer',
+      type: 'xmlhttprequest',
+      requestHeaders: [{ name: 'Cookie', value: 'private' }],
+    })
+    complete?.({ requestId: 'page' })
+    const page = await pageProof
+    const internal = await run(productProof, 'internal', 2)
 
-    expect(page).toEqual(internal)
     expect(page).toMatchObject({ status: 'submitted' })
+    expect(internal).toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'product-waits-for-page',
+      status: 'submitted',
+    })
     expect(signed).toHaveBeenCalledTimes(2)
-    expect(signed).toHaveBeenCalledWith(
+    expect(signed).toHaveBeenNthCalledWith(
+      2,
       'https://service.lhdao.top/zktls/config?session_id=session1&connector_id=connector1',
       expect.objectContaining({ local: false }),
     )

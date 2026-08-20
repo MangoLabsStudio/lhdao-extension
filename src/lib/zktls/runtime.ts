@@ -63,6 +63,7 @@ export type ZkTlsRunRequest = {
   sessionId: string
   connectorId: string
   correlationId: string
+  expiresAt?: string
 }
 
 export type ZkTlsRunResult = {
@@ -74,7 +75,8 @@ export type ZkTlsRunResult = {
 
 let job: Job | null = null
 let permission: Permission | null = null
-let proofInFlight = false
+let proofFlight: Promise<ZkTlsRunResult> | null = null
+let productWaiter = false
 
 class ZkTlsPermissionDeniedError extends Error {}
 
@@ -454,22 +456,72 @@ async function runValidatedZkTlsRequest(
   }
 }
 
+function unavailableResult(
+  request: ZkTlsRunRequest,
+  code: 'SESSION_EXPIRED' | 'ZKTLS_BUSY',
+): ZkTlsRunResult {
+  return {
+    type: 'zktls-prove-result',
+    correlationId: request.correlationId,
+    status: 'error',
+    code,
+  }
+}
+
+function beginProof(request: ZkTlsRunRequest): Promise<ZkTlsRunResult> {
+  const flight = runValidatedZkTlsRequest(request)
+  proofFlight = flight
+  return flight.finally(() => {
+    if (proofFlight === flight) proofFlight = null
+  })
+}
+
+async function waitForProofFlight(
+  flight: Promise<ZkTlsRunResult>,
+  expiresAt: string | undefined,
+): Promise<boolean> {
+  const deadline = Date.parse(expiresAt ?? '')
+  if (!Number.isFinite(deadline)) {
+    await flight
+    return true
+  }
+  while (true) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return false
+    const outcome = await new Promise<'flight' | 'timer'>((resolve) => {
+      const timer = setTimeout(
+        () => resolve('timer'),
+        Math.min(remaining, 60_000),
+      )
+      void flight.then(
+        () => {
+          clearTimeout(timer)
+          resolve('flight')
+        },
+        () => {
+          clearTimeout(timer)
+          resolve('flight')
+        },
+      )
+    })
+    if (outcome === 'flight') return true
+  }
+}
+
 export async function proveZkTlsSession(
   request: ZkTlsRunRequest,
 ): Promise<ZkTlsRunResult> {
-  if (proofInFlight) {
-    return {
-      type: 'zktls-prove-result',
-      correlationId: request.correlationId,
-      status: 'error',
-      code: 'ZKTLS_BUSY',
-    }
-  }
-  proofInFlight = true
+  const active = proofFlight
+  if (!active) return beginProof(request)
+  if (productWaiter) return unavailableResult(request, 'ZKTLS_BUSY')
+  productWaiter = true
   try {
-    return await runValidatedZkTlsRequest(request)
+    if (!(await waitForProofFlight(active, request.expiresAt))) {
+      return unavailableResult(request, 'SESSION_EXPIRED')
+    }
+    return await beginProof(request)
   } finally {
-    proofInFlight = false
+    productWaiter = false
   }
 }
 
@@ -482,7 +534,11 @@ export async function handleZkTlsProof(
     sender,
     new URL(WEB_ENDPOINT).origin,
   )
-  return request ? proveZkTlsSession(request) : null
+  if (!request) return null
+  if (proofFlight || productWaiter) {
+    return unavailableResult(request, 'ZKTLS_BUSY')
+  }
+  return beginProof(request)
 }
 
 export function registerZkTlsRuntime(): void {

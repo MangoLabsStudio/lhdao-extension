@@ -1052,6 +1052,7 @@ export class ProductExperienceController {
           sessionId: started.sessionId,
           connectorId: started.connectorId,
           correlationId: this.dependencies.randomSessionId(),
+          expiresAt: started.expiresAt,
         })
       } catch {
         this.zkTlsDrainRequested = false
@@ -1068,7 +1069,9 @@ export class ProductExperienceController {
           result.status === 'pending_login' ||
             result.code === 'PERMISSION_DENIED'
             ? 'AUTHORIZATION_REQUIRED'
-            : 'VERIFICATION_FAILED',
+            : result.code === 'SESSION_EXPIRED'
+              ? 'SESSION_EXPIRED'
+              : 'VERIFICATION_FAILED',
         )
         this.zkTlsDrainRequested = false
         return
@@ -1104,13 +1107,19 @@ export class ProductExperienceController {
     const reset = await this.mutateZkTlsSession(sessionId, (current) => {
       const item = current.zkTlsQueue.find((entry) => entry.ruleId === ruleId)
       if (!item) return
+      const authorizationRequired =
+        current.status === 'reauthorize' ||
+        !current.currentOriginAllowed ||
+        current.error === 'AUTHORIZATION_REQUIRED'
       item.status = 'queued'
       item.sessionId = null
       item.connectorId = null
       item.expiresAt = null
       current.status =
-        error === 'AUTHORIZATION_REQUIRED' ? 'reauthorize' : 'observing'
-      current.error = error
+        authorizationRequired || error === 'AUTHORIZATION_REQUIRED'
+          ? 'reauthorize'
+          : 'observing'
+      current.error = authorizationRequired ? 'AUTHORIZATION_REQUIRED' : error
     })
     if (reset) await this.notify()
   }
