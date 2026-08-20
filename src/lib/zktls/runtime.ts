@@ -75,6 +75,8 @@ export type ZkTlsRunResult = {
 let job: Job | null = null
 let permission: Permission | null = null
 
+class ZkTlsPermissionDeniedError extends Error {}
+
 function exactOriginPattern(origin: string): string {
   return `${new URL(origin).origin}/*`
 }
@@ -139,7 +141,7 @@ async function ensurePermission(
       resolve: (ok) => {
         clearTimeout(pending.timer)
         permission = null
-        ok ? resolve() : reject(new Error('permission denied'))
+        ok ? resolve() : reject(new ZkTlsPermissionDeniedError())
       },
       timer: setTimeout(() => pending.resolve(false), 30_000),
     }
@@ -438,12 +440,15 @@ async function runValidatedZkTlsRequest(
       status: result.status,
       ...(result.code ? { code: result.code } : {}),
     }
-  } catch {
+  } catch (error) {
     return {
       type: 'zktls-prove-result',
       correlationId: request.correlationId,
       status: 'error',
-      code: 'ZKTLS_SETUP_FAILED',
+      code:
+        error instanceof ZkTlsPermissionDeniedError
+          ? 'PERMISSION_DENIED'
+          : 'ZKTLS_SETUP_FAILED',
     }
   }
 }

@@ -1128,6 +1128,53 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     })
   })
 
+  it('does not start another polling budget for duplicate DOM evidence', async () => {
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted'),
+    )
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    await flushAsync()
+
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not automatically retry a failed flight because duplicate evidence arrived', async () => {
+    harness.proveZkTls.mockImplementationOnce(async (input) => ({
+      type: 'zktls-prove-result',
+      correlationId: input.correlationId,
+      status: 'error',
+      code: 'REQUEST_NOT_CAPTURED',
+    }))
+
+    const first = harness.controller.handleEvidence(
+      sender(),
+      'session-12345678',
+      [match('rule-a')],
+    )
+    const duplicate = harness.controller.handleEvidence(
+      sender(),
+      'session-12345678',
+      [match('rule-a')],
+    )
+    await Promise.all([first, duplicate])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.error).toBe('VERIFICATION_FAILED'),
+    )
+    await flushAsync()
+
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     ['pending_login', undefined, 'AUTHORIZATION_REQUIRED', true],
     ['error', 'PERMISSION_DENIED', 'AUTHORIZATION_REQUIRED', true],
@@ -1195,9 +1242,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     await vi.waitFor(() =>
       expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('queued'),
     )
-    await harness.controller.handleEvidence(sender(), 'session-12345678', [
-      match('rule-a'),
-    ])
+    await harness.controller.start()
     await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
 
     expect(harness.startZkTls).toHaveBeenCalledTimes(2)
@@ -1236,6 +1281,39 @@ describe('ProductExperienceController zkTLS authority queue', () => {
       error: 'SESSION_EXPIRED',
       matchedRuleIds: [],
     })
+  })
+
+  it.each([
+    'start',
+    'ready',
+  ] as const)('keeps submitted work public as submitting and restores polling through %s', async (entrypoint) => {
+    const session = await harness.storage.getSession()
+    if (!session) throw new Error('missing session')
+    session.status = 'submitting'
+    session.zkTlsQueue = [
+      {
+        ruleId: 'rule-a',
+        status: 'submitted',
+        sessionId: 'submitted-session',
+        connectorId: 'submitted-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      },
+    ]
+    await harness.storage.setSession(session)
+
+    const state =
+      entrypoint === 'start'
+        ? await harness.controller.start()
+        : await harness.controller.ready(sender(), 'session-12345678')
+
+    expect(state).toMatchObject({
+      status: 'submitting',
+      matchedRuleIds: [],
+    })
+    expect(harness.storage.session?.status).toBe('submitting')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls).not.toHaveBeenCalled()
   })
 
   it('resumes submitted session IDs after restart but replaces interrupted proving sessions', async () => {
@@ -1283,8 +1361,10 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     })
 
     const restarted = new ProductExperienceController(harness.dependencies)
-    void restarted.resumePendingSubmit()
+    const resumed = restarted.resumePendingSubmit()
     await flushAsync()
+
+    await expect(resumed).resolves.toMatchObject({ status: 'submitting' })
 
     expect(harness.proveZkTls).not.toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'submitted-session' }),

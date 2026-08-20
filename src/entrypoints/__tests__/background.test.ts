@@ -63,6 +63,143 @@ describe('X task indexes', () => {
 })
 
 describe('Product zkTLS jobs', () => {
+  it('classifies a real prover permission denial without exposing setup details', async () => {
+    Object.defineProperty(chrome.runtime, 'id', {
+      value: 'extension',
+      configurable: true,
+    })
+    const config = validateConnector({
+      interpreter_version: 3,
+      connector_id: 'connector1',
+      revision: 1,
+      disabled: false,
+      expires_at: '2030-01-01T00:00:00.000Z',
+      origin: 'https://github.com',
+      request: {
+        method: 'GET',
+        matcher: {
+          path: { kind: 'exact', value: '/viewer' },
+          query: { required: {}, optional: {}, capture: {} },
+          resource_types: ['xmlhttprequest'],
+        },
+        headers: {},
+        secret_headers: ['cookie'],
+        max_sent_data: 8192,
+        max_recv_data: 65536,
+        replay_safety_evidence: 'The viewer endpoint is read-only.',
+      },
+      response_format: 'json',
+      response_status: 200,
+      extraction: {
+        kind: 'regex',
+        pattern: '^"volume":(\\d+)$',
+        max_bytes: 32,
+      },
+      verifier_profile_id: 'lighthouse-v1',
+    })
+    const ticket = {
+      schema: 1 as const,
+      session_id: 'session1',
+      connector_id: 'connector1',
+      revision: 1,
+      interpreter_version: 3 as const,
+      config_digest: 'a'.repeat(64),
+      issued_at: '2026-01-01T00:00:00.000Z',
+      expires_at: '2030-01-01T00:00:00.000Z',
+      nonce: 'nonce1',
+    }
+    const signed = vi
+      .spyOn(signedConfig, 'fetchAndVerifySignedConfig')
+      .mockResolvedValue({
+        config,
+        ticket,
+        configEnvelope: {
+          key_id: 'key1',
+          config,
+          config_digest: ticket.config_digest,
+          signature: 'config-signature',
+        },
+        ticketEnvelope: {
+          key_id: 'key1',
+          ticket,
+          signature: 'ticket-signature',
+        },
+      })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation(
+      (async () => false) as never,
+    )
+    const createTab = vi
+      .spyOn(chrome.tabs, 'create')
+      .mockImplementation((async () => ({ id: 8 })) as never)
+    let runtimeListener:
+      | ((message: unknown, sender: chrome.runtime.MessageSender) => unknown)
+      | undefined
+    vi.spyOn(chrome.runtime.onMessage, 'addListener').mockImplementation(
+      (listener) => {
+        runtimeListener = listener as typeof runtimeListener
+      },
+    )
+    for (const event of [
+      chrome.webRequest.onBeforeRequest,
+      chrome.webRequest.onBeforeSendHeaders,
+      chrome.webRequest.onBeforeRedirect,
+      chrome.webRequest.onErrorOccurred,
+      chrome.webRequest.onCompleted,
+    ]) {
+      vi.spyOn(event, 'addListener').mockImplementation(
+        (() => undefined) as never,
+      )
+    }
+    registerZkTlsRuntime()
+
+    const proving = proveZkTlsSession({
+      correlationId: 'product-denied',
+      sessionId: 'session1',
+      connectorId: 'connector1',
+    })
+    await vi.waitFor(() => expect(createTab).toHaveBeenCalledTimes(1))
+    const permissionUrl = new URL(
+      (createTab.mock.calls[0]?.[0] as { url: string }).url,
+    )
+    await runtimeListener?.(
+      {
+        type: 'zktls-permission-result',
+        requestId: permissionUrl.searchParams.get('request_id'),
+        granted: false,
+      },
+      {
+        id: 'extension',
+        url: chrome.runtime.getURL('zktls-permission.html'),
+      },
+    )
+
+    await expect(proving).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'product-denied',
+      status: 'error',
+      code: 'PERMISSION_DENIED',
+    })
+
+    signed.mockRejectedValueOnce(new Error('private setup detail'))
+    await expect(
+      proveZkTlsSession({
+        correlationId: 'product-setup',
+        sessionId: 'session1',
+        connectorId: 'connector1',
+      }),
+    ).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'product-setup',
+      status: 'error',
+      code: 'ZKTLS_SETUP_FAILED',
+    })
+  })
+
   it('routes internal jobs and strict page messages through the full prover path', async () => {
     Object.defineProperty(chrome.runtime, 'id', {
       value: 'extension',
