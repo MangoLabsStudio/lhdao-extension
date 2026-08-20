@@ -484,7 +484,7 @@ describe('zkTLS strict boundaries', () => {
       response_status: 200,
       extraction: {
         kind: 'regex',
-        pattern: '"volume":(\\d+)',
+        pattern: '^\\{"volume":(\\d+)\\}$',
         max_bytes: 32,
       },
       verifier_profile_id: 'lighthouse-v1',
@@ -510,9 +510,13 @@ describe('zkTLS strict boundaries', () => {
       'GET /viewer HTTP/1.1\r\nHost: github.com\r\n\r\n',
     )
     const received = new TextEncoder().encode(
-      'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"volume":7200}',
+      'HTTP/1.1 200 OK\r\nX-Private: "volume":9999\r\nContent-Type: application/json\r\n\r\n{"volume":7200}',
     )
     const reveal = revealConfig(message, sent, received)
+    const bodyStart = new TextDecoder().decode(received).indexOf('{')
+    expect(
+      reveal.recv.slice(1).every((range) => range.start >= bodyStart),
+    ).toBe(true)
     expect(
       new TextDecoder().decode(
         received.slice(reveal.recv[3].start, reveal.recv[3].end),

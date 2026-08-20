@@ -169,6 +169,35 @@ describe('zkTLS v3 selectors', () => {
     ).toThrow('ambiguous')
   })
 
+  test('accepts generated Product regex and rejects dynamic outer context', () => {
+    for (const pattern of [
+      '"volume"\\s*:\\s*(-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)',
+      '^balance: ([0-9]{1,8})$',
+      '^(?:foo)+(bar)$',
+      '(?:^|\\n)(From: [^\\r\\n]+)',
+    ]) {
+      expect(() =>
+        validateConnector({
+          ...base,
+          response_format: 'json',
+          extraction: { kind: 'regex', pattern, max_bytes: 32 },
+        }),
+      ).not.toThrow()
+    }
+    for (const pattern of ['^.*"volume":(\\d+)$', '^.*"volume":(\\d+).*$'])
+      expect(() =>
+        validateConnector({
+          ...base,
+          response_format: 'json',
+          extraction: {
+            kind: 'regex',
+            pattern,
+            max_bytes: 32,
+          },
+        }),
+      ).toThrow('fixed context')
+  })
+
   test('enforces regex result size and retains html_between behavior', () => {
     const regex = validateConnector({
       ...base,

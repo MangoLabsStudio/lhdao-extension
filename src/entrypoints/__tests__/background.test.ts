@@ -1,7 +1,25 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AvailableEngagement } from '@/lib/queries'
-import { handleZkTlsProof, proveZkTlsSession } from '@/lib/zktls/runtime'
+import { validateConnector } from '@/lib/zktls/interpreter'
+import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
+import {
+  handleZkTlsProof,
+  proveZkTlsSession,
+  registerZkTlsRuntime,
+} from '@/lib/zktls/runtime'
+import * as signedConfig from '@/lib/zktls/signed-config'
 import { buildActiveCampaignSummaries, flattenTasks } from '../background'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  Object.assign(ZKTLS_PROFILE, {
+    enabled: false,
+    apiEndpoint: null,
+    verifierProfileId: null,
+  })
+  delete (chrome.runtime as unknown as Record<string, unknown>).getContexts
+  delete (chrome as unknown as Record<string, unknown>).offscreen
+})
 
 const binanceLikeCampaign = {
   id: 'binance-like',
@@ -45,11 +63,126 @@ describe('X task indexes', () => {
 })
 
 describe('Product zkTLS jobs', () => {
-  it('routes internal jobs and strict page messages through the same prover', async () => {
+  it('routes internal jobs and strict page messages through the full prover path', async () => {
     Object.defineProperty(chrome.runtime, 'id', {
       value: 'extension',
       configurable: true,
     })
+    const config = validateConnector({
+      interpreter_version: 3,
+      connector_id: 'connector1',
+      revision: 1,
+      disabled: false,
+      expires_at: '2030-01-01T00:00:00.000Z',
+      origin: 'https://github.com',
+      request: {
+        method: 'GET',
+        matcher: {
+          path: { kind: 'exact', value: '/viewer' },
+          query: { required: {}, optional: {}, capture: {} },
+          resource_types: ['xmlhttprequest'],
+        },
+        headers: {},
+        secret_headers: ['cookie'],
+        max_sent_data: 8192,
+        max_recv_data: 65536,
+        replay_safety_evidence: 'The viewer endpoint is read-only.',
+      },
+      response_format: 'json',
+      response_status: 200,
+      extraction: {
+        kind: 'regex',
+        pattern: '^"volume":(\\d+)$',
+        max_bytes: 32,
+      },
+      verifier_profile_id: 'lighthouse-v1',
+    })
+    const ticket = {
+      schema: 1 as const,
+      session_id: 'session1',
+      connector_id: 'connector1',
+      revision: 1,
+      interpreter_version: 3 as const,
+      config_digest: 'a'.repeat(64),
+      issued_at: '2026-01-01T00:00:00.000Z',
+      expires_at: '2030-01-01T00:00:00.000Z',
+      nonce: 'nonce1',
+    }
+    const signed = vi
+      .spyOn(signedConfig, 'fetchAndVerifySignedConfig')
+      .mockResolvedValue({
+        config,
+        ticket,
+        configEnvelope: {
+          key_id: 'key1',
+          config,
+          config_digest: ticket.config_digest,
+          signature: 'config-signature',
+        },
+        ticketEnvelope: {
+          key_id: 'key1',
+          ticket,
+          signature: 'ticket-signature',
+        },
+      })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+
+    const permissions = vi
+      .spyOn(chrome.permissions, 'contains')
+      .mockImplementation((async () => true) as never)
+    vi.spyOn(chrome.tabs, 'query').mockImplementation((async () => [
+      { id: 7, url: 'https://github.com/viewer' },
+    ]) as never)
+    const activate = vi
+      .spyOn(chrome.tabs, 'update')
+      .mockImplementation((async () => ({ id: 7 })) as never)
+    const contexts = vi.fn().mockResolvedValue([])
+    Object.defineProperty(chrome.runtime, 'getContexts', {
+      configurable: true,
+      value: contexts,
+    })
+    const offscreen = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(chrome, 'offscreen', {
+      configurable: true,
+      value: { createDocument: offscreen },
+    })
+    const submitted: unknown[] = []
+    vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation((async (
+      message: unknown,
+    ) => {
+      submitted.push(structuredClone(message))
+      return { status: 'submitted' }
+    }) as never)
+
+    let observe: ((details: unknown) => void) | undefined
+    let complete: ((details: unknown) => void) | undefined
+    vi.spyOn(
+      chrome.webRequest.onBeforeSendHeaders,
+      'addListener',
+    ).mockImplementation(((listener: (details: unknown) => void) => {
+      observe = listener
+    }) as never)
+    vi.spyOn(chrome.webRequest.onCompleted, 'addListener').mockImplementation(((
+      listener: (details: unknown) => void,
+    ) => {
+      complete = listener
+    }) as never)
+    for (const event of [
+      chrome.webRequest.onBeforeRequest,
+      chrome.webRequest.onBeforeRedirect,
+      chrome.webRequest.onErrorOccurred,
+      chrome.runtime.onMessage,
+    ]) {
+      vi.spyOn(event, 'addListener').mockImplementation(
+        (() => undefined) as never,
+      )
+    }
+    registerZkTlsRuntime()
+
     const request = {
       correlationId: 'product1',
       sessionId: 'session1',
@@ -61,9 +194,58 @@ describe('Product zkTLS jobs', () => {
       url: 'https://app.lhdao.top/verify/session1',
     } as chrome.runtime.MessageSender
 
-    await expect(proveZkTlsSession(request)).resolves.toEqual(
-      await handleZkTlsProof({ type: 'zktls-prove', ...request }, sender),
+    const run = async (
+      result: Promise<unknown>,
+      requestId: string,
+      activationCount: number,
+    ) => {
+      await vi.waitFor(() =>
+        expect(activate).toHaveBeenCalledTimes(activationCount),
+      )
+      observe?.({
+        requestId,
+        tabId: 7,
+        frameId: 0,
+        method: 'GET',
+        url: 'https://github.com/viewer',
+        type: 'xmlhttprequest',
+        requestHeaders: [{ name: 'Cookie', value: 'private' }],
+      })
+      complete?.({ requestId })
+      return result
+    }
+    const internal = await run(proveZkTlsSession(request), 'internal', 1)
+    const page = await run(
+      handleZkTlsProof({ type: 'zktls-prove', ...request }, sender),
+      'page',
+      2,
     )
+
+    expect(page).toEqual(internal)
+    expect(page).toMatchObject({ status: 'submitted' })
+    expect(signed).toHaveBeenCalledTimes(2)
+    expect(signed).toHaveBeenCalledWith(
+      'https://service.lhdao.top/zktls/config?session_id=session1&connector_id=connector1',
+      expect.objectContaining({ local: false }),
+    )
+    expect(permissions).toHaveBeenCalledTimes(2)
+    expect(permissions).toHaveBeenCalledWith({
+      origins: ['https://github.com/*'],
+    })
+    expect(activate).toHaveBeenCalledTimes(2)
+    expect(contexts).toHaveBeenCalledTimes(2)
+    expect(offscreen).toHaveBeenCalledTimes(2)
+    expect(submitted).toHaveLength(2)
+    expect(submitted[0]).toEqual(submitted[1])
+    expect(submitted[0]).toMatchObject({
+      type: 'zktls-offscreen-prove',
+      sessionId: 'session1',
+      connectorId: 'connector1',
+      captured: {
+        path: '/viewer',
+        resource_type: 'xmlhttprequest',
+      },
+    })
     await expect(
       handleZkTlsProof(
         { type: 'zktls-prove', ...request, extraction: '$.private' },

@@ -232,6 +232,24 @@ function status(received: Uint8Array): number {
   return Number(match[1])
 }
 
+function responseBody(received: Uint8Array): {
+  offset: number
+  text: string
+} {
+  for (let at = 0; at <= received.length - 4; at += 1) {
+    if (
+      received[at] === 13 &&
+      received[at + 1] === 10 &&
+      received[at + 2] === 13 &&
+      received[at + 3] === 10
+    ) {
+      const offset = at + 4
+      return { offset, text: decoder.decode(received.slice(offset)) }
+    }
+  }
+  throw new Error('bad response body')
+}
+
 export function revealConfig(
   message: ProveMessage,
   sent: Uint8Array,
@@ -242,7 +260,8 @@ export function revealConfig(
     message.config.extraction.kind !== 'regex'
   )
     throw new Error('JSON connectors are unsupported by this runtime')
-  const response = decoder.decode(received)
+  const body = responseBody(received)
+  const response = body.text
   const parsedStatus = status(received)
   let path: string
   let disclosure: {
@@ -303,15 +322,18 @@ export function revealConfig(
         },
       },
       {
-        ...disclosure.prefix,
+        start: body.offset + disclosure.prefix.start,
+        end: body.offset + disclosure.prefix.end,
         handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
       {
-        ...disclosure.suffix,
+        start: body.offset + disclosure.suffix.start,
+        end: body.offset + disclosure.suffix.end,
         handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
       {
-        ...disclosure.value,
+        start: body.offset + disclosure.value.start,
+        end: body.offset + disclosure.value.end,
         handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
     ],

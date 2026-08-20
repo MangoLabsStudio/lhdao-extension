@@ -315,14 +315,15 @@ function validateRegex(pattern: string): void {
   if (
     pattern.includes('\n') ||
     pattern.includes('\r') ||
-    pattern.includes('\\n') ||
-    pattern.includes('\\r') ||
-    pattern.includes('(?')
+    /\\[1-9]/.test(pattern)
   )
     fail('regex has unsupported syntax.')
   let captures = 0
+  let captureOpen = -1
+  let captureClose = -1
   let escaped = false
   let inClass = false
+  const groups: { capture: boolean }[] = []
   for (let at = 0; at < pattern.length; at += 1) {
     const char = pattern[at]
     if (escaped) {
@@ -342,11 +343,50 @@ function validateRegex(pattern: string): void {
       continue
     }
     if (inClass) continue
-    if (char === '(') captures += 1
-    if (char === ')' && /[+*{]/.test(pattern[at + 1] ?? ''))
-      fail('regex cannot quantify its capture.')
+    if (char === '(') {
+      const special = pattern[at + 1] === '?'
+      if (special && pattern[at + 2] !== ':')
+        fail('regex has unsupported syntax.')
+      const capture = !special
+      groups.push({ capture })
+      if (capture) {
+        captures += 1
+        captureOpen = at
+      }
+      continue
+    }
+    if (char === ')') {
+      const group = groups.pop()
+      if (!group) fail('regex is invalid.')
+      if (group.capture) {
+        captureClose = at
+        if (/[+*?{]/.test(pattern[at + 1] ?? ''))
+          fail('regex cannot quantify its capture.')
+      }
+    }
   }
-  if (escaped || captures !== 1) fail('regex must have one capture group.')
+  if (escaped || groups.length || captures !== 1)
+    fail('regex must have one capture group.')
+  const context = `${pattern.slice(0, captureOpen)}${pattern.slice(
+    captureClose + 1,
+  )}`
+  escaped = false
+  for (const char of context) {
+    if (escaped) {
+      if (/[dDSwWpP]/.test(char))
+        fail('regex outside its capture must be fixed context.')
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+    if (char === '[') {
+      fail('regex outside its capture must be fixed context.')
+    }
+    if (char === '.') fail('regex outside its capture must be fixed context.')
+  }
   try {
     new RegExp(pattern, 'd')
   } catch {
