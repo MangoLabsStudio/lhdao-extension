@@ -1,4 +1,8 @@
 import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
+import type {
+  ProductZkTlsRuleProgress,
+  ProductZkTlsScalar,
+} from '@/types/product-experience'
 
 interface ProductExperienceCardProps {
   state: ProductExperienceControllerState
@@ -51,8 +55,8 @@ const STATUS_COPY: Record<
     tone: 'bg-rose-300',
   },
   reauthorize: {
-    label: '需要重新授权',
-    detail: '页面或网站已变更；已完成进度会保留。',
+    label: '需要授权',
+    detail: '页面或网站已变更；重新授权后，已完成进度会保留。',
     tone: 'bg-amber-300',
   },
   error: {
@@ -62,13 +66,88 @@ const STATUS_COPY: Record<
   },
 }
 
-function actionLabel(
-  status: ProductExperienceControllerState['status'],
-): string | null {
+function actionLabel(state: ProductExperienceControllerState): string | null {
+  if (
+    state.error === 'VERIFICATION_FAILED' ||
+    state.error === 'SESSION_EXPIRED'
+  ) {
+    return '重试证明'
+  }
+  const { status } = state
   if (status === 'ready') return '开始验证'
   if (status === 'reauthorize') return '重新授权'
   if (status === 'origin-mismatch') return '检查当前网站'
   return null
+}
+
+function projectCopy(
+  state: ProductExperienceControllerState,
+  busy: boolean,
+): { label: string; detail: string; tone: string } {
+  if (busy) return STATUS_COPY.authorizing
+  if (state.status === 'verified') return STATUS_COPY.verified
+  if (state.status === 'reauthorize') return STATUS_COPY.reauthorize
+  if (
+    state.error === 'VERIFICATION_FAILED' ||
+    state.error === 'SESSION_EXPIRED'
+  ) {
+    return {
+      label: '证明失败',
+      detail: '本次证明未完成，可安全重试。',
+      tone: 'bg-rose-300',
+    }
+  }
+
+  const progress = state.zkTlsProgress
+  if (progress) {
+    if (progress.some((entry) => entry.status === 'SUBMITTED')) {
+      return {
+        label: '证明已提交',
+        detail: '证明已提交，等待后端确认。',
+        tone: 'bg-sky-300',
+      }
+    }
+    if (state.status === 'submitting') {
+      return {
+        label: '正在生成证明',
+        detail: '请保持当前页面打开。',
+        tone: 'bg-cyan-300',
+      }
+    }
+    if (progress.some((entry) => entry.status === 'PARTIAL')) {
+      return {
+        label: '部分完成',
+        detail: '累计进度以后端已确认的证明为准。',
+        tone: 'bg-teal-300',
+      }
+    }
+    return {
+      label: '等待证明',
+      detail: '达到页面条件后，插件会自动发起证明。',
+      tone: 'bg-slate-500',
+    }
+  }
+
+  return STATUS_COPY[state.status]
+}
+
+const PROGRESS_LABELS: Record<ProductZkTlsRuleProgress['status'], string> = {
+  PENDING: '等待证明',
+  SUBMITTED: '已提交',
+  PARTIAL: '部分完成',
+  VERIFIED: '已完成',
+}
+
+function scalarLabel(value: ProductZkTlsScalar): string {
+  if (value === true) return '是'
+  if (value === false) return '否'
+  return value === null ? '' : String(value)
+}
+
+function progressValue(progress: ProductZkTlsRuleProgress): string | null {
+  if (progress.current === null) return null
+  const unit = progress.unit ? ` ${progress.unit}` : ''
+  return `${scalarLabel(progress.current)} / ${scalarLabel(progress.target)}${unit}`
 }
 
 export function ProductExperienceCard({
@@ -76,15 +155,14 @@ export function ProductExperienceCard({
   busy = false,
   onStart,
 }: ProductExperienceCardProps) {
-  const visibleStatus = busy ? 'authorizing' : state.status
-  const copy = STATUS_COPY[visibleStatus]
+  const copy = projectCopy(state, busy)
   const completed = Math.min(
     new Set(state.matchedRuleIds).size,
     Math.max(0, state.totalRuleCount),
   )
   const total = Math.max(0, state.totalRuleCount)
   const progress = total === 0 ? 0 : Math.round((completed / total) * 100)
-  const action = busy ? null : actionLabel(state.status)
+  const action = busy ? null : actionLabel(state)
   const originLabel = state.currentOriginAllowed
     ? '当前网站可验证'
     : state.status === 'origin-mismatch'
@@ -111,7 +189,14 @@ export function ProductExperienceCard({
               {state.title ?? '产品体验任务'}
             </h2>
           </div>
-          <span className="mt-0.5 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[9px] font-bold text-slate-200">
+          <span
+            data-testid={
+              state.status === 'verified' && !busy
+                ? 'product-verified-badge'
+                : undefined
+            }
+            className="mt-0.5 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[9px] font-bold text-slate-200"
+          >
             <span className={`h-1.5 w-1.5 rounded-full ${copy.tone}`} />
             {copy.label}
           </span>
@@ -153,6 +238,27 @@ export function ProductExperienceCard({
         <p className="mt-2.5 text-[10.5px] leading-relaxed text-slate-300">
           {copy.detail}
         </p>
+
+        {state.zkTlsProgress && state.zkTlsProgress.length > 0 && (
+          <ul className="mt-3 space-y-1.5 border-t border-white/8 pt-3">
+            {state.zkTlsProgress.map((entry) => {
+              const value = progressValue(entry)
+              return (
+                <li
+                  key={entry.ruleId}
+                  className="flex items-center justify-between gap-3 text-[10px]"
+                >
+                  <span className="min-w-0 truncate text-slate-300">
+                    {entry.title}
+                  </span>
+                  <span className="shrink-0 font-bold tabular-nums text-teal-200">
+                    {value ?? PROGRESS_LABELS[entry.status]}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
 
         {action && (
           <div className="mt-3 grid grid-cols-[1fr_auto] items-center gap-3 border-t border-white/8 pt-3">

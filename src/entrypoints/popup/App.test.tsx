@@ -133,7 +133,7 @@ describe('product experience popup', () => {
     ['verified', '验证通过'],
     ['expired', '验证已过期'],
     ['origin-mismatch', '当前网站不匹配'],
-    ['reauthorize', '需要重新授权'],
+    ['reauthorize', '需要授权'],
     ['error', '验证遇到问题'],
   ] as const)('renders the %s state without exposing private proof data', async (status, label) => {
     const taintedState = {
@@ -193,12 +193,159 @@ describe('product experience popup', () => {
     await harness.broadcastStateChanged()
 
     await vi.waitFor(() => {
-      expect(harness.container.textContent).toContain('需要重新授权')
+      expect(harness.container.textContent).toContain('需要授权')
       expect(harness.container.textContent).toContain('1 / 2')
     })
     expect(findButton(harness.container, '重新授权')).toBeTruthy()
     expect(harness.container.textContent).toContain(
       '只在本次授权的当前网站读取 Buyer 配置的完成标记',
+    )
+  })
+
+  it.each([
+    [
+      'observing',
+      [
+        {
+          ruleId: 'deposit',
+          title: '入金余额',
+          status: 'PENDING',
+          current: null,
+          target: 100,
+          unit: 'USDT',
+        },
+      ],
+      '等待证明',
+    ],
+    [
+      'submitting',
+      [
+        {
+          ruleId: 'deposit',
+          title: '入金余额',
+          status: 'PENDING',
+          current: null,
+          target: 100,
+          unit: 'USDT',
+        },
+      ],
+      '正在生成证明',
+    ],
+    [
+      'submitting',
+      [
+        {
+          ruleId: 'deposit',
+          title: '入金余额',
+          status: 'SUBMITTED',
+          current: null,
+          target: 100,
+          unit: 'USDT',
+        },
+      ],
+      '证明已提交，等待后端确认',
+    ],
+  ] as const)('renders the backend zkTLS %s state as %s', async (status, zkTlsProgress, label) => {
+    const { container } = await renderPopup(
+      productState(status, { zkTlsProgress: [...zkTlsProgress] }),
+    )
+
+    await vi.waitFor(() => expect(container.textContent).toContain(label))
+  })
+
+  it('renders backend partial values and a stable authorization label', async () => {
+    const harness = await renderPopup(
+      productState('observing', {
+        totalRuleCount: 1,
+        zkTlsProgress: [
+          {
+            ruleId: 'trading-days',
+            title: '近 7 天达标交易日',
+            status: 'PARTIAL',
+            current: 2,
+            target: 3,
+            unit: '天',
+          },
+        ],
+      }),
+    )
+    await vi.waitFor(() => {
+      expect(harness.container.textContent).toContain('部分完成')
+      expect(harness.container.textContent).toContain('2 / 3 天')
+    })
+
+    harness.setProductState(productState('reauthorize'))
+    await harness.broadcastStateChanged()
+    await vi.waitFor(() =>
+      expect(harness.container.textContent).toContain('需要授权'),
+    )
+  })
+
+  it('shows verified only for the authoritative verified state', async () => {
+    const harness = await renderPopup(
+      productState('submitting', {
+        matchedRuleIds: ['deposit'],
+        totalRuleCount: 2,
+        zkTlsProgress: [
+          {
+            ruleId: 'deposit',
+            title: '入金余额',
+            status: 'VERIFIED',
+            current: 120,
+            target: 100,
+            unit: 'USDT',
+          },
+          {
+            ruleId: 'kyc',
+            title: 'KYC',
+            status: 'SUBMITTED',
+            current: null,
+            target: true,
+            unit: null,
+          },
+        ],
+      }),
+    )
+    await vi.waitFor(() =>
+      expect(harness.container.textContent).toContain(
+        '证明已提交，等待后端确认',
+      ),
+    )
+    expect(
+      harness.container.querySelector('[data-testid="product-verified-badge"]'),
+    ).toBeNull()
+
+    harness.setProductState(productState('verified'))
+    await harness.broadcastStateChanged()
+    await vi.waitFor(() =>
+      expect(
+        harness.container.querySelector(
+          '[data-testid="product-verified-badge"]',
+        ),
+      ).not.toBeNull(),
+    )
+    expect(harness.container.textContent).toContain('验证通过')
+  })
+
+  it('offers a stable retry action after a retryable proof failure', async () => {
+    const { container } = await renderPopup(
+      productState('observing', {
+        error: 'VERIFICATION_FAILED',
+        zkTlsProgress: [
+          {
+            ruleId: 'deposit',
+            title: '入金余额',
+            status: 'PENDING',
+            current: null,
+            target: 100,
+            unit: 'USDT',
+          },
+        ],
+      }),
+    )
+
+    await vi.waitFor(() =>
+      expect(findButton(container, '重试证明')).toBeTruthy(),
     )
   })
 })
