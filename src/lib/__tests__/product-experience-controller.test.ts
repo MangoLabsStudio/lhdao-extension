@@ -1316,6 +1316,98 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     expect(harness.proveZkTls).not.toHaveBeenCalled()
   })
 
+  it('coalesces automatic ready after start into the same submitted polling budget', async () => {
+    const session = await harness.storage.getSession()
+    if (!session) throw new Error('missing session')
+    session.status = 'submitting'
+    session.zkTlsQueue = [
+      {
+        ruleId: 'rule-a',
+        status: 'submitted',
+        sessionId: 'submitted-session',
+        connectorId: 'submitted-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      },
+    ]
+    await harness.storage.setSession(session)
+
+    await expect(harness.controller.start()).resolves.toMatchObject({
+      status: 'submitting',
+    })
+    await expect(
+      harness.controller.ready(sender(), 'session-12345678'),
+    ).resolves.toMatchObject({ status: 'submitting' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    await flushAsync()
+
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+    expect(harness.startZkTls).not.toHaveBeenCalled()
+    expect(harness.proveZkTls).not.toHaveBeenCalled()
+  })
+
+  it('serially processes a genuinely new rule added while another proof is in flight', async () => {
+    let finishFirst:
+      | ((value: Awaited<ReturnType<typeof harness.proveZkTls>>) => void)
+      | undefined
+    harness.startZkTls
+      .mockResolvedValueOnce({
+        sessionId: 'first-session',
+        connectorId: 'first-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'second-session',
+        connectorId: 'second-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+    harness.proveZkTls.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirst = resolve
+        }),
+    )
+    harness.readZkTlsProgress.mockResolvedValueOnce([
+      {
+        ruleId: 'rule-a',
+        title: 'First step',
+        status: 'VERIFIED',
+        current: true,
+        target: true,
+        unit: null,
+      },
+      {
+        ruleId: 'rule-b',
+        title: 'Second step',
+        status: 'PENDING',
+        current: null,
+        target: true,
+        unit: null,
+      },
+    ])
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(1))
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-b'),
+    ])
+    finishFirst?.({
+      type: 'zktls-prove-result',
+      correlationId: 'first-correlation',
+      status: 'submitted',
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+
+    expect(harness.proveZkTls).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: 'second-session',
+        connectorId: 'second-connector',
+      }),
+    )
+  })
+
   it('resumes submitted session IDs after restart but replaces interrupted proving sessions', async () => {
     const session = await harness.storage.getSession()
     if (!session) throw new Error('missing session')

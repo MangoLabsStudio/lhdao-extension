@@ -430,7 +430,8 @@ export class ProductExperienceController {
           sessionGeneration,
         )
         if (isZkTlsSession(existing) && existing.zkTlsQueue.length > 0) {
-          void this.drainZkTlsQueue()
+          if (awaitingBackend) void this.drainZkTlsQueue()
+          else void this.drainZkTlsQueueAfterCurrentFlight()
         }
         return state
       }
@@ -811,7 +812,7 @@ export class ProductExperienceController {
       if (!queued) return this.getStateWithoutRetry()
       if (!added) return this.stateFromSession(queued)
       await this.notify()
-      void this.drainZkTlsQueue()
+      void this.drainZkTlsQueue(true)
       return this.stateFromSession(queued)
     }
 
@@ -942,9 +943,15 @@ export class ProductExperienceController {
     return result
   }
 
-  private drainZkTlsQueue(): Promise<void> {
+  private async drainZkTlsQueueAfterCurrentFlight(): Promise<void> {
+    const active = this.zkTlsFlight
+    if (active) await active
+    await this.drainZkTlsQueue()
+  }
+
+  private drainZkTlsQueue(hasNewQueuedWork = false): Promise<void> {
     if (this.zkTlsFlight) {
-      this.zkTlsDrainRequested = true
+      if (hasNewQueuedWork) this.zkTlsDrainRequested = true
       return this.zkTlsFlight
     }
     const flight = this.runZkTlsQueue().finally(() => {
@@ -963,6 +970,13 @@ export class ProductExperienceController {
     while (true) {
       const session = await this.dependencies.storage.getSession()
       if (!isZkTlsSession(session)) return
+      if (
+        session.zkTlsQueue.some(
+          (entry) => entry.status === 'queued' || entry.status === 'proving',
+        )
+      ) {
+        this.zkTlsDrainRequested = false
+      }
       const item =
         session.zkTlsQueue.find((entry) => entry.status === 'submitted') ??
         session.zkTlsQueue.find((entry) => entry.status !== 'submitted')
