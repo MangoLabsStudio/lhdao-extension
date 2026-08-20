@@ -31,6 +31,7 @@ export interface ProductExperienceControllerState {
   authorizationRequired: boolean
   currentOriginAllowed: boolean
   error: ProductExperiencePublicError | null
+  zkTlsProgress?: ProductZkTlsRuleProgress[]
 }
 
 export interface ProductExperienceSaveResult {
@@ -75,6 +76,7 @@ export interface ProductExperienceSession {
   pendingSubmit?: SubmitProductExperienceProofVariables | null
   zkTlsQueue: ProductZkTlsQueueItem[]
   verifiedRuleIds: string[]
+  zkTlsProgress: ProductZkTlsRuleProgress[]
   status: 'observing' | 'reauthorize' | 'submitting'
   error: ProductExperiencePublicError | null
 }
@@ -505,6 +507,7 @@ export class ProductExperienceController {
         matches: [],
         zkTlsQueue: [],
         verifiedRuleIds: [],
+        zkTlsProgress: [],
         status: 'observing',
         error: null,
         ...(minted.verificationMode === 'LEGACY_DOM'
@@ -1017,7 +1020,9 @@ export class ProductExperienceController {
           ticketKind: session.ticketKind,
         })
       } catch {
+        this.zkTlsDrainRequested = false
         await this.resetZkTlsItem(session.sessionId, item.ruleId)
+        this.zkTlsDrainRequested = false
         return
       }
 
@@ -1049,11 +1054,14 @@ export class ProductExperienceController {
           correlationId: this.dependencies.randomSessionId(),
         })
       } catch {
+        this.zkTlsDrainRequested = false
         await this.resetZkTlsItem(session.sessionId, item.ruleId)
+        this.zkTlsDrainRequested = false
         return
       }
 
       if (result.status !== 'submitted') {
+        this.zkTlsDrainRequested = false
         await this.resetZkTlsItem(
           session.sessionId,
           item.ruleId,
@@ -1062,6 +1070,7 @@ export class ProductExperienceController {
             ? 'AUTHORIZATION_REQUIRED'
             : 'VERIFICATION_FAILED',
         )
+        this.zkTlsDrainRequested = false
         return
       }
 
@@ -1099,7 +1108,8 @@ export class ProductExperienceController {
       item.sessionId = null
       item.connectorId = null
       item.expiresAt = null
-      current.status = 'observing'
+      current.status =
+        error === 'AUTHORIZATION_REQUIRED' ? 'reauthorize' : 'observing'
       current.error = error
     })
     if (reset) await this.notify()
@@ -1140,7 +1150,11 @@ export class ProductExperienceController {
           .filter((entry) => entry.status === 'VERIFIED')
           .map((entry) => entry.ruleId),
       )
+      const activeProgress = progress.find(
+        (entry) => entry.ruleId === activeRuleId,
+      )
       const updated = await this.mutateZkTlsSession(sessionId, (current) => {
+        current.zkTlsProgress = clone(progress)
         const durableVerified = new Set([
           ...current.verifiedRuleIds,
           ...verified,
@@ -1151,6 +1165,17 @@ export class ProductExperienceController {
         current.zkTlsQueue = current.zkTlsQueue.filter(
           (item) => !durableVerified.has(item.ruleId),
         )
+        if (activeProgress?.status === 'PARTIAL') {
+          current.zkTlsQueue = current.zkTlsQueue.filter(
+            (item) => item.ruleId !== activeRuleId,
+          )
+          current.status = current.zkTlsQueue.some(
+            (item) => item.status === 'submitted' || item.status === 'proving',
+          )
+            ? 'submitting'
+            : 'observing'
+          current.error = null
+        }
       })
       if (!updated) return false
       if (updated.verifiedRuleIds.length === updated.rules.length) {
@@ -1165,6 +1190,10 @@ export class ProductExperienceController {
           error: null,
         })
         return false
+      }
+      if (activeProgress?.status === 'PARTIAL') {
+        await this.notify()
+        return true
       }
       if (updated.verifiedRuleIds.includes(activeRuleId)) return true
     }
@@ -1508,9 +1537,13 @@ export class ProductExperienceController {
   private stateFromSession(
     session: ProductExperienceSession,
   ): ProductExperienceControllerState {
-    const status =
-      isZkTlsSession(session) &&
-      session.zkTlsQueue.some((item) => item.status === 'submitted')
+    const authorizationRequired =
+      session.status === 'reauthorize' ||
+      session.error === 'AUTHORIZATION_REQUIRED'
+    const status = authorizationRequired
+      ? 'reauthorize'
+      : isZkTlsSession(session) &&
+          session.zkTlsQueue.some((item) => item.status === 'submitted')
         ? 'submitting'
         : session.status
     return {
@@ -1521,10 +1554,12 @@ export class ProductExperienceController {
         ? clone(session.verifiedRuleIds)
         : session.matches.map((match) => match.ruleId),
       totalRuleCount: session.rules.length,
-      authorizationRequired:
-        status === 'reauthorize' || session.error === 'AUTHORIZATION_REQUIRED',
+      authorizationRequired,
       currentOriginAllowed: session.currentOriginAllowed,
       error: session.error,
+      ...(isZkTlsSession(session)
+        ? { zkTlsProgress: clone(session.zkTlsProgress) }
+        : {}),
     }
   }
 

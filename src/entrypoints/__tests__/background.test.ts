@@ -63,6 +63,65 @@ describe('X task indexes', () => {
 })
 
 describe('Product zkTLS jobs', () => {
+  it('rejects concurrent direct and page proof jobs without replacing the active job', async () => {
+    Object.defineProperty(chrome.runtime, 'id', {
+      value: 'extension',
+      configurable: true,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    let rejectFirst: ((error: Error) => void) | undefined
+    const signed = vi
+      .spyOn(signedConfig, 'fetchAndVerifySignedConfig')
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject
+          }),
+      )
+      .mockRejectedValue(new Error('concurrent config fetch'))
+
+    const first = proveZkTlsSession({
+      correlationId: 'direct-active',
+      sessionId: 'session1',
+      connectorId: 'connector1',
+    })
+    await vi.waitFor(() => expect(signed).toHaveBeenCalledTimes(1))
+
+    await expect(
+      handleZkTlsProof(
+        {
+          type: 'zktls-prove',
+          correlationId: 'page-busy',
+          sessionId: 'session1',
+          connectorId: 'connector1',
+        },
+        {
+          id: 'extension',
+          frameId: 0,
+          url: 'https://app.lhdao.top/verify/session1',
+        },
+      ),
+    ).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'page-busy',
+      status: 'error',
+      code: 'ZKTLS_BUSY',
+    })
+    expect(signed).toHaveBeenCalledTimes(1)
+
+    rejectFirst?.(new Error('finish active request'))
+    await expect(first).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'direct-active',
+      status: 'error',
+      code: 'ZKTLS_SETUP_FAILED',
+    })
+  })
+
   it('classifies a real prover permission denial without exposing setup details', async () => {
     Object.defineProperty(chrome.runtime, 'id', {
       value: 'extension',

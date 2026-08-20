@@ -74,6 +74,7 @@ export type ZkTlsRunResult = {
 
 let job: Job | null = null
 let permission: Permission | null = null
+let proofInFlight = false
 
 class ZkTlsPermissionDeniedError extends Error {}
 
@@ -456,7 +457,20 @@ async function runValidatedZkTlsRequest(
 export async function proveZkTlsSession(
   request: ZkTlsRunRequest,
 ): Promise<ZkTlsRunResult> {
-  return runValidatedZkTlsRequest(request)
+  if (proofInFlight) {
+    return {
+      type: 'zktls-prove-result',
+      correlationId: request.correlationId,
+      status: 'error',
+      code: 'ZKTLS_BUSY',
+    }
+  }
+  proofInFlight = true
+  try {
+    return await runValidatedZkTlsRequest(request)
+  } finally {
+    proofInFlight = false
+  }
 }
 
 export async function handleZkTlsProof(
