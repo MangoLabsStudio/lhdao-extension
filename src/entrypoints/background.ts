@@ -62,16 +62,25 @@ import {
   type PollExtensionPairingResult,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
+  ProductZkTlsRuleProgressOperationName,
+  type ProductZkTlsRuleProgressVariables,
   type PromoteTweetResult,
   type PromoteTweetVars,
   parseMintProductExperienceTestTicketResult,
   parseMintProductExperienceTicketResult,
+  parseProductZkTlsRuleProgressResult,
+  parseStartProductZkTlsProofResult,
+  parseStartProductZkTlsTestProofResult,
   parseSubmitProductExperienceProofResult,
   RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
   RESERVE_SLOT_MUTATION,
   type ReportEngagementCaptureResult,
   type ReserveSlotResult,
+  StartProductZkTlsProofOperationName,
+  type StartProductZkTlsProofVariables,
+  StartProductZkTlsTestProofOperationName,
+  type StartProductZkTlsTestProofVariables,
   SUBMIT_ENGAGEMENT_PROOF_MUTATION,
   type SubmitEngagementProofResult,
   SubmitProductExperienceProofOperationName,
@@ -96,7 +105,11 @@ import {
   type UserProfile,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
-import { handleZkTlsProof, registerZkTlsRuntime } from '@/lib/zktls/runtime'
+import {
+  handleZkTlsProof,
+  proveZkTlsSession,
+  registerZkTlsRuntime,
+} from '@/lib/zktls/runtime'
 import type {
   MsgRequest,
   MsgResponse,
@@ -378,6 +391,33 @@ function createProductExperienceController(): ProductExperienceController {
         { operationName: SubmitProductExperienceProofOperationName },
       )
       return parseSubmitProductExperienceProofResult(result)
+    },
+    async startZkTls({ campaignId, ruleId, ticketKind }) {
+      if (ticketKind === 'TEST') {
+        const result = await gql<unknown, StartProductZkTlsTestProofVariables>(
+          PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+          { campaignId, ruleId },
+          { operationName: StartProductZkTlsTestProofOperationName },
+        )
+        return parseStartProductZkTlsTestProofResult(result)
+          .startProductZkTlsTestProof
+      }
+      const result = await gql<unknown, StartProductZkTlsProofVariables>(
+        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+        { campaignId, ruleId },
+        { operationName: StartProductZkTlsProofOperationName },
+      )
+      return parseStartProductZkTlsProofResult(result).startProductZkTlsProof
+    },
+    proveZkTls: proveZkTlsSession,
+    async readZkTlsProgress(campaignId) {
+      const result = await gql<unknown, ProductZkTlsRuleProgressVariables>(
+        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+        { campaignId },
+        { operationName: ProductZkTlsRuleProgressOperationName },
+      )
+      return parseProductZkTlsRuleProgressResult(result)
+        .productZkTlsRuleProgress
     },
     now: () => Date.now(),
     randomNonce: randomProofNonce,

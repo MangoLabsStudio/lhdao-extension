@@ -175,4 +175,27 @@ describe('product experience evaluator privacy', () => {
       expect(serialized).not.toContain(forbiddenValue)
     }
   })
+
+  it('defines the durable zkTLS queue as identifiers and public status only', async () => {
+    const controllerSource = await import(
+      '../product-experience-controller?raw'
+    )
+    const storageSource = await import('../storage?raw')
+    const durableShape = [controllerSource.default, storageSource.default].join(
+      '\n',
+    )
+
+    expect(durableShape).toContain('ProductZkTlsQueueItem')
+    expect(durableShape).toContain("status: 'queued' | 'proving' | 'submitted'")
+    for (const forbiddenField of [
+      'connectorJson',
+      'signedEnvelope',
+      'requestCookie',
+      'responseBody',
+      'claimPayload',
+      'proofPayload',
+    ]) {
+      expect(durableShape).not.toContain(forbiddenField)
+    }
+  })
 })

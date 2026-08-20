@@ -3,6 +3,9 @@ import type {
   ProductExperienceTaskRef,
   ProductExperienceTicket,
   ProductRuleMatch,
+  ProductTicketKind,
+  ProductZkTlsRuleProgress,
+  ProductZkTlsSession,
 } from '../types/product-experience'
 import type { ProductExperienceCanonicalInput } from './product-experience-proof'
 import type {
@@ -14,6 +17,7 @@ import type {
   SubmitProductExperienceProofResult,
   SubmitProductExperienceProofVariables,
 } from './queries'
+import type { ZkTlsRunRequest, ZkTlsRunResult } from './zktls/runtime'
 
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 const PATH_HASH_PATTERN = /^[a-f0-9]{64}$/
@@ -41,6 +45,14 @@ export interface ProductExperienceRuntimeSender {
   origin?: string
 }
 
+export type ProductZkTlsQueueItem = {
+  ruleId: string
+  status: 'queued' | 'proving' | 'submitted'
+  sessionId: string | null
+  connectorId: string | null
+  expiresAt: string | null
+}
+
 export interface ProductExperienceSession {
   sessionId: string
   campaignId: string
@@ -51,15 +63,18 @@ export interface ProductExperienceSession {
   authorizedOrigin: string
   currentOrigin: string
   currentOriginAllowed: boolean
-  ticket: string
-  macKey: string
+  verificationMode: ProductExperienceTicket['verificationMode']
+  ticket?: string
+  macKey?: string
   expiresAt: string
   ruleSetVersion: number
   allowedOrigins: string[]
   completionMode: 'ALL'
   rules: ProductExperienceRule[]
   matches: ProductRuleMatch[]
-  pendingSubmit: SubmitProductExperienceProofVariables | null
+  pendingSubmit?: SubmitProductExperienceProofVariables | null
+  zkTlsQueue: ProductZkTlsQueueItem[]
+  verifiedRuleIds: string[]
   status: 'observing' | 'reauthorize' | 'submitting'
   error: ProductExperiencePublicError | null
 }
@@ -81,6 +96,13 @@ export interface ProductExperienceControllerDependencies {
   submit(
     input: SubmitProductExperienceProofVariables,
   ): Promise<SubmitProductExperienceProofResult>
+  startZkTls(input: {
+    campaignId: string
+    ruleId: string
+    ticketKind: ProductTicketKind
+  }): Promise<ProductZkTlsSession>
+  proveZkTls(input: ZkTlsRunRequest): Promise<ZkTlsRunResult>
+  readZkTlsProgress(campaignId: string): Promise<ProductZkTlsRuleProgress[]>
   now(): number
   randomNonce(): string
   randomSessionId(): string
@@ -201,6 +223,31 @@ function pendingSubmissionKey(
   ].join(':')
 }
 
+function isLegacySession(
+  session: ProductExperienceSession,
+): session is ProductExperienceSession & {
+  verificationMode: 'LEGACY_DOM'
+  ticket: string
+  macKey: string
+  pendingSubmit: SubmitProductExperienceProofVariables | null
+} {
+  return (
+    session.verificationMode === 'LEGACY_DOM' &&
+    typeof session.ticket === 'string' &&
+    typeof session.macKey === 'string'
+  )
+}
+
+function isZkTlsSession(
+  session: ProductExperienceSession | null,
+): session is ProductExperienceSession & { verificationMode: 'ZKTLS' } {
+  return session?.verificationMode === 'ZKTLS'
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs))
+}
+
 function sameTaskIdentity(
   left: ProductExperienceTaskRef,
   right: ProductExperienceTaskRef,
@@ -236,6 +283,9 @@ export function controllerStateToPublicSource(
 export class ProductExperienceController {
   private lastState: ProductExperienceControllerState | null = null
   private submitInFlight: ProductExperienceSubmitFlight | null = null
+  private zkTlsFlight: Promise<void> | null = null
+  private zkTlsDrainRequested = false
+  private zkTlsMutationQueue: Promise<void> = Promise.resolve()
   private evidenceQueue: Promise<void> = Promise.resolve()
   private generation = 0
   private readonly pendingAuthorizations = new Map<
@@ -371,7 +421,15 @@ export class ProductExperienceController {
         if (this.generation !== sessionGeneration) {
           return this.getStateWithoutRetry()
         }
-        return this.injectStoredSession(existing, 'terminal', sessionGeneration)
+        const state = await this.injectStoredSession(
+          existing,
+          'terminal',
+          sessionGeneration,
+        )
+        if (isZkTlsSession(existing) && existing.zkTlsQueue.length > 0) {
+          void this.drainZkTlsQueue()
+        }
+        return state
       }
 
       const replacementGeneration = this.advanceGeneration()
@@ -434,17 +492,24 @@ export class ProductExperienceController {
         authorizedOrigin: origin,
         currentOrigin: origin,
         currentOriginAllowed: true,
-        ticket: minted.ticket,
-        macKey: minted.macKey,
+        verificationMode: minted.verificationMode,
         expiresAt: minted.expiresAt,
         ruleSetVersion: minted.ruleSetVersion,
         allowedOrigins,
         completionMode: 'ALL',
         rules: clone(minted.rules),
         matches: [],
-        pendingSubmit: null,
+        zkTlsQueue: [],
+        verifiedRuleIds: [],
         status: 'observing',
         error: null,
+        ...(minted.verificationMode === 'LEGACY_DOM'
+          ? {
+              ticket: minted.ticket,
+              macKey: minted.macKey,
+              pendingSubmit: null,
+            }
+          : {}),
       }
       const sessionGeneration = this.advanceGeneration()
       await this.dependencies.storage.setSession(session)
@@ -511,7 +576,12 @@ export class ProductExperienceController {
       await this.markReauthorizeForSender(session, sender)
       return this.getState()
     }
-    if (session.matches.length === session.rules.length) {
+    if (
+      (isLegacySession(session) &&
+        session.matches.length === session.rules.length) ||
+      (isZkTlsSession(session) &&
+        session.verifiedRuleIds.length === session.rules.length)
+    ) {
       return this.stateFromSession(session)
     }
     const sessionGeneration = this.advanceGeneration()
@@ -636,8 +706,29 @@ export class ProductExperienceController {
 
   async resumePendingSubmit(): Promise<ProductExperienceControllerState> {
     const session = await this.dependencies.storage.getSession()
-    if (!session?.pendingSubmit) return this.getState()
-    return this.retryPendingSubmit()
+    if (!session) return this.getState()
+    if (session.pendingSubmit) return this.retryPendingSubmit()
+    if (!isZkTlsSession(session)) return this.getState()
+    const resumed = await this.mutateZkTlsSession(
+      session.sessionId,
+      (current) => {
+        for (const item of current.zkTlsQueue) {
+          if (item.status !== 'proving') continue
+          item.status = 'queued'
+          item.sessionId = null
+          item.connectorId = null
+          item.expiresAt = null
+        }
+        current.status = current.zkTlsQueue.some(
+          (item) => item.status === 'submitted',
+        )
+          ? 'submitting'
+          : 'observing'
+      },
+    )
+    if (!resumed) return this.getStateWithoutRetry()
+    void this.drainZkTlsQueue()
+    return this.stateFromSession(resumed)
   }
 
   private async processEvidence(
@@ -669,6 +760,38 @@ export class ProductExperienceController {
     const sanitized = this.validateEvidence(incomingMatches, session, sender)
     if (!sanitized) return this.stateFromSession(session)
 
+    if (isZkTlsSession(session)) {
+      const queued = await this.mutateZkTlsSession(
+        session.sessionId,
+        (current) => {
+          const known = new Set([
+            ...current.verifiedRuleIds,
+            ...current.zkTlsQueue.map((item) => item.ruleId),
+          ])
+          for (const evidence of sanitized) {
+            if (known.has(evidence.ruleId)) continue
+            known.add(evidence.ruleId)
+            current.zkTlsQueue.push({
+              ruleId: evidence.ruleId,
+              status: 'queued',
+              sessionId: null,
+              connectorId: null,
+              expiresAt: null,
+            })
+          }
+          current.error = null
+        },
+      )
+      if (!queued) return this.getStateWithoutRetry()
+      await this.notify()
+      void this.drainZkTlsQueue()
+      return this.stateFromSession(queued)
+    }
+
+    if (!isLegacySession(session)) {
+      return this.finish(this.errorState(task, 'EXTENSION_ERROR'))
+    }
+
     const byRuleId = new Map(
       session.matches.map((existing) => [existing.ruleId, existing]),
     )
@@ -698,7 +821,9 @@ export class ProductExperienceController {
       session,
       evidenceGeneration,
     )
-    if (!signingSession) return this.getStateWithoutRetry()
+    if (!signingSession || !isLegacySession(signingSession)) {
+      return this.getStateWithoutRetry()
+    }
 
     const canonicalInput: ProductExperienceCanonicalInput = {
       version: 'product-experience-v1',
@@ -726,7 +851,9 @@ export class ProductExperienceController {
       signingSession,
       evidenceGeneration,
     )
-    if (!currentSession) return this.getStateWithoutRetry()
+    if (!currentSession || !isLegacySession(currentSession)) {
+      return this.getStateWithoutRetry()
+    }
 
     currentSession.pendingSubmit = {
       input: {
@@ -746,6 +873,255 @@ export class ProductExperienceController {
       return this.getStateWithoutRetry()
     }
     return this.retryPendingSubmit()
+  }
+
+  private async mutateZkTlsSession(
+    sessionId: string,
+    mutate: (
+      session: ProductExperienceSession & { verificationMode: 'ZKTLS' },
+    ) => void,
+  ): Promise<
+    (ProductExperienceSession & { verificationMode: 'ZKTLS' }) | null
+  > {
+    let result:
+      | (ProductExperienceSession & { verificationMode: 'ZKTLS' })
+      | null = null
+    const operation = this.zkTlsMutationQueue.then(async () => {
+      const [task, stored] = await Promise.all([
+        this.dependencies.storage.getTask(),
+        this.dependencies.storage.getSession(),
+      ])
+      if (
+        !task ||
+        !isZkTlsSession(stored) ||
+        stored.sessionId !== sessionId ||
+        !taskMatchesSession(task, stored)
+      ) {
+        return
+      }
+      const next = clone(stored)
+      mutate(next)
+      await this.dependencies.storage.setSession(next)
+      result = next
+    })
+    this.zkTlsMutationQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    )
+    await operation
+    return result
+  }
+
+  private drainZkTlsQueue(): Promise<void> {
+    if (this.zkTlsFlight) {
+      this.zkTlsDrainRequested = true
+      return this.zkTlsFlight
+    }
+    const flight = this.runZkTlsQueue().finally(() => {
+      if (this.zkTlsFlight !== flight) return
+      this.zkTlsFlight = null
+      if (this.zkTlsDrainRequested) {
+        this.zkTlsDrainRequested = false
+        void this.drainZkTlsQueue()
+      }
+    })
+    this.zkTlsFlight = flight
+    return flight
+  }
+
+  private async runZkTlsQueue(): Promise<void> {
+    while (true) {
+      const session = await this.dependencies.storage.getSession()
+      if (!isZkTlsSession(session)) return
+      const item =
+        session.zkTlsQueue.find((entry) => entry.status === 'submitted') ??
+        session.zkTlsQueue.find((entry) => entry.status !== 'submitted')
+      if (!item) return
+
+      if (item.status === 'submitted') {
+        if (!(await this.pollZkTlsProgress(session.sessionId, item.ruleId))) {
+          return
+        }
+        continue
+      }
+
+      if (item.status === 'proving') {
+        const reset = await this.mutateZkTlsSession(
+          session.sessionId,
+          (current) => {
+            const interrupted = current.zkTlsQueue.find(
+              (entry) => entry.ruleId === item.ruleId,
+            )
+            if (!interrupted || interrupted.status !== 'proving') return
+            interrupted.status = 'queued'
+            interrupted.sessionId = null
+            interrupted.connectorId = null
+            interrupted.expiresAt = null
+          },
+        )
+        if (!reset) return
+      }
+
+      let started: ProductZkTlsSession
+      try {
+        started = await this.dependencies.startZkTls({
+          campaignId: session.campaignId,
+          ruleId: item.ruleId,
+          ticketKind: session.ticketKind,
+        })
+      } catch {
+        await this.resetZkTlsItem(session.sessionId, item.ruleId)
+        return
+      }
+
+      const proving = await this.mutateZkTlsSession(
+        session.sessionId,
+        (current) => {
+          const queued = current.zkTlsQueue.find(
+            (entry) => entry.ruleId === item.ruleId,
+          )
+          if (!queued || queued.status !== 'queued') return
+          queued.status = 'proving'
+          queued.sessionId = started.sessionId
+          queued.connectorId = started.connectorId
+          queued.expiresAt = started.expiresAt
+          current.status = 'submitting'
+          current.error = null
+        },
+      )
+      const provingItem = proving?.zkTlsQueue.find(
+        (entry) => entry.ruleId === item.ruleId,
+      )
+      if (!provingItem || provingItem.status !== 'proving') return
+
+      let result: ZkTlsRunResult
+      try {
+        result = await this.dependencies.proveZkTls({
+          sessionId: started.sessionId,
+          connectorId: started.connectorId,
+          correlationId: this.dependencies.randomSessionId(),
+        })
+      } catch {
+        await this.resetZkTlsItem(session.sessionId, item.ruleId)
+        return
+      }
+
+      if (result.status !== 'submitted') {
+        await this.resetZkTlsItem(
+          session.sessionId,
+          item.ruleId,
+          result.status === 'pending_login' ||
+            result.code === 'PERMISSION_DENIED'
+            ? 'AUTHORIZATION_REQUIRED'
+            : 'VERIFICATION_FAILED',
+        )
+        return
+      }
+
+      const submitted = await this.mutateZkTlsSession(
+        session.sessionId,
+        (current) => {
+          const provingEntry = current.zkTlsQueue.find(
+            (entry) => entry.ruleId === item.ruleId,
+          )
+          if (
+            !provingEntry ||
+            provingEntry.status !== 'proving' ||
+            provingEntry.sessionId !== started.sessionId
+          ) {
+            return
+          }
+          provingEntry.status = 'submitted'
+          current.status = 'submitting'
+          current.error = null
+        },
+      )
+      if (!submitted) return
+    }
+  }
+
+  private async resetZkTlsItem(
+    sessionId: string,
+    ruleId: string,
+    error: ProductExperiencePublicError = 'VERIFICATION_FAILED',
+  ): Promise<void> {
+    const reset = await this.mutateZkTlsSession(sessionId, (current) => {
+      const item = current.zkTlsQueue.find((entry) => entry.ruleId === ruleId)
+      if (!item) return
+      item.status = 'queued'
+      item.sessionId = null
+      item.connectorId = null
+      item.expiresAt = null
+      current.status = 'observing'
+      current.error = error
+    })
+    if (reset) await this.notify()
+  }
+
+  private async pollZkTlsProgress(
+    sessionId: string,
+    activeRuleId: string,
+  ): Promise<boolean> {
+    for (const delayMs of [1_000, 2_000, 4_000, 8_000, 15_000]) {
+      await wait(delayMs)
+      const beforePoll = await this.dependencies.storage.getSession()
+      if (!isZkTlsSession(beforePoll) || beforePoll.sessionId !== sessionId) {
+        return false
+      }
+      const active = beforePoll.zkTlsQueue.find(
+        (item) => item.ruleId === activeRuleId,
+      )
+      if (!active || active.status !== 'submitted') return true
+      if (
+        !active.expiresAt ||
+        Date.parse(active.expiresAt) <= this.dependencies.now()
+      ) {
+        await this.resetZkTlsItem(sessionId, activeRuleId, 'SESSION_EXPIRED')
+        return false
+      }
+
+      let progress: ProductZkTlsRuleProgress[]
+      try {
+        progress = await this.dependencies.readZkTlsProgress(
+          beforePoll.campaignId,
+        )
+      } catch {
+        continue
+      }
+      const verified = new Set(
+        progress
+          .filter((entry) => entry.status === 'VERIFIED')
+          .map((entry) => entry.ruleId),
+      )
+      const updated = await this.mutateZkTlsSession(sessionId, (current) => {
+        const durableVerified = new Set([
+          ...current.verifiedRuleIds,
+          ...verified,
+        ])
+        current.verifiedRuleIds = current.rules
+          .map((rule) => rule.id)
+          .filter((ruleId) => durableVerified.has(ruleId))
+        current.zkTlsQueue = current.zkTlsQueue.filter(
+          (item) => !durableVerified.has(item.ruleId),
+        )
+      })
+      if (!updated) return false
+      if (updated.verifiedRuleIds.length === updated.rules.length) {
+        await this.finish({
+          campaignId: updated.campaignId,
+          title: updated.title,
+          status: 'verified',
+          matchedRuleIds: clone(updated.verifiedRuleIds),
+          totalRuleCount: updated.rules.length,
+          authorizationRequired: false,
+          currentOriginAllowed: true,
+          error: null,
+        })
+        return false
+      }
+      if (updated.verifiedRuleIds.includes(activeRuleId)) return true
+    }
+    return false
   }
 
   private async retryPendingSubmit(): Promise<ProductExperienceControllerState> {
@@ -796,7 +1172,9 @@ export class ProductExperienceController {
     if (this.generation !== submitGeneration) {
       return this.getStateWithoutRetry()
     }
-    if (!task || !session?.pendingSubmit) return this.getStateWithoutRetry()
+    if (!task || !session?.pendingSubmit || !isLegacySession(session)) {
+      return this.getStateWithoutRetry()
+    }
     if (pendingSubmissionKey(session) !== expectedKey) {
       return this.getStateWithoutRetry()
     }
@@ -1017,7 +1395,11 @@ export class ProductExperienceController {
     }
     // Once a signed request is durable, an identical replay may resolve an
     // already-committed backend receipt even after the local ticket expires.
-    if (!session.pendingSubmit && isExpired(session, this.dependencies.now())) {
+    if (
+      !session.pendingSubmit &&
+      !session.zkTlsQueue.some((item) => item.status === 'submitted') &&
+      isExpired(session, this.dependencies.now())
+    ) {
       return this.finish(this.expiredState(task))
     }
     return null
@@ -1083,9 +1465,13 @@ export class ProductExperienceController {
       campaignId: session.campaignId,
       title: session.title,
       status: session.status,
-      matchedRuleIds: session.matches.map((match) => match.ruleId),
+      matchedRuleIds: isZkTlsSession(session)
+        ? clone(session.verifiedRuleIds)
+        : session.matches.map((match) => match.ruleId),
       totalRuleCount: session.rules.length,
-      authorizationRequired: session.status === 'reauthorize',
+      authorizationRequired:
+        session.status === 'reauthorize' ||
+        session.error === 'AUTHORIZATION_REQUIRED',
       currentOriginAllowed: session.currentOriginAllowed,
       error: session.error,
     }

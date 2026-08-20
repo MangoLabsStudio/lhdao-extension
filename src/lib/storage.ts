@@ -68,7 +68,10 @@ interface SessionSchema {
   binanceSquareProbeObservations: BinanceProbeObservation[]
   /** Lighthouse 页面保存的脱敏产品任务引用，不含规则或凭据。 */
   activeProductExperienceTask: ProductExperienceTaskRef
-  /** L2 当前验证会话；凭据只允许保存在 chrome.storage.session。 */
+  /**
+   * Product 验证会话。zkTLS 分支只保存规则、公开状态及
+   * session/connector ID；连接器、凭据、响应和证明材料不落盘。
+   */
   productExperienceSession: ProductExperienceSession
   /**
    * key = tweetId, value = 这条推文上挂着的"推文级"任务(LIKE/RT/COMMENT)。
