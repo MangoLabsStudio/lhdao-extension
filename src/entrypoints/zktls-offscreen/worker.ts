@@ -26,6 +26,7 @@ import {
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
+const fatalDecoder = new TextDecoder('utf-8', { fatal: true })
 const TOKEN = /^[A-Za-z0-9_-]{1,128}$/
 
 type CommonProveMessage = {
@@ -244,7 +245,50 @@ function responseBody(received: Uint8Array): {
       received[at + 3] === 10
     ) {
       const offset = at + 4
-      return { offset, text: decoder.decode(received.slice(offset)) }
+      const headerLines = decoder
+        .decode(received.slice(0, at))
+        .split('\r\n')
+        .slice(1)
+      const headers = new Map<string, string[]>()
+      for (const line of headerLines) {
+        const colon = line.indexOf(':')
+        if (
+          colon < 1 ||
+          /^[ \t]/.test(line) ||
+          !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(line.slice(0, colon))
+        )
+          throw new Error('bad response headers')
+        const name = line.slice(0, colon).toLowerCase()
+        headers.set(name, [...(headers.get(name) ?? []), line.slice(colon + 1)])
+      }
+      if (headers.has('transfer-encoding'))
+        throw new Error('unsupported response transfer encoding')
+      const contentEncoding = headers.get('content-encoding')
+      if (
+        contentEncoding &&
+        (contentEncoding.length !== 1 ||
+          contentEncoding[0].trim().toLowerCase() !== 'identity')
+      )
+        throw new Error('unsupported response content encoding')
+      const body = received.slice(offset)
+      const contentLength = headers.get('content-length')
+      if (contentLength) {
+        const value = contentLength[0]?.trim()
+        if (
+          contentLength.length !== 1 ||
+          !value ||
+          !/^(?:0|[1-9]\d*)$/.test(value) ||
+          Number(value) !== body.length
+        )
+          throw new Error('bad response content length')
+      }
+      if (body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf)
+        throw new Error('response body UTF-8 BOM is unsupported')
+      try {
+        return { offset, text: fatalDecoder.decode(body) }
+      } catch {
+        throw new Error('response body must be valid UTF-8')
+      }
     }
   }
   throw new Error('bad response body')

@@ -523,6 +523,62 @@ describe('zkTLS strict boundaries', () => {
       ),
     ).toBe('7200')
 
+    const encodedResponse = (headers: string, body: Uint8Array) => {
+      const head = new TextEncoder().encode(
+        `HTTP/1.1 200 OK\r\n${headers ? `${headers}\r\n` : ''}\r\n`,
+      )
+      const result = new Uint8Array(head.length + body.length)
+      result.set(head)
+      result.set(body, head.length)
+      return result
+    }
+    const body = new TextEncoder().encode('{"volume":7200}')
+    expect(() =>
+      revealConfig(
+        message,
+        sent,
+        encodedResponse(
+          `Content-Length: ${body.length}\r\nContent-Encoding: identity`,
+          body,
+        ),
+      ),
+    ).not.toThrow()
+    expect(() =>
+      revealConfig(
+        message,
+        sent,
+        encodedResponse(`Content-Length: ${body.length + 1}`, body),
+      ),
+    ).toThrow('content length')
+    expect(() =>
+      revealConfig(
+        message,
+        sent,
+        encodedResponse('Transfer-Encoding: chunked', body),
+      ),
+    ).toThrow('transfer encoding')
+    expect(() =>
+      revealConfig(
+        message,
+        sent,
+        encodedResponse('Content-Encoding: gzip', body),
+      ),
+    ).toThrow('content encoding')
+    expect(() =>
+      revealConfig(
+        message,
+        sent,
+        encodedResponse('', new Uint8Array([0xef, 0xbb, 0xbf, ...body])),
+      ),
+    ).toThrow('BOM')
+    expect(() =>
+      revealConfig(
+        message,
+        sent,
+        encodedResponse('', new Uint8Array([0xff, ...body])),
+      ),
+    ).toThrow('UTF-8')
+
     const jsonPath = {
       ...config,
       extraction: {

@@ -172,8 +172,8 @@ describe('zkTLS v3 selectors', () => {
   test('accepts generated Product regex and rejects dynamic outer context', () => {
     for (const pattern of [
       '"volume"\\s*:\\s*(-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)',
+      '<span>([\\s\\S]{1,1024}?)</span>',
       '^balance: ([0-9]{1,8})$',
-      '^(?:foo)+(bar)$',
       '(?:^|\\n)(From: [^\\r\\n]+)',
     ]) {
       expect(() =>
@@ -194,6 +194,20 @@ describe('zkTLS v3 selectors', () => {
             pattern,
             max_bytes: 32,
           },
+        }),
+      ).toThrow('fixed context')
+
+    for (const pattern of [
+      '^\\{"vip":(?:true|false),"volume":(\\d+)\\}$',
+      '^(?:foo)+(bar)$',
+      '^foo+(bar)$',
+      '^foo?(bar)$',
+    ])
+      expect(() =>
+        validateConnector({
+          ...base,
+          response_format: 'json',
+          extraction: { kind: 'regex', pattern, max_bytes: 32 },
         }),
       ).toThrow('fixed context')
   })

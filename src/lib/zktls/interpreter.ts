@@ -311,6 +311,49 @@ function parseJsonPath(path: string): JsonPathToken[] {
   return tokens
 }
 
+const REGEX_CONTEXT_META = new Set('.^$*+?()[]{}|')
+
+function validateFixedRegexContext(value: string): void {
+  for (let at = 0; at < value.length; at += 1) {
+    const char = value[at]
+    if (char === '\\') {
+      const escaped = value[at + 1]
+      if (escaped === 's' && value[at + 2] === '*') {
+        at += 2
+        continue
+      }
+      if (
+        escaped &&
+        (REGEX_CONTEXT_META.has(escaped) ||
+          escaped === '\\' ||
+          escaped === '/' ||
+          escaped === '"' ||
+          escaped === "'" ||
+          escaped === '-' ||
+          /[nrt]/.test(escaped))
+      ) {
+        at += 1
+        continue
+      }
+      fail('regex outside its capture must be fixed context.')
+    }
+    if (REGEX_CONTEXT_META.has(char))
+      fail('regex outside its capture must be fixed context.')
+  }
+}
+
+function validateRegexContext(prefix: string, suffix: string): void {
+  const lineBoundary = '(?:^|\\n)'
+  const fixedPrefix = prefix.startsWith(lineBoundary)
+    ? prefix.slice(lineBoundary.length)
+    : prefix.startsWith('^')
+      ? prefix.slice(1)
+      : prefix
+  const fixedSuffix = suffix.endsWith('$') ? suffix.slice(0, -1) : suffix
+  validateFixedRegexContext(fixedPrefix)
+  validateFixedRegexContext(fixedSuffix)
+}
+
 function validateRegex(pattern: string): void {
   if (
     pattern.includes('\n') ||
@@ -367,26 +410,10 @@ function validateRegex(pattern: string): void {
   }
   if (escaped || groups.length || captures !== 1)
     fail('regex must have one capture group.')
-  const context = `${pattern.slice(0, captureOpen)}${pattern.slice(
-    captureClose + 1,
-  )}`
-  escaped = false
-  for (const char of context) {
-    if (escaped) {
-      if (/[dDSwWpP]/.test(char))
-        fail('regex outside its capture must be fixed context.')
-      escaped = false
-      continue
-    }
-    if (char === '\\') {
-      escaped = true
-      continue
-    }
-    if (char === '[') {
-      fail('regex outside its capture must be fixed context.')
-    }
-    if (char === '.') fail('regex outside its capture must be fixed context.')
-  }
+  validateRegexContext(
+    pattern.slice(0, captureOpen),
+    pattern.slice(captureClose + 1),
+  )
   try {
     new RegExp(pattern, 'd')
   } catch {
