@@ -67,17 +67,24 @@ const STATUS_COPY: Record<
 }
 
 function actionLabel(state: ProductExperienceControllerState): string | null {
-  if (
-    state.error === 'VERIFICATION_FAILED' ||
-    state.error === 'SESSION_EXPIRED'
-  ) {
-    return '重试证明'
-  }
   const { status } = state
-  if (status === 'ready') return '开始验证'
+  if (state.error === 'ORIGIN_NOT_ALLOWED' || status === 'origin-mismatch') {
+    return '检查当前网站'
+  }
   if (status === 'reauthorize') return '重新授权'
-  if (status === 'origin-mismatch') return '检查当前网站'
+  if (isRetryableProofState(state)) return '重试证明'
+  if (status === 'ready') return '开始验证'
   return null
+}
+
+function isRetryableProofState(
+  state: ProductExperienceControllerState,
+): boolean {
+  return (
+    state.status === 'observing' &&
+    state.zkTlsProgress !== undefined &&
+    (state.error === 'VERIFICATION_FAILED' || state.error === 'SESSION_EXPIRED')
+  )
 }
 
 function projectCopy(
@@ -86,11 +93,14 @@ function projectCopy(
 ): { label: string; detail: string; tone: string } {
   if (busy) return STATUS_COPY.authorizing
   if (state.status === 'verified') return STATUS_COPY.verified
-  if (state.status === 'reauthorize') return STATUS_COPY.reauthorize
   if (
-    state.error === 'VERIFICATION_FAILED' ||
-    state.error === 'SESSION_EXPIRED'
+    state.error === 'ORIGIN_NOT_ALLOWED' ||
+    state.status === 'origin-mismatch'
   ) {
+    return STATUS_COPY['origin-mismatch']
+  }
+  if (state.status === 'reauthorize') return STATUS_COPY.reauthorize
+  if (isRetryableProofState(state)) {
     return {
       label: '证明失败',
       detail: '本次证明未完成，可安全重试。',
@@ -131,23 +141,33 @@ function projectCopy(
   return STATUS_COPY[state.status]
 }
 
-const PROGRESS_LABELS: Record<ProductZkTlsRuleProgress['status'], string> = {
-  PENDING: '等待证明',
-  SUBMITTED: '已提交',
-  PARTIAL: '部分完成',
-  VERIFIED: '已完成',
+function displayText(value: string): string {
+  return Array.from(value, (character) => {
+    const code = character.charCodeAt(0)
+    return code <= 31 || (code >= 127 && code <= 159) ? ' ' : character
+  }).join('')
 }
 
 function scalarLabel(value: ProductZkTlsScalar): string {
   if (value === true) return '是'
   if (value === false) return '否'
-  return value === null ? '' : String(value)
+  return value === null ? '' : displayText(String(value))
 }
 
 function progressValue(progress: ProductZkTlsRuleProgress): string | null {
-  if (progress.current === null) return null
-  const unit = progress.unit ? ` ${progress.unit}` : ''
+  if (progress.current === null || progress.target === null) return null
+  const unit = progress.unit ? ` ${displayText(progress.unit)}` : ''
   return `${scalarLabel(progress.current)} / ${scalarLabel(progress.target)}${unit}`
+}
+
+function progressLabel(progress: ProductZkTlsRuleProgress): string {
+  if (progress.status === 'PENDING') return '等待证明'
+  if (progress.status === 'SUBMITTED') return '已提交，等待后端确认'
+  const value = progressValue(progress)
+  const detail = value ? `（${value}）` : ''
+  return progress.status === 'VERIFIED'
+    ? `已完成${detail}`
+    : `部分完成${detail}`
 }
 
 export function ProductExperienceCard({
@@ -190,6 +210,8 @@ export function ProductExperienceCard({
             </h2>
           </div>
           <span
+            role="status"
+            aria-live="polite"
             data-testid={
               state.status === 'verified' && !busy
                 ? 'product-verified-badge'
@@ -242,17 +264,16 @@ export function ProductExperienceCard({
         {state.zkTlsProgress && state.zkTlsProgress.length > 0 && (
           <ul className="mt-3 space-y-1.5 border-t border-white/8 pt-3">
             {state.zkTlsProgress.map((entry) => {
-              const value = progressValue(entry)
               return (
                 <li
                   key={entry.ruleId}
                   className="flex items-center justify-between gap-3 text-[10px]"
                 >
-                  <span className="min-w-0 truncate text-slate-300">
-                    {entry.title}
+                  <span className="min-w-0 max-w-[44%] truncate text-slate-300">
+                    {displayText(entry.title)}
                   </span>
-                  <span className="shrink-0 font-bold tabular-nums text-teal-200">
-                    {value ?? PROGRESS_LABELS[entry.status]}
+                  <span className="max-w-[56%] truncate text-right font-bold tabular-nums text-teal-200">
+                    {progressLabel(entry)}
                   </span>
                 </li>
               )

@@ -43,6 +43,49 @@ function productState(
   }
 }
 
+// Exact public shapes returned by ProductExperienceController.expiredState,
+// errorState and stateFromSession. Keep these fixtures aligned with the
+// controller boundary instead of inventing UI-only status combinations.
+const TERMINAL_EXPIRED_STATE = {
+  campaignId: 'campaign-product-001',
+  title: PRODUCT_TITLE,
+  status: 'expired',
+  matchedRuleIds: [],
+  totalRuleCount: 0,
+  authorizationRequired: true,
+  currentOriginAllowed: false,
+  error: 'SESSION_EXPIRED',
+} satisfies ProductExperienceControllerState
+
+const TERMINAL_ERROR_STATE = {
+  campaignId: 'campaign-product-001',
+  title: PRODUCT_TITLE,
+  status: 'error',
+  matchedRuleIds: [],
+  totalRuleCount: 0,
+  authorizationRequired: false,
+  currentOriginAllowed: false,
+  error: 'VERIFICATION_FAILED',
+} satisfies ProductExperienceControllerState
+
+const ORIGIN_MISMATCH_SESSION_STATE = {
+  campaignId: 'campaign-product-001',
+  title: PRODUCT_TITLE,
+  status: 'reauthorize',
+  matchedRuleIds: [],
+  totalRuleCount: 1,
+  authorizationRequired: true,
+  currentOriginAllowed: false,
+  error: 'ORIGIN_NOT_ALLOWED',
+  zkTlsProgress: [],
+} satisfies ProductExperienceControllerState
+
+const PERMISSION_DENIED_SESSION_STATE = {
+  ...ORIGIN_MISMATCH_SESSION_STATE,
+  authorizationRequired: true,
+  error: 'AUTHORIZATION_REQUIRED',
+} satisfies ProductExperienceControllerState
+
 interface PopupHarness {
   container: HTMLElement
   requests: unknown[]
@@ -347,5 +390,107 @@ describe('product experience popup', () => {
     await vi.waitFor(() =>
       expect(findButton(container, '重试证明')).toBeTruthy(),
     )
+  })
+
+  it.each([
+    ['expired', TERMINAL_EXPIRED_STATE, '验证已过期'],
+    ['error', TERMINAL_ERROR_STATE, '验证遇到问题'],
+  ] as const)('does not offer retry after the controller finishes into %s', async (_name, state, label) => {
+    const { container } = await renderPopup(state)
+    await vi.waitFor(() => expect(container.textContent).toContain(label))
+    expect(container.textContent).not.toContain('重试证明')
+  })
+
+  it('distinguishes origin mismatch from permission reauthorization', async () => {
+    const harness = await renderPopup(ORIGIN_MISMATCH_SESSION_STATE)
+    await vi.waitFor(() => {
+      expect(harness.container.textContent).toContain('当前网站不匹配')
+      expect(findButton(harness.container, '检查当前网站')).toBeTruthy()
+    })
+    expect(harness.container.textContent).not.toContain('重新授权')
+
+    harness.setProductState(PERMISSION_DENIED_SESSION_STATE)
+    await harness.broadcastStateChanged()
+    await vi.waitFor(() => {
+      expect(harness.container.textContent).toContain('需要授权')
+      expect(findButton(harness.container, '重新授权')).toBeTruthy()
+    })
+  })
+
+  it('labels every backend progress status before displaying its value', async () => {
+    const { container } = await renderPopup(
+      productState('observing', {
+        zkTlsProgress: [
+          {
+            ruleId: 'verified',
+            title: '入金余额',
+            status: 'VERIFIED',
+            current: 120,
+            target: 100,
+            unit: 'USDT',
+          },
+          {
+            ruleId: 'partial',
+            title: '达标交易日',
+            status: 'PARTIAL',
+            current: 2,
+            target: 3,
+            unit: null,
+          },
+          {
+            ruleId: 'submitted',
+            title: 'KYC',
+            status: 'SUBMITTED',
+            current: true,
+            target: true,
+            unit: null,
+          },
+          {
+            ruleId: 'pending',
+            title: '账户状态',
+            status: 'PENDING',
+            current: 1,
+            target: 1,
+            unit: null,
+          },
+        ],
+      }),
+    )
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('已完成（120 / 100 USDT）')
+      expect(container.textContent).toContain('部分完成（2 / 3）')
+      expect(container.textContent).toContain('已提交，等待后端确认')
+      expect(container.textContent).toContain('等待证明')
+    })
+  })
+
+  it('announces async status and sanitizes control characters for display', async () => {
+    const { container } = await renderPopup(
+      productState('submitting', {
+        zkTlsProgress: [
+          {
+            ruleId: 'deposit',
+            title: '入金\u0000余额\n超长标题'.repeat(20),
+            status: 'SUBMITTED',
+            current: null,
+            target: 100,
+            unit: 'USDT',
+          },
+        ],
+      }),
+    )
+
+    await vi.waitFor(() => {
+      const status = container.querySelector('[role="status"]')
+      expect(status?.getAttribute('aria-live')).toBe('polite')
+      expect(
+        Array.from(container.textContent ?? '').every((character) => {
+          const code = character.charCodeAt(0)
+          return code > 31 && (code < 127 || code > 159)
+        }),
+      ).toBe(true)
+    })
+    expect(container.querySelector('li span')?.className).toContain('max-w-')
   })
 })
