@@ -374,7 +374,8 @@ function validateV3Extraction(value: unknown, responseFormat: unknown): void {
     return
   }
   if (extraction.kind === 'regex') {
-    if (responseFormat !== 'html') fail('regex extraction requires HTML.')
+    if (responseFormat !== 'html' && responseFormat !== 'json')
+      fail('regex extraction requires text.')
     keys(extraction, ['kind', 'pattern', 'max_bytes'], 'extraction')
     required(extraction, ['kind', 'pattern', 'max_bytes'], 'extraction')
     string(extraction.pattern, 'extraction.pattern', 256)
@@ -872,8 +873,8 @@ export function regexDisclosureRanges(
   claim: string
 } {
   validateConnector(config)
-  if (config.response_format !== 'html' || config.extraction.kind !== 'regex')
-    fail('regex disclosure requires an HTML regex.')
+  if (config.extraction.kind !== 'regex')
+    fail('regex disclosure requires a regex selector.')
   const matches = new RegExp(config.extraction.pattern, 'gd')
   const first = matches.exec(response)
   const second = matches.exec(response)

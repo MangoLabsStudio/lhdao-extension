@@ -237,7 +237,10 @@ export function revealConfig(
   sent: Uint8Array,
   received: Uint8Array,
 ): { sent: RevealRange[]; recv: RevealRange[] } {
-  if (message.config.response_format !== 'html')
+  if (
+    message.config.response_format === 'json' &&
+    message.config.extraction.kind !== 'regex'
+  )
     throw new Error('JSON connectors are unsupported by this runtime')
   const response = decoder.decode(received)
   const parsedStatus = status(received)
@@ -380,7 +383,10 @@ function assertCapturedRequest(message: CapturedProveMessage): void {
 }
 
 async function prove(message: ProveMessage): Promise<void> {
-  if (message.config.response_format !== 'html')
+  if (
+    message.config.response_format === 'json' &&
+    message.config.extraction.kind !== 'regex'
+  )
     throw new Error('JSON connectors are unsupported by this runtime')
   const wasm = await import('tlsn-wasm')
   await wasm.default()

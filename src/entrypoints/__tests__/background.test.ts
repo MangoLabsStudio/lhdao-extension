@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AvailableEngagement } from '@/lib/queries'
+import { handleZkTlsProof, proveZkTlsSession } from '@/lib/zktls/runtime'
 import { buildActiveCampaignSummaries, flattenTasks } from '../background'
 
 const binanceLikeCampaign = {
@@ -40,5 +41,34 @@ describe('X task indexes', () => {
       byTweet: {},
       byAuthor: {},
     })
+  })
+})
+
+describe('Product zkTLS jobs', () => {
+  it('routes internal jobs and strict page messages through the same prover', async () => {
+    Object.defineProperty(chrome.runtime, 'id', {
+      value: 'extension',
+      configurable: true,
+    })
+    const request = {
+      correlationId: 'product1',
+      sessionId: 'session1',
+      connectorId: 'connector1',
+    }
+    const sender = {
+      id: 'extension',
+      frameId: 0,
+      url: 'https://app.lhdao.top/verify/session1',
+    } as chrome.runtime.MessageSender
+
+    await expect(proveZkTlsSession(request)).resolves.toEqual(
+      await handleZkTlsProof({ type: 'zktls-prove', ...request }, sender),
+    )
+    await expect(
+      handleZkTlsProof(
+        { type: 'zktls-prove', ...request, extraction: '$.private' },
+        sender,
+      ),
+    ).resolves.toBeNull()
   })
 })

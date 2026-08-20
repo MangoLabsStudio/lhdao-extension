@@ -458,4 +458,78 @@ describe('zkTLS strict boundaries', () => {
     expect(payload).not.toContain('{"token":"private"}')
     expect(payload).not.toContain('"captured"')
   })
+
+  test('reveals a unique JSON regex scalar but keeps JSONPath disabled', () => {
+    const config = validateConnector({
+      interpreter_version: 3,
+      connector_id: 'product-volume',
+      revision: 1,
+      disabled: false,
+      expires_at: '2030-01-01T00:00:00.000Z',
+      origin: 'https://github.com',
+      request: {
+        method: 'GET',
+        matcher: {
+          path: { kind: 'exact', value: '/viewer' },
+          query: { required: {}, optional: {}, capture: {} },
+          resource_types: ['fetch'],
+        },
+        headers: { accept: 'application/json' },
+        secret_headers: ['cookie'],
+        max_sent_data: 8192,
+        max_recv_data: 65536,
+        replay_safety_evidence: 'The viewer endpoint is read-only.',
+      },
+      response_format: 'json',
+      response_status: 200,
+      extraction: {
+        kind: 'regex',
+        pattern: '"volume":(\\d+)',
+        max_bytes: 32,
+      },
+      verifier_profile_id: 'lighthouse-v1',
+    })
+    if (config.interpreter_version !== 3)
+      throw new Error('wrong connector version')
+    const message = {
+      id: 'product-job',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: config.connector_id,
+      config,
+      ticket: { ...ticket, interpreter_version: 3 as const },
+      configEnvelope: { ...configEnvelope, config },
+      ticketEnvelope,
+      captured: {
+        path: '/viewer',
+        resource_type: 'fetch' as const,
+        secrets: { cookie: 'private' },
+      },
+    }
+    const sent = new TextEncoder().encode(
+      'GET /viewer HTTP/1.1\r\nHost: github.com\r\n\r\n',
+    )
+    const received = new TextEncoder().encode(
+      'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"volume":7200}',
+    )
+    const reveal = revealConfig(message, sent, received)
+    expect(
+      new TextDecoder().decode(
+        received.slice(reveal.recv[3].start, reveal.recv[3].end),
+      ),
+    ).toBe('7200')
+
+    const jsonPath = {
+      ...config,
+      extraction: {
+        kind: 'json_path' as const,
+        path: '$.volume',
+        value_type: 'number' as const,
+        max_bytes: 32,
+      },
+    }
+    expect(() =>
+      revealConfig({ ...message, config: jsonPath }, sent, received),
+    ).toThrow('JSON connectors are unsupported')
+  })
 })

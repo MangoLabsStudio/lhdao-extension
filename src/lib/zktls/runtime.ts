@@ -59,6 +59,19 @@ type Permission = {
   timer: ReturnType<typeof setTimeout>
 }
 
+export type ZkTlsRunRequest = {
+  sessionId: string
+  connectorId: string
+  correlationId: string
+}
+
+export type ZkTlsRunResult = {
+  type: 'zktls-prove-result'
+  correlationId: string
+  status: 'submitted' | 'pending_login' | 'error' | 'unsupported'
+  code?: string
+}
+
 let job: Job | null = null
 let permission: Permission | null = null
 
@@ -234,13 +247,12 @@ export async function runProviderActions(
 }
 
 async function proveCapturedRequest(
-  request: ReturnType<typeof parseZkTlsRuntimeRequest>,
+  request: ZkTlsRunRequest,
   config: CapturedConnector,
   ticket: Ticket,
   configEnvelope: ConfigEnvelope,
   ticketEnvelope: TicketEnvelope,
-): Promise<unknown> {
-  if (!request) return null
+): Promise<ZkTlsRunResult> {
   await ensurePermission(config.origin, request.connectorId)
   assertAvailable(config, ticket)
   const tab = await connectorTab(config.origin)
@@ -337,16 +349,9 @@ async function proveCapturedRequest(
   }
 }
 
-export async function handleZkTlsProof(
-  message: unknown,
-  sender: chrome.runtime.MessageSender,
-): Promise<unknown> {
-  const request = parseZkTlsRuntimeRequest(
-    message,
-    sender,
-    new URL(WEB_ENDPOINT).origin,
-  )
-  if (!request) return null
+async function runValidatedZkTlsRequest(
+  request: ZkTlsRunRequest,
+): Promise<ZkTlsRunResult> {
   if (!ZKTLS_PROFILE.enabled || /firefox/i.test(navigator.userAgent))
     return {
       type: 'zktls-prove-result',
@@ -441,6 +446,24 @@ export async function handleZkTlsProof(
       code: 'ZKTLS_SETUP_FAILED',
     }
   }
+}
+
+export async function proveZkTlsSession(
+  request: ZkTlsRunRequest,
+): Promise<ZkTlsRunResult> {
+  return runValidatedZkTlsRequest(request)
+}
+
+export async function handleZkTlsProof(
+  message: unknown,
+  sender: chrome.runtime.MessageSender,
+): Promise<ZkTlsRunResult | null> {
+  const request = parseZkTlsRuntimeRequest(
+    message,
+    sender,
+    new URL(WEB_ENDPOINT).origin,
+  )
+  return request ? proveZkTlsSession(request) : null
 }
 
 export function registerZkTlsRuntime(): void {

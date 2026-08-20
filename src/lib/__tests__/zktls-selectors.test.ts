@@ -149,6 +149,26 @@ describe('zkTLS v3 selectors', () => {
     ).toThrow('bounded string')
   })
 
+  test('reveals one JSON regex scalar and rejects duplicate matches', () => {
+    const config = validateConnector({
+      ...base,
+      response_format: 'json',
+      extraction: {
+        kind: 'regex',
+        pattern: '"volume":(\\d+)',
+        max_bytes: 32,
+      },
+    })
+    if (config.interpreter_version !== 3 || config.extraction.kind !== 'regex')
+      throw new Error('wrong selector config')
+    expect(regexDisclosureRanges(config, '{"volume":7200}')).toMatchObject({
+      claim: '7200',
+    })
+    expect(() =>
+      regexDisclosureRanges(config, '{"volume":7200,"volume":7300}'),
+    ).toThrow('ambiguous')
+  })
+
   test('enforces regex result size and retains html_between behavior', () => {
     const regex = validateConnector({
       ...base,
