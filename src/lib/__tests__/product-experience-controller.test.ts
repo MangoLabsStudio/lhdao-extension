@@ -1408,6 +1408,37 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     )
   })
 
+  it('does not repoll an exhausted submitted rule when a new rule joined after polling began', async () => {
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted'),
+    )
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(1)
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-b'),
+    ])
+    await vi.advanceTimersByTimeAsync(60_000)
+    await flushAsync()
+
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.storage.session?.zkTlsQueue).toEqual([
+      expect.objectContaining({ ruleId: 'rule-a', status: 'submitted' }),
+      {
+        ruleId: 'rule-b',
+        status: 'queued',
+        sessionId: null,
+        connectorId: null,
+        expiresAt: null,
+      },
+    ])
+  })
+
   it('resumes submitted session IDs after restart but replaces interrupted proving sessions', async () => {
     const session = await harness.storage.getSession()
     if (!session) throw new Error('missing session')

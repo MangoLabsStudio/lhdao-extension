@@ -984,6 +984,9 @@ export class ProductExperienceController {
 
       if (item.status === 'submitted') {
         if (!(await this.pollZkTlsProgress(session.sessionId, item.ruleId))) {
+          // One submitted attempt gets one bounded polling lifecycle. New DOM
+          // rules remain durable, but they must not restart an exhausted poll.
+          this.zkTlsDrainRequested = false
           return
         }
         continue
