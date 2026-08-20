@@ -632,7 +632,7 @@ describe('gql transport outcomes', () => {
         },
       },
       {
-        id: 'verify.product-experience.zktls-progress.v1',
+        id: 'read.product-experience.zktls-progress.v1',
         name: productQueries.ProductZkTlsRuleProgressOperationName,
         variables: { campaignId: 'campaign-product-001' },
       },

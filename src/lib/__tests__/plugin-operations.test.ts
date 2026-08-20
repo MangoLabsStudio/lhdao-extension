@@ -23,26 +23,32 @@ const PRODUCT_EXPERIENCE_OPERATIONS = [
   {
     id: 'verify.product-experience.ticket.v1',
     operationName: MintProductExperienceTicketOperationName,
+    permission: 'verify',
   },
   {
     id: 'verify.product-experience.test-ticket.v1',
     operationName: MintProductExperienceTestTicketOperationName,
+    permission: 'verify',
   },
   {
     id: 'verify.product-experience.proof.v1',
     operationName: SubmitProductExperienceProofOperationName,
+    permission: 'verify',
   },
   {
     id: 'verify.product-experience.zktls-start.v1',
     operationName: StartProductZkTlsProofOperationName,
+    permission: 'verify',
   },
   {
     id: 'verify.product-experience.zktls-test-start.v1',
     operationName: StartProductZkTlsTestProofOperationName,
+    permission: 'verify',
   },
   {
-    id: 'verify.product-experience.zktls-progress.v1',
+    id: 'read.product-experience.zktls-progress.v1',
     operationName: ProductZkTlsRuleProgressOperationName,
+    permission: 'read',
   },
 ] as const
 
@@ -131,7 +137,6 @@ describe('PLUGIN_OPERATIONS', () => {
       ).toMatchObject({
         ...expected,
         documentSha256: PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
-        permission: 'verify',
         version: 1,
       })
     }

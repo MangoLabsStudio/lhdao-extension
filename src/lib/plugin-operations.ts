@@ -168,11 +168,11 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'verify',
   ),
   operation(
-    'verify.product-experience.zktls-progress.v1',
+    'read.product-experience.zktls-progress.v1',
     ProductZkTlsRuleProgressOperationName,
     PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
     PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
-    'verify',
+    'read',
   ),
 ]
 
