@@ -393,11 +393,7 @@ function targetsV4Redirect(
   try {
     const target = new URL(details.redirectUrl, details.url)
     const path = requestPath(target.href, binding.targetOrigin)
-    return (
-      path !== null &&
-      new URL(path, 'https://capture.invalid').pathname ===
-        binding.matcher.path.value
-    )
+    return path !== null && matchV4Request(path, details.type, binding) !== null
   } catch {
     return false
   }

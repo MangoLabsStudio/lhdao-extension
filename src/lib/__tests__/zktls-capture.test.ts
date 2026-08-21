@@ -1057,6 +1057,60 @@ describe('zkTLS v4 capture', () => {
     expect(() => capture.take()).toThrow('too many redirects')
   })
 
+  test('counts only redirects that match the signed query and resource type', () => {
+    const capture = v4Session()
+    for (let index = 0; index < 64; index += 1) {
+      expect(
+        capture.redirect(
+          {
+            ...redirectDetails(`wrong-query-${index}`),
+            redirectUrl:
+              'https://api.example.com/v1/account?network=testnet&account=acct-query',
+          },
+          'captured request redirected',
+        ),
+      ).toBe(false)
+      expect(
+        capture.redirect(
+          {
+            ...redirectDetails(`wrong-type-${index}`),
+            type: 'image',
+          },
+          'captured request redirected',
+        ),
+      ).toBe(false)
+    }
+    for (let index = 0; index < 64; index += 1)
+      expect(
+        capture.redirect(
+          redirectDetails(`exact-${index}`),
+          'captured request redirected',
+        ),
+      ).toBe(false)
+    expect(
+      capture.redirect(
+        redirectDetails('exact-overflow'),
+        'captured request redirected',
+      ),
+    ).toBe(true)
+    expect(() => capture.take()).toThrow('too many redirects')
+  })
+
+  test('tracks an exact signed matcher reached through a relative redirect', () => {
+    const capture = v4Session()
+    expect(
+      capture.redirect(
+        {
+          ...redirectDetails('relative'),
+          url: 'https://api.example.com/unsigned',
+          redirectUrl: '/v1/account?network=mainnet&account=acct-query',
+        },
+        'captured request redirected',
+      ),
+    ).toBe(false)
+    expect(() => observePost(capture, 'relative')).toThrow('redirected')
+  })
+
   test('ignores 65 redirects from another tab', () => {
     const capture = v4Session()
     for (let index = 0; index < 65; index += 1)
