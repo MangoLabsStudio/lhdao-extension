@@ -619,6 +619,32 @@ describe('zkTLS v2 capture', () => {
     ).toThrow('capture already completed')
   })
 
+  test('keeps legacy redirects limited to an existing candidate', () => {
+    const capture = session()
+    expect(
+      capture.redirect(
+        {
+          requestId: 'legacy-unrelated',
+          tabId: 99,
+          frameId: 8,
+          method: 'POST',
+          url: 'https://unrelated.example.com/start',
+          redirectUrl: `https://github.com${provider.request.path}`,
+        },
+        'captured request redirected',
+      ),
+    ).toBe(false)
+    capture.observe({
+      requestId: 'legacy-unrelated',
+      tabId: 7,
+      frameId: 0,
+      method: 'GET',
+      url: `https://github.com${provider.request.path}`,
+      requestHeaders: [{ name: 'Cookie', value: 'private' }],
+    })
+    expect(capture.take()).toMatchObject({ path: provider.request.path })
+  })
+
   test('uses a complete bounded HTML window and retains v1 as a supported schema', () => {
     const config = validateConnector(provider)
     if (config.interpreter_version !== 2) throw new Error('wrong provider')
@@ -703,6 +729,19 @@ describe('zkTLS v4 capture', () => {
       initiator: 'https://app.example.com',
       requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
     })
+  }
+
+  function redirectDetails(requestId: string) {
+    return {
+      requestId,
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://start.example.com/unsigned',
+      redirectUrl: url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+    }
   }
 
   test.each([
@@ -946,9 +985,12 @@ describe('zkTLS v4 capture', () => {
 
   test('denies a redirected ID before it reaches the signed target', () => {
     const capture = v4Session()
-    expect(capture.redirect('redirected', 'captured request redirected')).toBe(
-      false,
-    )
+    expect(
+      capture.redirect(
+        redirectDetails('redirected'),
+        'captured request redirected',
+      ),
+    ).toBe(false)
     expect(() => observePost(capture, 'redirected')).toThrow('redirected')
   })
 
@@ -956,26 +998,42 @@ describe('zkTLS v4 capture', () => {
     const capture = v4Session()
     observePost(capture, 'signed-redirect')
     expect(
-      capture.redirect('signed-redirect', 'captured request redirected'),
+      capture.redirect(
+        {
+          ...redirectDetails('signed-redirect'),
+          url,
+          redirectUrl: 'https://other.example.com/result',
+        },
+        'captured request redirected',
+      ),
     ).toBe(true)
     expect(() => capture.take()).toThrow('captured request redirected')
   })
 
   test('allows request ID reuse after terminal cleanup or session clear', () => {
     const afterComplete = v4Session()
-    afterComplete.redirect('reused', 'captured request redirected')
+    afterComplete.redirect(
+      redirectDetails('reused'),
+      'captured request redirected',
+    )
     expect(afterComplete.completes('reused')).toBe(false)
     observePost(afterComplete, 'reused')
     expect(afterComplete.take()).toMatchObject({ method: 'POST' })
 
     const afterError = v4Session()
-    afterError.redirect('reused', 'captured request redirected')
+    afterError.redirect(
+      redirectDetails('reused'),
+      'captured request redirected',
+    )
     expect(afterError.reject('reused', 'captured request failed')).toBe(false)
     observePost(afterError, 'reused')
     expect(afterError.take()).toMatchObject({ method: 'POST' })
 
     const afterClear = v4Session()
-    afterClear.redirect('reused', 'captured request redirected')
+    afterClear.redirect(
+      redirectDetails('reused'),
+      'captured request redirected',
+    )
     afterClear.clear()
     observePost(afterClear, 'reused')
     expect(afterClear.take()).toMatchObject({ method: 'POST' })
@@ -985,12 +1043,57 @@ describe('zkTLS v4 capture', () => {
     const capture = v4Session()
     for (let index = 0; index < 64; index += 1)
       expect(
-        capture.redirect(`redirect-${index}`, 'captured request redirected'),
+        capture.redirect(
+          redirectDetails(`redirect-${index}`),
+          'captured request redirected',
+        ),
       ).toBe(false)
     expect(
-      capture.redirect('redirect-overflow', 'captured request redirected'),
+      capture.redirect(
+        redirectDetails('redirect-overflow'),
+        'captured request redirected',
+      ),
     ).toBe(true)
     expect(() => capture.take()).toThrow('too many redirects')
+  })
+
+  test('ignores 65 redirects from another tab', () => {
+    const capture = v4Session()
+    for (let index = 0; index < 65; index += 1)
+      expect(
+        capture.redirect(
+          { ...redirectDetails(`cross-tab-${index}`), tabId: 8 },
+          'captured request redirected',
+        ),
+      ).toBe(false)
+    observePost(capture)
+    expect(capture.take()).toMatchObject({ method: 'POST' })
+  })
+
+  test('ignores redirects with an evil initiator or unrelated destination', () => {
+    const capture = v4Session()
+    for (let index = 0; index < 65; index += 1) {
+      expect(
+        capture.redirect(
+          {
+            ...redirectDetails(`evil-${index}`),
+            initiator: 'https://evil.example.com',
+          },
+          'captured request redirected',
+        ),
+      ).toBe(false)
+      expect(
+        capture.redirect(
+          {
+            ...redirectDetails(`unrelated-${index}`),
+            redirectUrl: 'https://other.example.com/result',
+          },
+          'captured request redirected',
+        ),
+      ).toBe(false)
+    }
+    observePost(capture)
+    expect(capture.take()).toMatchObject({ method: 'POST' })
   })
 
   test('allows ordinary browser metadata headers on a public JSON request', () => {

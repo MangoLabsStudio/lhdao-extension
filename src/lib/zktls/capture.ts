@@ -154,6 +154,8 @@ export type RequestDetails = {
   requestHeaders?: { name: string; value?: string }[]
 }
 
+export type RedirectDetails = RequestDetails & { redirectUrl: string }
+
 export type RequestBodyDetails = RequestDetails & {
   requestBody?: {
     formData?: Record<string, string[]>
@@ -382,6 +384,23 @@ function requireV4Initiator(
 ): void {
   if (details.initiator !== binding.pageOrigin)
     fail('captured request initiator did not match')
+}
+
+function targetsV4Redirect(
+  details: RedirectDetails,
+  binding: V4CaptureBinding,
+): boolean {
+  try {
+    const target = new URL(details.redirectUrl, details.url)
+    const path = requestPath(target.href, binding.targetOrigin)
+    return (
+      path !== null &&
+      new URL(path, 'https://capture.invalid').pathname ===
+        binding.matcher.path.value
+    )
+  } catch {
+    return false
+  }
 }
 
 export function createCaptureBinding(input: V4CaptureBinding): V4CaptureBinding
@@ -922,7 +941,20 @@ export class CaptureSession {
     return this.#requestId === requestId && this.#captured !== null
   }
 
-  redirect(requestId: string, reason: string): boolean {
+  redirect(details: RedirectDetails, reason: string): boolean {
+    const binding = this.#binding
+    if (!isV4Binding(binding)) return this.reject(details.requestId, reason)
+    if (
+      details.tabId !== binding.tabId ||
+      details.frameId !== binding.frameId ||
+      details.method !== binding.method ||
+      details.initiator !== binding.pageOrigin
+    )
+      return false
+    const requestId = details.requestId
+    const matched =
+      this.#requestId === requestId && (this.#captured || this.#candidate)
+    if (!matched && !targetsV4Redirect(details, binding)) return false
     if (!this.#redirected.has(requestId)) {
       if (this.#redirected.size >= MAX_REDIRECTED_REQUESTS) {
         this.#fail('too many redirects were observed')

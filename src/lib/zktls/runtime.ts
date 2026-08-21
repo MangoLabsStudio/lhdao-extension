@@ -4,6 +4,7 @@ import {
   CaptureSession,
   clearCapturedRequest,
   createCaptureBinding,
+  type RedirectDetails,
   type RequestBodyDetails,
   type RequestDetails,
 } from './capture'
@@ -590,7 +591,7 @@ export function registerZkTlsRuntime(): void {
       if (active?.kind !== 'capture') return
       if (
         active.capture.redirect(
-          details.requestId,
+          details as RedirectDetails,
           'captured request redirected',
         )
       )

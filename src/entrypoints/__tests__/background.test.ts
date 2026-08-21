@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AvailableEngagement } from '@/lib/queries'
+import { CaptureSession } from '@/lib/zktls/capture'
 import { validateConnector } from '@/lib/zktls/interpreter'
 import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
 import {
@@ -355,7 +356,7 @@ describe('Product zkTLS jobs', () => {
     }) as never)
 
     let observe: ((details: unknown) => void) | undefined
-    let redirect: ((details: { requestId: string }) => void) | undefined
+    let redirect: ((details: unknown) => void) | undefined
     let complete: ((details: unknown) => void) | undefined
     vi.spyOn(
       chrome.webRequest.onBeforeSendHeaders,
@@ -371,9 +372,7 @@ describe('Product zkTLS jobs', () => {
     vi.spyOn(
       chrome.webRequest.onBeforeRedirect,
       'addListener',
-    ).mockImplementation(((
-      listener: (details: { requestId: string }) => void,
-    ) => {
+    ).mockImplementation(((listener: (details: unknown) => void) => {
       redirect = listener
     }) as never)
     for (const event of [
@@ -403,16 +402,24 @@ describe('Product zkTLS jobs', () => {
       correlationId: 'redirect-before-target',
     })
     await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(1))
-    redirect?.({ requestId: 'redirected' })
-    observe?.({
+    const redirectedDetails = {
       requestId: 'redirected',
       tabId: 7,
       frameId: 0,
       method: 'GET',
       url: 'https://github.com/viewer',
+      redirectUrl: 'https://github.com/login',
       type: 'xmlhttprequest',
+      initiator: 'https://github.com',
       requestHeaders: [{ name: 'Cookie', value: 'private' }],
-    })
+    }
+    observe?.(redirectedDetails)
+    const redirectSpy = vi.spyOn(CaptureSession.prototype, 'redirect')
+    redirect?.(redirectedDetails)
+    expect(redirectSpy).toHaveBeenCalledWith(
+      redirectedDetails,
+      'captured request redirected',
+    )
     complete?.({ requestId: 'redirected' })
     await expect(redirectedProof).resolves.toEqual({
       type: 'zktls-prove-result',
