@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   revealConfig,
   sessionRegistrationPayload,
@@ -15,7 +15,15 @@ import {
   parseZkTlsPageRequest,
   ZKTLS_PAGE_CHANNEL,
 } from '@/lib/zktls/page-bridge'
+import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
+import {
+  connectorTab,
+  ensurePermissions,
+  proveZkTlsSession,
+  registerZkTlsRuntime,
+} from '@/lib/zktls/runtime'
 import { parseZkTlsRuntimeRequest } from '@/lib/zktls/runtime-request'
+import * as signedConfig from '@/lib/zktls/signed-config'
 import {
   assertTicketAvailable,
   fetchAndVerifySignedConfig,
@@ -1587,5 +1595,344 @@ describe('zkTLS strict boundaries', () => {
     expect(() =>
       revealConfig({ ...message, config: jsonPath }, sent, received),
     ).toThrow('JSON connectors are unsupported')
+  })
+})
+
+describe('zkTLS V4 page and target permissions', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: false,
+      apiEndpoint: null,
+      verifierProfileId: null,
+    })
+  })
+
+  test('normalizes, deduplicates, and sorts one or two exact signed origins', async () => {
+    const contains = vi
+      .spyOn(chrome.permissions, 'contains')
+      .mockImplementation((async () => true) as never)
+
+    await ensurePermissions(
+      [
+        'https://api.example.com',
+        'https://app.example.com',
+        'https://api.example.com',
+      ],
+      'product-volume',
+    )
+
+    expect(contains).toHaveBeenCalledWith({
+      origins: ['https://api.example.com/*', 'https://app.example.com/*'],
+    })
+    await expect(
+      ensurePermissions(
+        [
+          'https://a.example.com',
+          'https://b.example.com',
+          'https://c.example.com',
+        ],
+        'product-volume',
+      ),
+    ).rejects.toThrow('one or two exact HTTPS origins')
+  })
+
+  test.each([
+    ['https://api.example.com:8443', 'https://api.example.com:8443/*'],
+    ['https://[2606:4700:4700::1111]', 'https://[2606:4700:4700::1111]/*'],
+  ])('preserves a Chrome-exact port or IPv6 signed origin %s', async (origin, pattern) => {
+    const contains = vi
+      .spyOn(chrome.permissions, 'contains')
+      .mockImplementation((async () => true) as never)
+    await ensurePermissions([origin], 'product-volume')
+    expect(contains).toHaveBeenCalledWith({ origins: [pattern] })
+  })
+
+  test('selects only a tab at the signed page origin', async () => {
+    const query = vi
+      .spyOn(chrome.tabs, 'query')
+      .mockResolvedValueOnce([
+        { id: 3, url: 'https://api.example.com/v1/volume' } as chrome.tabs.Tab,
+      ])
+      .mockResolvedValueOnce([
+        { id: 7, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
+      ])
+
+    await expect(
+      connectorTab('https://app.example.com'),
+    ).resolves.toMatchObject({
+      id: 7,
+    })
+    expect(query).toHaveBeenNthCalledWith(2, {
+      url: 'https://app.example.com/*',
+    })
+  })
+
+  test('does not reuse a same-host page tab on the wrong signed port', async () => {
+    const query = vi
+      .spyOn(chrome.tabs, 'query')
+      .mockResolvedValueOnce([
+        { id: 3, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 5,
+          url: 'https://app.example.com:9443/dashboard',
+        } as chrome.tabs.Tab,
+        {
+          id: 7,
+          url: 'https://app.example.com:8443/dashboard',
+        } as chrome.tabs.Tab,
+      ])
+
+    await expect(
+      connectorTab('https://app.example.com:8443'),
+    ).resolves.toMatchObject({ id: 7 })
+    expect(query).toHaveBeenNthCalledWith(2, {
+      url: 'https://app.example.com:8443/*',
+    })
+  })
+
+  test('permission messages reject page-supplied origins and malformed senders', async () => {
+    Object.defineProperty(chrome.runtime, 'id', {
+      value: 'extension',
+      configurable: true,
+    })
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation(
+      (async () => false) as never,
+    )
+    const create = vi
+      .spyOn(chrome.tabs, 'create')
+      .mockImplementation((async () => ({ id: 9 })) as never)
+    let messageListener:
+      | ((message: unknown, sender: chrome.runtime.MessageSender) => unknown)
+      | undefined
+    vi.spyOn(chrome.runtime.onMessage, 'addListener').mockImplementation(
+      (listener) => {
+        messageListener = listener as typeof messageListener
+      },
+    )
+    vi.spyOn(chrome.tabs.onUpdated, 'addListener').mockImplementation(
+      (() => undefined) as never,
+    )
+    for (const event of [
+      chrome.webRequest.onBeforeRequest,
+      chrome.webRequest.onBeforeSendHeaders,
+      chrome.webRequest.onBeforeRedirect,
+      chrome.webRequest.onErrorOccurred,
+      chrome.webRequest.onCompleted,
+    ])
+      vi.spyOn(event, 'addListener').mockImplementation(
+        (() => undefined) as never,
+      )
+    registerZkTlsRuntime()
+
+    const pending = ensurePermissions(
+      ['https://app.example.com', 'https://api.example.com:8443'],
+      'product-volume',
+    )
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    const permissionPage = chrome.runtime.getURL('zktls-permission.html')
+    const requestId = new URL(
+      (create.mock.calls[0]?.[0] as { url: string }).url,
+    ).searchParams.get('request_id')
+    const sender = { id: 'extension', url: permissionPage }
+
+    expect(() =>
+      messageListener?.(
+        { type: 'zktls-permission-preview', requestId },
+        { id: 'extension', url: 'not a URL' },
+      ),
+    ).not.toThrow()
+    expect(
+      messageListener?.(
+        {
+          type: 'zktls-permission-preview',
+          requestId,
+          origins: ['https://evil.example.com'],
+        },
+        sender,
+      ),
+    ).toBeNull()
+    expect(
+      messageListener?.(
+        {
+          type: 'zktls-permission-result',
+          requestId,
+          granted: true,
+          origins: ['https://evil.example.com'],
+        },
+        sender,
+      ),
+    ).toBeNull()
+    expect(
+      messageListener?.(
+        { type: 'zktls-permission-preview', requestId },
+        sender,
+      ),
+    ).toEqual({
+      origins: ['https://api.example.com:8443', 'https://app.example.com'],
+      connectorId: 'product-volume',
+    })
+    await messageListener?.(
+      { type: 'zktls-permission-result', requestId, granted: false },
+      sender,
+    )
+    await expect(pending).rejects.toThrow()
+  })
+
+  test('requests both V4 origins and opens only the page origin when login is needed', async () => {
+    const rawConfig = v4Connector()
+    const config = validateConnector(rawConfig)
+    const signed = await signedV4Envelopes(rawConfig)
+    vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
+      config,
+      ticket: signed.ticket_envelope.ticket,
+      configEnvelope: { ...signed.config_envelope, config },
+      ticketEnvelope: signed.ticket_envelope,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    const contains = vi
+      .spyOn(chrome.permissions, 'contains')
+      .mockImplementation((async () => true) as never)
+    const query = vi.spyOn(chrome.tabs, 'query').mockResolvedValue([])
+    const create = vi
+      .spyOn(chrome.tabs, 'create')
+      .mockImplementation((async () => ({ id: 7 })) as never)
+
+    await expect(
+      proveZkTlsSession({
+        correlationId: 'v4-page',
+        sessionId: 's1',
+        connectorId: 'product-volume',
+      }),
+    ).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'v4-page',
+      status: 'pending_login',
+    })
+    expect(contains).toHaveBeenCalledWith({
+      origins: ['https://api.example.com/*', 'https://app.example.com/*'],
+    })
+    expect(query).toHaveBeenCalledWith({
+      url: 'https://app.example.com/*',
+    })
+    expect(create).toHaveBeenCalledWith({ url: 'https://app.example.com' })
+    expect(create).not.toHaveBeenCalledWith({ url: 'https://api.example.com' })
+  })
+
+  test('fails closed when the selected V4 page tab navigates before capture', async () => {
+    const rawConfig = v4Connector()
+    const config = validateConnector(rawConfig)
+    const signed = await signedV4Envelopes(rawConfig)
+    vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
+      config,
+      ticket: signed.ticket_envelope.ticket,
+      configEnvelope: { ...signed.config_envelope, config },
+      ticketEnvelope: signed.ticket_envelope,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation(
+      (async () => true) as never,
+    )
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValueOnce([
+      { id: 7, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
+    ])
+    vi.spyOn(chrome.tabs, 'update').mockImplementation((async () => ({
+      id: 7,
+      url: 'https://api.example.com/v1/volume',
+    })) as never)
+    const create = vi.spyOn(chrome.tabs, 'create')
+
+    await expect(
+      proveZkTlsSession({
+        correlationId: 'v4-navigation',
+        sessionId: 's1',
+        connectorId: 'product-volume',
+      }),
+    ).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'v4-navigation',
+      status: 'error',
+      code: 'ZKTLS_CAPTURE_FAILED',
+    })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  test('clears an active V4 capture when its page tab leaves page_origin', async () => {
+    const rawConfig = v4Connector()
+    const config = validateConnector(rawConfig)
+    const signed = await signedV4Envelopes(rawConfig)
+    vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
+      config,
+      ticket: signed.ticket_envelope.ticket,
+      configEnvelope: { ...signed.config_envelope, config },
+      ticketEnvelope: signed.ticket_envelope,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation(
+      (async () => true) as never,
+    )
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([
+      { id: 7, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
+    ])
+    vi.spyOn(chrome.tabs, 'update').mockImplementation((async () => ({
+      id: 7,
+      url: 'https://app.example.com/dashboard',
+    })) as never)
+    let updated:
+      | ((
+          tabId: number,
+          changeInfo: chrome.tabs.TabChangeInfo,
+          tab: chrome.tabs.Tab,
+        ) => void)
+      | undefined
+    vi.spyOn(chrome.tabs.onUpdated, 'addListener').mockImplementation(
+      (listener) => {
+        updated = listener
+      },
+    )
+    for (const event of [
+      chrome.webRequest.onBeforeRequest,
+      chrome.webRequest.onBeforeSendHeaders,
+      chrome.webRequest.onBeforeRedirect,
+      chrome.webRequest.onErrorOccurred,
+      chrome.webRequest.onCompleted,
+      chrome.runtime.onMessage,
+    ])
+      vi.spyOn(event, 'addListener').mockImplementation(
+        (() => undefined) as never,
+      )
+    registerZkTlsRuntime()
+
+    const proving = proveZkTlsSession({
+      correlationId: 'v4-tab-left',
+      sessionId: 's1',
+      connectorId: 'product-volume',
+    })
+    await vi.waitFor(() => expect(chrome.tabs.update).toHaveBeenCalled())
+    updated?.(7, { url: 'https://elsewhere.example.com/' }, {
+      id: 7,
+      url: 'https://elsewhere.example.com/',
+    } as chrome.tabs.Tab)
+
+    await expect(proving).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'v4-tab-left',
+      status: 'error',
+      code: 'ZKTLS_CAPTURE_FAILED',
+    })
   })
 })

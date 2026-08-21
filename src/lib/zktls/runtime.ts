@@ -14,6 +14,7 @@ import {
   type Connector,
   extractIdentity,
   type V1Connector,
+  type V4Connector,
 } from './interpreter'
 import { assertVerifierProfile, ZKTLS_PROFILE } from './profile'
 import {
@@ -40,11 +41,12 @@ type V1Job = {
   cookie?: string
   done?: (cookie: string | null) => void
 }
+type RuntimeCapturedConnector = CapturedConnector | V4Connector
 type CaptureJob = {
   kind: 'capture'
   sessionId: string
   connectorId: string
-  config: CapturedConnector
+  config: RuntimeCapturedConnector
   ticket: Ticket
   origin: string
   tabId: number
@@ -54,7 +56,7 @@ type CaptureJob = {
 type Job = V1Job | CaptureJob
 type Permission = {
   requestId: string
-  origin: string
+  origins: readonly [string] | readonly [string, string]
   connectorId: string
   resolve: (ok: boolean) => void
   timer: ReturnType<typeof setTimeout>
@@ -81,8 +83,39 @@ let productWaiter = false
 
 class ZkTlsPermissionDeniedError extends Error {}
 
+function permissionOrigins(
+  values: readonly string[],
+): readonly [string] | readonly [string, string] {
+  const origins = [...new Set(values)].sort()
+  if (origins.length < 1 || origins.length > 2)
+    throw new Error('permission requires one or two exact HTTPS origins')
+  for (const origin of origins) {
+    let url: URL
+    try {
+      url = new URL(origin)
+    } catch {
+      throw new Error('permission requires one or two exact HTTPS origins')
+    }
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.origin !== origin ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash
+    )
+      throw new Error('permission requires one or two exact HTTPS origins')
+  }
+  return origins.length === 1 ? [origins[0]] : [origins[0], origins[1]]
+}
+
+function permissionPatterns(origins: readonly string[]): string[] {
+  return origins.map((origin) => `${origin}/*`)
+}
+
 function exactOriginPattern(origin: string): string {
-  return `${new URL(origin).origin}/*`
+  return permissionPatterns(permissionOrigins([origin]))[0]
 }
 function clearJob(): void {
   if (job?.kind === 'v1') job.cookie = undefined
@@ -91,6 +124,18 @@ function clearJob(): void {
 }
 function permissionUrl(): string {
   return chrome.runtime.getURL('zktls-permission.html')
+}
+
+function isPermissionSender(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false
+  try {
+    return (
+      new URL(sender.url ?? 'chrome://invalid').pathname ===
+      new URL(permissionUrl()).pathname
+    )
+  } catch {
+    return false
+  }
 }
 
 function assertAvailable(config: Connector, ticket: Ticket): void {
@@ -129,18 +174,19 @@ async function signedConnector(
   return result
 }
 
-async function ensurePermission(
-  origin: string,
+export async function ensurePermissions(
+  origins: readonly string[],
   connectorId: string,
 ): Promise<void> {
-  const permissions = { origins: [exactOriginPattern(origin)] }
+  const normalized = permissionOrigins(origins)
+  const permissions = { origins: permissionPatterns(normalized) }
   if (await chrome.permissions.contains(permissions)) return
   if (permission) throw new Error('permission pending')
   await new Promise<void>((resolve, reject) => {
     const requestId = crypto.randomUUID()
     const pending: Permission = {
       requestId,
-      origin,
+      origins: normalized,
       connectorId,
       resolve: (ok) => {
         clearTimeout(pending.timer)
@@ -158,14 +204,30 @@ async function ensurePermission(
   })
 }
 
-async function connectorTab(origin: string): Promise<chrome.tabs.Tab | null> {
+function tabAtOrigin(
+  tab: chrome.tabs.Tab | undefined,
+  origin: string,
+): tab is chrome.tabs.Tab {
+  if (!tab?.url) return false
+  try {
+    return new URL(tab.url).origin === origin
+  } catch {
+    return false
+  }
+}
+
+export async function connectorTab(
+  origin: string,
+): Promise<chrome.tabs.Tab | null> {
   const [active] = await chrome.tabs.query({
     active: true,
     lastFocusedWindow: true,
   })
-  if (active?.url && new URL(active.url).origin === origin) return active
+  if (tabAtOrigin(active, origin)) return active
   const tabs = await chrome.tabs.query({ url: exactOriginPattern(origin) })
-  return tabs.find((tab) => tab.id !== undefined) ?? null
+  return (
+    tabs.find((tab) => tab.id !== undefined && tabAtOrigin(tab, origin)) ?? null
+  )
 }
 
 async function collectIdentity(
@@ -254,16 +316,18 @@ export async function runProviderActions(
 
 async function proveCapturedRequest(
   request: ZkTlsRunRequest,
-  config: CapturedConnector,
+  config: RuntimeCapturedConnector,
   ticket: Ticket,
   configEnvelope: ConfigEnvelope,
   ticketEnvelope: TicketEnvelope,
 ): Promise<ZkTlsRunResult> {
-  await ensurePermission(config.origin, request.connectorId)
+  const pageOrigin =
+    config.interpreter_version === 4 ? config.page_origin : config.origin
+  await ensurePermissions([pageOrigin, config.origin], request.connectorId)
   assertAvailable(config, ticket)
-  const tab = await connectorTab(config.origin)
+  const tab = await connectorTab(pageOrigin)
   if (!tab?.id) {
-    await chrome.tabs.create({ url: config.origin })
+    await chrome.tabs.create({ url: pageOrigin })
     return {
       type: 'zktls-prove-result',
       correlationId: request.correlationId,
@@ -280,31 +344,57 @@ async function proveCapturedRequest(
     origin: config.origin,
     tabId: tab.id,
     capture: new CaptureSession(
-      createCaptureBinding({
-        tabId: tab.id,
-        frameId: 0,
-        sessionId: request.sessionId,
-        providerId: config.connector_id,
-        revision: config.revision,
-        origin: config.origin,
-        method: config.request.method,
-        ...(config.interpreter_version === 2
-          ? { path: config.request.path }
-          : {
-              matcher: config.request.matcher,
-              ...(config.request.method === 'POST'
-                ? { bodyMatcher: config.request.body }
-                : {}),
-            }),
-        secretHeaders: config.request.secret_headers,
-      }),
+      config.interpreter_version === 4
+        ? createCaptureBinding({
+            interpreterVersion: 4,
+            tabId: tab.id,
+            frameId: 0,
+            sessionId: request.sessionId,
+            providerId: config.connector_id,
+            revision: config.revision,
+            pageOrigin: config.page_origin,
+            targetOrigin: config.origin,
+            method: config.request.method,
+            matcher: config.request.matcher,
+            ...(config.request.method === 'POST'
+              ? {
+                  template: config.request.body,
+                  contentType: config.request.content_type,
+                }
+              : {}),
+            variables: config.variables,
+            resolvedVariables: config.resolved_variables,
+          })
+        : createCaptureBinding({
+            tabId: tab.id,
+            frameId: 0,
+            sessionId: request.sessionId,
+            providerId: config.connector_id,
+            revision: config.revision,
+            origin: config.origin,
+            method: config.request.method,
+            ...(config.interpreter_version === 2
+              ? { path: config.request.path }
+              : {
+                  matcher: config.request.matcher,
+                  ...(config.request.method === 'POST'
+                    ? { bodyMatcher: config.request.body }
+                    : {}),
+                }),
+            secretHeaders: config.request.secret_headers,
+          }),
     ),
   }
   job = active
   const captured = waitForCapture(active)
   let value: CapturedRequest | null
   try {
-    await activateCaptureTab(tab.id)
+    const ready = await activateCaptureTab(tab.id)
+    if (
+      config.interpreter_version === 4 &&
+      !tabAtOrigin(ready, config.page_origin)
+    )
+      throw new Error('page tab left signed origin')
     await runProviderActions(
       tab.id,
       config.origin,
@@ -367,7 +457,11 @@ async function runValidatedZkTlsRequest(
   try {
     const { config, ticket, configEnvelope, ticketEnvelope } =
       await signedConnector(request.sessionId, request.connectorId)
-    if (config.interpreter_version === 2 || config.interpreter_version === 3)
+    if (
+      config.interpreter_version === 2 ||
+      config.interpreter_version === 3 ||
+      config.interpreter_version === 4
+    )
       return await proveCapturedRequest(
         request,
         config,
@@ -382,7 +476,7 @@ async function runValidatedZkTlsRequest(
         status: 'error',
         code: 'UNSUPPORTED_CONNECTOR',
       }
-    await ensurePermission(config.origin, request.connectorId)
+    await ensurePermissions([config.origin], request.connectorId)
     assertAvailable(config, ticket)
     const tab = await connectorTab(config.origin)
     if (!tab?.id) {
@@ -544,6 +638,22 @@ export async function handleZkTlsProof(
 
 export function registerZkTlsRuntime(): void {
   if (/firefox/i.test(navigator.userAgent)) return
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    const active = job
+    if (
+      active?.kind !== 'capture' ||
+      active.config.interpreter_version !== 4 ||
+      active.tabId !== tabId ||
+      (!changeInfo.url && !tab.url) ||
+      tabAtOrigin(
+        { ...tab, url: changeInfo.url ?? tab.url },
+        active.config.page_origin,
+      )
+    )
+      return
+    active.done?.(null)
+    clearJob()
+  })
   chrome.webRequest.onBeforeRequest.addListener(
     (details) => {
       const active = job
@@ -635,29 +745,32 @@ export function registerZkTlsRuntime(): void {
     if (raw.type === 'zktls-permission-preview') {
       const pending = permission
       if (
+        Object.keys(raw).length !== 2 ||
+        !Object.hasOwn(raw, 'type') ||
+        !Object.hasOwn(raw, 'requestId') ||
         !pending ||
-        sender.id !== chrome.runtime.id ||
-        new URL(sender.url ?? 'chrome://invalid').pathname !==
-          new URL(permissionUrl()).pathname ||
+        !isPermissionSender(sender) ||
         raw.requestId !== pending.requestId
       )
         return null
-      return { origin: pending.origin, connectorId: pending.connectorId }
+      return { origins: pending.origins, connectorId: pending.connectorId }
     }
     if (raw.type === 'zktls-permission-result') {
       const pending = permission
       if (
+        Object.keys(raw).length !== 3 ||
+        !Object.hasOwn(raw, 'type') ||
+        !Object.hasOwn(raw, 'requestId') ||
+        !Object.hasOwn(raw, 'granted') ||
         !pending ||
-        sender.id !== chrome.runtime.id ||
-        new URL(sender.url ?? 'chrome://invalid').pathname !==
-          new URL(permissionUrl()).pathname ||
+        !isPermissionSender(sender) ||
         raw.requestId !== pending.requestId ||
         typeof raw.granted !== 'boolean'
       )
         return null
       const granted = raw.granted
       return chrome.permissions
-        .contains({ origins: [exactOriginPattern(pending.origin)] })
+        .contains({ origins: permissionPatterns(pending.origins) })
         .then((contained) => {
           pending.resolve(granted && contained)
           return null
