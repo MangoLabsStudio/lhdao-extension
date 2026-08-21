@@ -799,6 +799,82 @@ describe('zkTLS v4 capture', () => {
     }
   })
 
+  test.each([
+    'Sec-Fetch-Authorization',
+    'Sec-Fetch-Unknown',
+    'Sec-CH-Api-Key',
+    'Sec-CH-UA-Full-Version-List',
+  ])('rejects unsupported client metadata header %s without reading it', (name) => {
+    const capture = v4Session()
+    capture.observeBody({
+      requestId: name,
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    })
+    let valueReads = 0
+    const header = { name } as { name: string; value?: string }
+    Object.defineProperty(header, 'value', {
+      get() {
+        valueReads += 1
+        return 'private'
+      },
+    })
+    expect(() =>
+      capture.observe({
+        requestId: name,
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestHeaders: [
+          { name: 'Content-Type', value: 'application/json' },
+          header,
+        ],
+      }),
+    ).toThrow('unsupported header')
+    expect(valueReads).toBe(0)
+  })
+
+  test.each([
+    undefined,
+    null,
+  ])('rejects a V4 POST when requestHeaders is %s', (requestHeaders) => {
+    const capture = v4Session()
+    capture.observeBody({
+      requestId: 'missing-post-headers',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    })
+    expect(() =>
+      capture.observe({
+        requestId: 'missing-post-headers',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestHeaders: requestHeaders as never,
+      }),
+    ).toThrow('request headers')
+  })
+
   test('allows a same-origin V4 page and public target', () => {
     const binding = createCaptureBinding({
       interpreterVersion: 4,
@@ -830,6 +906,91 @@ describe('zkTLS v4 capture', () => {
       requestHeaders: [],
     })
     expect(capture.take()).toMatchObject({ path: '/v1/get' })
+  })
+
+  test.each([
+    undefined,
+    null,
+  ])('rejects a V4 GET when requestHeaders is %s', (requestHeaders) => {
+    const binding = createCaptureBinding({
+      interpreterVersion: 4,
+      tabId: 7,
+      frameId: 0,
+      sessionId: 'missing-get-headers',
+      providerId: 'missing-get-headers',
+      revision: 1,
+      pageOrigin: 'https://app.example.com',
+      targetOrigin: 'https://app.example.com',
+      method: 'GET',
+      matcher: {
+        path: { kind: 'exact', value: '/v1/get' },
+        query: { required: {}, optional: {}, capture: {} },
+        resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
+      },
+      variables: [],
+      resolvedVariables: {},
+    })
+    expect(() =>
+      new CaptureSession(binding).observe({
+        requestId: 'missing-get-headers',
+        tabId: 7,
+        frameId: 0,
+        method: 'GET',
+        url: 'https://app.example.com/v1/get',
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestHeaders: requestHeaders as never,
+      }),
+    ).toThrow('request headers')
+  })
+
+  test('denies a redirected ID before it reaches the signed target', () => {
+    const capture = v4Session()
+    expect(capture.redirect('redirected', 'captured request redirected')).toBe(
+      false,
+    )
+    expect(() => observePost(capture, 'redirected')).toThrow('redirected')
+  })
+
+  test('denies a signed request after redirecting it', () => {
+    const capture = v4Session()
+    observePost(capture, 'signed-redirect')
+    expect(
+      capture.redirect('signed-redirect', 'captured request redirected'),
+    ).toBe(true)
+    expect(() => capture.take()).toThrow('captured request redirected')
+  })
+
+  test('allows request ID reuse after terminal cleanup or session clear', () => {
+    const afterComplete = v4Session()
+    afterComplete.redirect('reused', 'captured request redirected')
+    expect(afterComplete.completes('reused')).toBe(false)
+    observePost(afterComplete, 'reused')
+    expect(afterComplete.take()).toMatchObject({ method: 'POST' })
+
+    const afterError = v4Session()
+    afterError.redirect('reused', 'captured request redirected')
+    expect(afterError.reject('reused', 'captured request failed')).toBe(false)
+    observePost(afterError, 'reused')
+    expect(afterError.take()).toMatchObject({ method: 'POST' })
+
+    const afterClear = v4Session()
+    afterClear.redirect('reused', 'captured request redirected')
+    afterClear.clear()
+    observePost(afterClear, 'reused')
+    expect(afterClear.take()).toMatchObject({ method: 'POST' })
+  })
+
+  test('fails closed when too many redirected request IDs are pending', () => {
+    const capture = v4Session()
+    for (let index = 0; index < 64; index += 1)
+      expect(
+        capture.redirect(`redirect-${index}`, 'captured request redirected'),
+      ).toBe(false)
+    expect(
+      capture.redirect('redirect-overflow', 'captured request redirected'),
+    ).toBe(true)
+    expect(() => capture.take()).toThrow('too many redirects')
   })
 
   test('allows ordinary browser metadata headers on a public JSON request', () => {
@@ -868,7 +1029,13 @@ describe('zkTLS v4 capture', () => {
         { name: 'Origin', value: 'https://app.example.com' },
         { name: 'Referer', value: 'https://app.example.com/' },
         { name: 'User-Agent', value: 'Chrome' },
+        { name: 'Sec-CH-UA', value: 'Chromium' },
+        { name: 'Sec-CH-UA-Mobile', value: '?0' },
+        { name: 'Sec-CH-UA-Platform', value: 'macOS' },
+        { name: 'Sec-Fetch-Dest', value: 'empty' },
+        { name: 'Sec-Fetch-Mode', value: 'cors' },
         { name: 'Sec-Fetch-Site', value: 'cross-site' },
+        { name: 'Sec-Fetch-User', value: '?1' },
       ],
     })
     expect(capture.take()).toMatchObject({

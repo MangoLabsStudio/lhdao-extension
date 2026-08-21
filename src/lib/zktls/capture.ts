@@ -32,6 +32,7 @@ export const BODY_CONTENT_TYPES = [
 ] as const
 export type BodyContentType = (typeof BODY_CONTENT_TYPES)[number]
 const MAX_CAPTURED_BODY_BYTES = 8192
+const MAX_REDIRECTED_REQUESTS = 64
 const V4_PUBLIC_HEADER_NAMES = new Set([
   'content-type',
   'content-length',
@@ -46,6 +47,13 @@ const V4_PUBLIC_HEADER_NAMES = new Set([
   'pragma',
   'priority',
   'referer',
+  'sec-ch-ua',
+  'sec-ch-ua-mobile',
+  'sec-ch-ua-platform',
+  'sec-fetch-dest',
+  'sec-fetch-mode',
+  'sec-fetch-site',
+  'sec-fetch-user',
   'user-agent',
   'upgrade-insecure-requests',
 ])
@@ -365,12 +373,7 @@ function isV4Binding(binding: CaptureBinding): binding is V4CaptureBinding {
 }
 
 function v4PublicHeader(name: string): boolean {
-  const normalized = name.toLowerCase()
-  return (
-    V4_PUBLIC_HEADER_NAMES.has(normalized) ||
-    normalized.startsWith('sec-ch-') ||
-    normalized.startsWith('sec-fetch-')
-  )
+  return V4_PUBLIC_HEADER_NAMES.has(name.toLowerCase())
 }
 
 function requireV4Initiator(
@@ -722,6 +725,7 @@ export class CaptureSession {
   #requestBody: RequestBodyDetails['requestBody'] | undefined
   #captured: CapturedRequest | null = null
   #failed: Error | null = null
+  #redirected = new Set<string>()
   #used = false
 
   constructor(binding: CaptureBinding) {
@@ -729,6 +733,10 @@ export class CaptureSession {
   }
 
   observe(details: RequestDetails): void {
+    if (this.#redirected.has(details.requestId)) {
+      this.#fail('redirected request cannot be captured')
+      throw this.#failed
+    }
     const binding = this.#binding
     if (
       details.tabId !== binding.tabId ||
@@ -750,11 +758,11 @@ export class CaptureSession {
     const matched = this.#candidate
     if (!matched || this.#requestId !== details.requestId) return
     if (v4) requireV4Initiator(details, binding)
+    if (v4 && !Array.isArray(details.requestHeaders))
+      fail('captured request headers are invalid')
     if (
       v4 &&
-      (details.requestHeaders ?? []).some(
-        (header) => !v4PublicHeader(header.name),
-      )
+      details.requestHeaders!.some((header) => !v4PublicHeader(header.name))
     )
       fail('captured request contains an unsupported header')
     const secrets: Partial<Record<SecretHeader, string>> = {}
@@ -855,6 +863,10 @@ export class CaptureSession {
   }
 
   observeBody(details: RequestBodyDetails): void {
+    if (this.#redirected.has(details.requestId)) {
+      this.#fail('redirected request cannot be captured')
+      throw this.#failed
+    }
     const binding = this.#binding
     if (
       details.tabId !== binding.tabId ||
@@ -906,19 +918,30 @@ export class CaptureSession {
   }
 
   completes(requestId: string): boolean {
+    this.#redirected.delete(requestId)
     return this.#requestId === requestId && this.#captured !== null
   }
 
+  redirect(requestId: string, reason: string): boolean {
+    if (!this.#redirected.has(requestId)) {
+      if (this.#redirected.size >= MAX_REDIRECTED_REQUESTS) {
+        this.#fail('too many redirects were observed')
+        return true
+      }
+      this.#redirected.add(requestId)
+    }
+    if (this.#requestId !== requestId || (!this.#captured && !this.#candidate))
+      return false
+    this.#fail(reason)
+    return true
+  }
+
   reject(requestId: string, reason: string): boolean {
+    this.#redirected.delete(requestId)
     const captured = this.#captured
     const candidate = this.#candidate
     if (this.#requestId !== requestId || (!captured && !candidate)) return false
-    this.#failed = new Error(reason)
-    if (captured) clearCapturedRequest(captured)
-    if (candidate) clearCapturedRequest(candidate)
-    this.#candidate = null
-    this.#requestBody = undefined
-    this.#captured = null
+    this.#fail(reason)
     return true
   }
 
@@ -931,6 +954,7 @@ export class CaptureSession {
     this.#candidate = null
     this.#requestBody = undefined
     this.#requestId = null
+    this.#redirected.clear()
     return captured
   }
 
@@ -941,5 +965,15 @@ export class CaptureSession {
     this.#candidate = null
     this.#requestBody = undefined
     this.#requestId = null
+    this.#redirected.clear()
+  }
+
+  #fail(reason: string): void {
+    this.#failed = new Error(reason)
+    if (this.#captured) clearCapturedRequest(this.#captured)
+    if (this.#candidate) clearCapturedRequest(this.#candidate)
+    this.#candidate = null
+    this.#requestBody = undefined
+    this.#captured = null
   }
 }

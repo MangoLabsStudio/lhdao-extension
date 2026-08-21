@@ -589,7 +589,10 @@ export function registerZkTlsRuntime(): void {
       const active = job
       if (active?.kind !== 'capture') return
       if (
-        active.capture.reject(details.requestId, 'captured request redirected')
+        active.capture.redirect(
+          details.requestId,
+          'captured request redirected',
+        )
       )
         active.done?.(null)
     },
