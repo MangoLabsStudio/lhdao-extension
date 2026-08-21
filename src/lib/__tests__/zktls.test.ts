@@ -240,7 +240,316 @@ function cloneV4(): MutableV4 {
   return structuredClone(v4Connector()) as MutableV4
 }
 
+function decimalVariableConnector(value: string): MutableV4 {
+  const config = cloneV4()
+  config.variables[0] = {
+    name: 'accountId',
+    scalarType: 'DECIMAL',
+    source: { kind: 'BOUND_ACCOUNT', bindingKey: 'example' },
+  }
+  config.resolved_variables.accountId = { type: 'DECIMAL', value }
+  return config
+}
+
+function decimalPostFilterConnector(value: string): MutableV4 {
+  const config = cloneV4()
+  config.pipelines = [
+    {
+      output: 'balance',
+      sourcePath: '$.items[*]',
+      groupBy: { path: '$.day', interval: 'UTC_DAY' },
+      valuePath: '$.amount',
+      cast: 'DECIMAL',
+      reduce: 'SUM',
+      postFilter: { op: 'GTE', value, unit: 'USDT' },
+      finalReduce: 'COUNT',
+      valueUnit: 'USDT',
+      outputUnit: 'days',
+    },
+  ]
+  config.disclosure = {
+    key_paths: ['$.items', '$.items[*].amount', '$.items[*].day'],
+    scalar_paths: ['$.items[*].amount', '$.items[*].day'],
+    collection_paths: ['$.items'],
+    max_elements: 200,
+  }
+  return config
+}
+
+function pathConnector(
+  path: string,
+  keyPaths: string[],
+  scalarPath = path,
+): MutableV4 {
+  const config = cloneV4()
+  config.pipelines[0] = {
+    output: 'balance',
+    sourcePath: path,
+    cast: 'DECIMAL',
+    valueUnit: 'USDT',
+    outputUnit: 'USDT',
+  }
+  config.disclosure = {
+    key_paths: keyPaths,
+    scalar_paths: [scalarPath],
+    collection_paths: [],
+    max_elements: 200,
+  }
+  return config
+}
+
+function sizedV4Connector(pathPadding: number): MutableV4 {
+  const config = cloneV4()
+  const keyPaths = new Set<string>()
+  const collectionPaths: string[] = []
+  config.pipelines = Array.from({ length: 20 }, (_, pipelineIndex) => {
+    const suffix = String(pipelineIndex).padStart(2, '0')
+    const source = `$.items${suffix}[*]`
+    const sourceKey = `$.items${suffix}`
+    keyPaths.add(sourceKey)
+    collectionPaths.push(sourceKey)
+    const predicates = Array.from({ length: 32 }, (_, predicateIndex) => {
+      const field = `field_${suffix}_${String(predicateIndex).padStart(2, '0')}_${'x'.repeat(pathPadding)}`
+      keyPaths.add(`${source}.${field}`)
+      return { op: 'EXISTS', path: `$.${field}` }
+    })
+    return {
+      output: `output${suffix}`,
+      sourcePath: source,
+      filter: { op: 'ALL', predicates },
+      cast: 'STRING',
+      reduce: 'COUNT',
+      valueUnit: 'count',
+      outputUnit: 'count',
+    }
+  })
+  config.disclosure = {
+    key_paths: [...keyPaths].sort(),
+    scalar_paths: [],
+    collection_paths: collectionPaths.sort(),
+    max_elements: 200,
+  }
+  config.request.body = {
+    operation: 'volume',
+    input: { account: { $var: 'accountId' } },
+    padding: Array.from({ length: 8 }, () => ''),
+  }
+  return config
+}
+
+function exact64KiBV4Connector(): MutableV4 {
+  const encoder = new TextEncoder()
+  for (let pathPadding = 0; pathPadding <= 117; pathPadding += 1) {
+    const config = sizedV4Connector(pathPadding)
+    const remaining = 65_536 - encoder.encode(canonicalJson(config)).byteLength
+    if (remaining < 0 || remaining > 8 * 1024) continue
+    const body = testRecord(config.request.body)
+    const padding = body.padding as string[]
+    let unfilled = remaining
+    for (let index = 0; index < padding.length; index += 1) {
+      const length = Math.min(1024, unfilled)
+      padding[index] = 'p'.repeat(length)
+      unfilled -= length
+    }
+    if (
+      unfilled === 0 &&
+      encoder.encode(canonicalJson(config)).byteLength === 65_536
+    )
+      return config
+  }
+  throw new Error('could not construct an exact 64 KiB V4 fixture')
+}
+
 describe('zkTLS strict boundaries', () => {
+  test.each([
+    '999999999999.99999999',
+    '-999999999999.99999999',
+  ])('accepts exact Decimal(20,8) resolved boundary %s', (value) => {
+    expect(validateConnector(decimalVariableConnector(value))).toMatchObject({
+      resolved_variables: { accountId: { type: 'DECIMAL', value } },
+    })
+  })
+
+  test.each([
+    '1000000000000.00000000',
+    '-1000000000000.00000000',
+  ])('rejects out-of-range Decimal(20,8) resolved value %s', (value) => {
+    expect(() => validateConnector(decimalVariableConnector(value))).toThrow()
+  })
+
+  test.each([
+    '999999999999.99999999',
+    '-999999999999.99999999',
+  ])('accepts exact Decimal(20,8) postFilter boundary %s', (value) => {
+    expect(validateConnector(decimalPostFilterConnector(value))).toMatchObject({
+      pipelines: [
+        expect.objectContaining({
+          postFilter: expect.objectContaining({ value }),
+        }),
+      ],
+    })
+  })
+
+  test.each([
+    '1000000000000.00000000',
+    '-1000000000000.00000000',
+  ])('rejects out-of-range Decimal(20,8) postFilter %s', (value) => {
+    expect(() => validateConnector(decimalPostFilterConnector(value))).toThrow()
+  })
+
+  test('keeps V3 closed to V4 page_origin metadata', () => {
+    const config = {
+      interpreter_version: 3,
+      connector_id: 'product-volume',
+      revision: 1,
+      disabled: false,
+      expires_at: '2030-01-01T00:00:00.000Z',
+      page_origin: 'https://app.example.com',
+      origin: 'https://api.example.com',
+      request: {
+        method: 'GET',
+        matcher: {
+          path: { kind: 'exact', value: '/volume' },
+          query: { required: {}, optional: {}, capture: {} },
+          resource_types: ['fetch'],
+        },
+        headers: { accept: 'application/json' },
+        secret_headers: ['cookie'],
+        max_sent_data: 8192,
+        max_recv_data: 65536,
+        replay_safety_evidence: 'The endpoint is read-only.',
+      },
+      response_format: 'json',
+      response_status: 200,
+      extraction: {
+        kind: 'regex',
+        pattern: '^\\{"volume":(\\d+)\\}$',
+        max_bytes: 32,
+      },
+      verifier_profile_id: 'lighthouse-v1',
+    }
+
+    expect(() => validateConnector(config)).toThrow(
+      'connector contains an unknown field',
+    )
+  })
+
+  test('accepts 256-byte and 24-segment JSONPath boundaries', () => {
+    const first = 'a'.repeat(128)
+    const second = 'b'.repeat(119)
+    const byteBoundary = `$["${first}"]["${second}"]`
+    const segmentBoundary = `$${'.a'.repeat(24)}`
+    const segmentPrefixes = Array.from(
+      { length: 24 },
+      (_, index) => `$${'.a'.repeat(index + 1)}`,
+    )
+
+    expect(new TextEncoder().encode(byteBoundary)).toHaveLength(256)
+    const firstCanonical = `$.${first}`
+    const byteCanonical = `${firstCanonical}.${second}`
+    expect(
+      validateConnector(
+        pathConnector(
+          byteBoundary,
+          [firstCanonical, byteCanonical],
+          byteCanonical,
+        ),
+      ),
+    ).toMatchObject({ pipelines: [{ sourcePath: byteBoundary }] })
+    expect(
+      validateConnector(pathConnector(segmentBoundary, segmentPrefixes)),
+    ).toMatchObject({ pipelines: [{ sourcePath: segmentBoundary }] })
+  })
+
+  test('rejects JSONPath byte and segment overflow', () => {
+    const byteOverflow = `$["${'a'.repeat(128)}"]["${'b'.repeat(120)}"]`
+    const segmentOverflow = `$${'.a'.repeat(25)}`
+
+    expect(new TextEncoder().encode(byteOverflow)).toHaveLength(257)
+    expect(() => validateConnector(pathConnector(byteOverflow, []))).toThrow()
+    expect(() =>
+      validateConnector(pathConnector(segmentOverflow, [])),
+    ).toThrow()
+  })
+
+  test('accepts 32 query fields and rejects 33', () => {
+    const boundary = cloneV4()
+    boundary.request.matcher.query.required = {
+      day: { $var: 'periodKey' },
+      ...Object.fromEntries(
+        Array.from({ length: 31 }, (_, index) => [`field${index}`, index]),
+      ),
+    }
+    expect(validateConnector(boundary)).toMatchObject({
+      request: {
+        matcher: { query: { required: expect.any(Object) } },
+      },
+    })
+
+    const overflow = structuredClone(boundary)
+    overflow.request.matcher.query.required.field32 = 32
+    expect(() => validateConnector(overflow)).toThrow()
+  })
+
+  test('enforces the deepest signed template allowed by the outer depth budget', () => {
+    const nested = (wrappers: number) => {
+      let value: unknown = 'leaf'
+      for (let index = 0; index < wrappers; index += 1) value = [value]
+      return value
+    }
+    const boundary = cloneV4()
+    boundary.request.body = {
+      account: { $var: 'accountId' },
+      nested: nested(9),
+    }
+    expect(validateConnector(boundary)).toMatchObject({
+      request: { method: 'POST' },
+    })
+
+    const overflow = cloneV4()
+    overflow.request.body = {
+      account: { $var: 'accountId' },
+      nested: nested(10),
+    }
+    expect(() => validateConnector(overflow)).toThrow()
+  })
+
+  test('accepts 1024 UTF-8 scalar bytes and rejects overflow', () => {
+    const boundary = cloneV4()
+    boundary.request.body = {
+      account: { $var: 'accountId' },
+      label: 'é'.repeat(512),
+    }
+    expect(new TextEncoder().encode('é'.repeat(512))).toHaveLength(1024)
+    expect(validateConnector(boundary)).toMatchObject({
+      request: { method: 'POST' },
+    })
+
+    const overflow = cloneV4()
+    overflow.request.body = {
+      account: { $var: 'accountId' },
+      label: 'é'.repeat(513),
+    }
+    expect(() => validateConnector(overflow)).toThrow()
+  })
+
+  test('accepts exact 64 KiB normalized connector and rejects one-byte overflow', () => {
+    const boundary = exact64KiBV4Connector()
+    expect(new TextEncoder().encode(canonicalJson(boundary))).toHaveLength(
+      65_536,
+    )
+    expect(validateConnector(boundary)).toMatchObject({
+      interpreter_version: 4,
+    })
+
+    const overflow = structuredClone(boundary)
+    overflow.verifier_profile_id = `${overflow.verifier_profile_id}x`
+    expect(new TextEncoder().encode(canonicalJson(overflow))).toHaveLength(
+      65_537,
+    )
+    expect(() => validateConnector(overflow)).toThrow()
+  })
+
   test('parses the exact public full-disclosure V4 connector', async () => {
     const config = v4Connector()
 

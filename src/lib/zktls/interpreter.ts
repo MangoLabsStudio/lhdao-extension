@@ -874,6 +874,8 @@ const V4_SCALAR_TYPES = new Set<V4ScalarType>([
   'UTC_TIMESTAMP',
 ])
 const V4_COUNT_UNITS = new Set(['count', 'days', 'items'])
+const V4_DECIMAL_SCALE = 100_000_000n
+const V4_DECIMAL_MAX_SCALED = 99_999_999_999_999_999_999n
 
 type V4Record = Record<string, unknown>
 type V4PathSegment =
@@ -1326,8 +1328,10 @@ function v4Decimal(value: string): boolean {
   const unsigned = value.startsWith('-') ? value.slice(1) : value
   const [whole, fraction = ''] = unsigned.split('.')
   if (fraction.length > 8) return false
-  const scaled = BigInt(whole) * 100_000_000n + BigInt(fraction.padEnd(8, '0'))
-  return scaled <= 99_999_999_999_999_999_999n
+  const magnitude =
+    BigInt(whole) * V4_DECIMAL_SCALE + BigInt(fraction.padEnd(8, '0'))
+  const scaled = value.startsWith('-') ? -magnitude : magnitude
+  return scaled >= -V4_DECIMAL_MAX_SCALED && scaled <= V4_DECIMAL_MAX_SCALED
 }
 
 function v4IsoTimestamp(value: string): boolean {
