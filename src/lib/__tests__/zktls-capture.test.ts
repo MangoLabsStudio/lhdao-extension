@@ -736,6 +736,7 @@ describe('zkTLS v4 capture', () => {
     expect(taken.body).toBe('')
     expect(taken.semanticCanonical).toBe('')
     expect(taken.capturedVariables).toEqual({})
+    expect(Object.getPrototypeOf(taken.capturedVariables!)).toBeNull()
   })
 
   test('requires exact target, method, path, query, content type, and resource type', () => {
@@ -1003,5 +1004,59 @@ describe('zkTLS v4 capture', () => {
       resource_type: 'fetch',
       secrets: {},
     })
+  })
+
+  test.each([
+    'constructor',
+    'toString',
+    'valueOf',
+  ])('captures the own QUERY variable %s without prototype lookup', (name) => {
+    const capture = new CaptureSession(
+      createCaptureBinding({
+        interpreterVersion: 4,
+        tabId: 7,
+        frameId: 0,
+        sessionId: `query-${name}`,
+        providerId: `query-${name}`,
+        revision: 1,
+        pageOrigin: 'https://app.example.com',
+        targetOrigin: 'https://api.example.com',
+        method: 'GET',
+        matcher: {
+          path: { kind: 'exact', value: '/v1/get' },
+          query: {
+            required: { account: { $var: name } },
+            optional: {},
+            capture: {},
+          },
+          resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
+        },
+        variables: [
+          {
+            name,
+            scalarType: 'STRING',
+            source: {
+              kind: 'CAPTURED_REQUEST',
+              location: 'QUERY',
+              selector: 'account',
+            },
+          },
+        ],
+        resolvedVariables: {},
+      }),
+    )
+    capture.observe({
+      requestId: `query-${name}`,
+      tabId: 7,
+      frameId: 0,
+      method: 'GET',
+      url: 'https://api.example.com/v1/get?account=own-value',
+      type: 'fetch',
+      requestHeaders: [],
+    })
+    const variables = capture.take().capturedVariables!
+    expect(Object.getPrototypeOf(variables)).toBeNull()
+    expect(Object.hasOwn(variables, name)).toBe(true)
+    expect(variables[name]).toBe('own-value')
   })
 })

@@ -73,7 +73,7 @@ export function clearCapturedRequest(captured: CapturedRequest): void {
   if (captured.capturedVariables) {
     for (const key of Object.keys(captured.capturedVariables))
       captured.capturedVariables[key] = ''
-    captured.capturedVariables = {}
+    captured.capturedVariables = Object.create(null)
   }
 }
 
@@ -438,6 +438,32 @@ function requestPath(url: string, origin: string): string | null {
   }
 }
 
+function mergeCapturedVariables(
+  ...sources: readonly (
+    | Readonly<Record<string, string | boolean>>
+    | undefined
+  )[]
+): Record<string, string | boolean> {
+  const result: Record<string, string | boolean> = Object.create(null)
+  for (const source of sources) {
+    if (!source) continue
+    for (const name of Object.keys(source)) {
+      if (Object.hasOwn(result, name))
+        fail('captured request variables are ambiguous')
+      const descriptor = Object.getOwnPropertyDescriptor(source, name)
+      if (!descriptor?.enumerable || !('value' in descriptor))
+        fail('captured request variables are invalid')
+      Object.defineProperty(result, name, {
+        configurable: true,
+        enumerable: true,
+        value: descriptor.value,
+        writable: true,
+      })
+    }
+  }
+  return result
+}
+
 export function matchRequest(
   path: string,
   type: string | undefined,
@@ -506,7 +532,7 @@ function matchV4Request(
     [...values.keys()].some((name) => !Object.hasOwn(templates, name))
   )
     return null
-  const captured: Record<string, string | boolean> = {}
+  let captured: Record<string, string | boolean> = Object.create(null)
   const queryVariables = binding.variables.filter(
     (variable) =>
       variable.source.kind === 'CAPTURED_REQUEST' &&
@@ -525,9 +551,7 @@ function matchV4Request(
       true,
     )
     if (matched === null) return null
-    if (Object.keys(matched).some((key) => Object.hasOwn(captured, key)))
-      fail('captured request variables are ambiguous')
-    Object.assign(captured, matched)
+    captured = mergeCapturedVariables(captured, matched)
   }
   return captured
 }
@@ -729,16 +753,10 @@ export class CaptureSession {
           bodyVariables,
         )
         if (!bodyMatch) fail('captured request body did not match')
-        const capturedVariables = {
-          ...(matched.capturedVariables ?? {}),
-          ...bodyMatch.captured,
-        }
-        if (
-          Object.keys(capturedVariables).length !==
-          Object.keys(matched.capturedVariables ?? {}).length +
-            Object.keys(bodyMatch.captured).length
+        const capturedVariables = mergeCapturedVariables(
+          matched.capturedVariables,
+          bodyMatch.captured,
         )
-          fail('captured request variables are ambiguous')
         const expected = binding.variables.filter(
           (variable) => variable.source.kind === 'CAPTURED_REQUEST',
         ).length

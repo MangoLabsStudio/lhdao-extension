@@ -140,6 +140,7 @@ describe('zkTLS V4 request body templates', () => {
     '{"value":1e0}',
     '{"__proto__":"x"}',
     '{"constructor":"x"}',
+    '{"prototype":"x"}',
   ])('fails closed for unsafe JSON: %s', (body) => {
     expect(() =>
       matchV4Body(
@@ -208,6 +209,8 @@ describe('zkTLS V4 request body templates', () => {
     'a=%GG',
     'a=b=c',
     '__proto__=value',
+    'constructor=value',
+    'prototype=value',
   ])('rejects an unsafe form body: %s', (body) => {
     expect(() =>
       matchV4Body(
@@ -217,5 +220,98 @@ describe('zkTLS V4 request body templates', () => {
         {},
       ),
     ).toThrow('captured form body is invalid')
+  })
+
+  test.each([
+    'constructor',
+    'toString',
+    'valueOf',
+  ])('captures the own BODY_JSON variable %s without prototype lookup', (name) => {
+    const match = matchV4Body(
+      new TextEncoder().encode('{"value":"captured"}'),
+      'application/json',
+      { value: { $var: name } },
+      {},
+      [captured(name, 'STRING', 'BODY_JSON', '$.value')],
+    )
+    expect(Object.getPrototypeOf(match!.captured)).toBeNull()
+    expect(Object.hasOwn(match!.captured, name)).toBe(true)
+    expect(match!.captured[name]).toBe('captured')
+  })
+
+  test.each([
+    'constructor',
+    'toString',
+    'valueOf',
+  ])('captures the own BODY_FORM variable %s without prototype lookup', (name) => {
+    const match = matchV4Body(
+      new TextEncoder().encode('field=captured'),
+      'application/x-www-form-urlencoded',
+      { field: { $var: name } },
+      {},
+      [captured(name, 'STRING', 'BODY_FORM', 'field')],
+    )
+    expect(Object.getPrototypeOf(match!.captured)).toBeNull()
+    expect(Object.hasOwn(match!.captured, name)).toBe(true)
+    expect(match!.captured[name]).toBe('captured')
+  })
+
+  test('uses only own resolved-variable data properties', () => {
+    const inherited = Object.create({
+      constructor: { type: 'STRING', value: 'inherited' },
+    }) as Record<string, V4ResolvedVariable>
+    expect(() =>
+      matchV4Body(
+        new TextEncoder().encode('{"value":"inherited"}'),
+        'application/json',
+        { value: { $var: 'constructor' } },
+        inherited,
+      ),
+    ).toThrow('variable is invalid')
+
+    const own = Object.create(null) as Record<string, V4ResolvedVariable>
+    Object.defineProperty(own, 'constructor', {
+      enumerable: true,
+      value: { type: 'STRING', value: 'own' },
+    })
+    expect(
+      matchV4Body(
+        new TextEncoder().encode('{"value":"own"}'),
+        'application/json',
+        { value: { $var: 'constructor' } },
+        own,
+      ),
+    ).not.toBeNull()
+  })
+
+  test('rejects a captured variable name forbidden by the backend identifier grammar', () => {
+    expect(() =>
+      matchV4Body(
+        new TextEncoder().encode('{"value":"captured"}'),
+        'application/json',
+        { value: { $var: '__proto__' } },
+        {},
+        [captured('__proto__', 'STRING', 'BODY_JSON', '$.value')],
+      ),
+    ).toThrow('variable is invalid')
+  })
+
+  test('accepts case-distinct object and form keys exactly like the backend', () => {
+    expect(
+      matchV4Body(
+        new TextEncoder().encode('{"Constructor":"x","Prototype":"y"}'),
+        'application/json',
+        { Constructor: 'x', Prototype: 'y' },
+        {},
+      ),
+    ).not.toBeNull()
+    expect(
+      matchV4Body(
+        new TextEncoder().encode('Constructor=x&Prototype=y'),
+        'application/x-www-form-urlencoded',
+        { Constructor: 'x', Prototype: 'y' },
+        {},
+      ),
+    ).not.toBeNull()
   })
 })

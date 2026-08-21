@@ -17,6 +17,7 @@ const MAX_BODY_BYTES = 8192
 const MAX_DEPTH = 12
 const MAX_NODES = 4096
 const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_-]{0,127}$/
 const utf8 = new TextDecoder('utf-8', { fatal: true })
 const encoder = new TextEncoder()
 
@@ -113,7 +114,7 @@ class StrictJsonParser {
       if (
         encoder.encode(key).length > 128 ||
         keys.has(key) ||
-        PROTOTYPE_KEYS.has(key.toLowerCase())
+        PROTOTYPE_KEYS.has(key)
       )
         fail('captured JSON body is invalid')
       keys.add(key)
@@ -321,7 +322,63 @@ function normalizedCaptured(
 function declarationMap(
   declarations: readonly V4VariableDeclaration[],
 ): Map<string, V4VariableDeclaration> {
-  return new Map(declarations.map((item) => [item.name, item]))
+  const result = new Map<string, V4VariableDeclaration>()
+  for (const item of declarations) {
+    if (!IDENTIFIER.test(item.name) || result.has(item.name))
+      fail('captured request variable is invalid')
+    result.set(item.name, item)
+  }
+  return result
+}
+
+function resolvedVariable(
+  resolved: Readonly<Record<string, V4ResolvedVariable>>,
+  name: string,
+): V4ResolvedVariable | undefined {
+  let descriptor: PropertyDescriptor | undefined
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(resolved, name)
+  } catch {
+    return fail('captured request variable is invalid')
+  }
+  if (!descriptor) return undefined
+  if (!descriptor.enumerable || !('value' in descriptor))
+    fail('captured request variable is invalid')
+  const entry = descriptor.value
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+    fail('captured request variable is invalid')
+  const keys = Object.keys(entry)
+  if (keys.length !== 2 || !keys.includes('type') || !keys.includes('value'))
+    fail('captured request variable is invalid')
+  const type = Object.getOwnPropertyDescriptor(entry, 'type')
+  const value = Object.getOwnPropertyDescriptor(entry, 'value')
+  if (
+    !type?.enumerable ||
+    !('value' in type) ||
+    !value?.enumerable ||
+    !('value' in value)
+  )
+    fail('captured request variable is invalid')
+  return { type: type.value, value: value.value } as V4ResolvedVariable
+}
+
+function defineCaptured(
+  captured: Captured,
+  name: string,
+  value: string | boolean,
+): void {
+  const previous = Object.getOwnPropertyDescriptor(captured, name)
+  if (previous) {
+    if (!('value' in previous) || previous.value !== value)
+      fail('captured request variable is ambiguous')
+    return
+  }
+  Object.defineProperty(captured, name, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  })
 }
 
 function matchValue(
@@ -355,7 +412,8 @@ function matchValue(
   if (Object.hasOwn(input, '$var')) {
     const name = input.$var
     if (typeof name !== 'string') fail('captured request variable is invalid')
-    const known = resolved[name]
+    if (!IDENTIFIER.test(name)) fail('captured request variable is invalid')
+    const known = resolvedVariable(resolved, name)
     if (known)
       return stringEncoded
         ? candidate === String(known.value)
@@ -371,10 +429,7 @@ function matchValue(
         : candidate !== normalized)
     )
       fail('captured request variable is invalid')
-    const previous = captured[name]
-    if (previous !== undefined && previous !== normalized)
-      fail('captured request variable is ambiguous')
-    captured[name] = normalized
+    defineCaptured(captured, name, normalized)
     return true
   }
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
@@ -425,7 +480,7 @@ export function matchV4Value(
   declarations: readonly V4VariableDeclaration[] = [],
   stringEncoded = false,
 ): Readonly<Record<string, string | boolean>> | null {
-  const captured: Captured = {}
+  const captured: Captured = Object.create(null)
   return matchValue(
     candidate,
     template,
@@ -463,7 +518,7 @@ function parseForm(body: string): Record<string, string[]> {
       encoder.encode(value).length > 1024 ||
       unsafeString(name) ||
       unsafeString(value) ||
-      PROTOTYPE_KEYS.has(name.toLowerCase())
+      PROTOTYPE_KEYS.has(name)
     )
       fail('captured form body is invalid')
     const values = result[name] ?? []
@@ -496,7 +551,7 @@ function matchForm(
     fail('captured form template is invalid')
   const templateKeys = Object.keys(template)
   if (Object.keys(form).length !== templateKeys.length) return null
-  const captured: Captured = {}
+  const captured: Captured = Object.create(null)
   const declarationsByName = declarationMap(declarations)
   for (const key of templateKeys) {
     const values = form[key]
