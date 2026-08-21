@@ -142,16 +142,19 @@ function clearJob(): void {
 }
 
 function armJob(active: Job, origins: readonly string[]): void {
-  const required = new Set(permissionPatterns(permissionOrigins(origins)))
+  const required = permissionPatterns(permissionOrigins(origins))
   const listener = (removed: chrome.permissions.Permissions) => {
-    if (
-      job !== active ||
-      !removed.origins?.some((origin) => required.has(origin))
-    )
-      return
-    active.permissionDenied = true
-    active.done?.(null)
-    clearJob()
+    if (job !== active || !removed.origins?.length) return
+    void (async () => {
+      let allowed = false
+      try {
+        allowed = await chrome.permissions.contains({ origins: required })
+      } catch {}
+      if (allowed || job !== active) return
+      active.permissionDenied = true
+      active.done?.(null)
+      clearJob()
+    })()
   }
   permissionRemovedEvent().addListener(listener)
   active.permissionRemovalListener = listener
@@ -161,8 +164,18 @@ function permissionUrl(): string {
   return chrome.runtime.getURL('zktls-permission.html')
 }
 
-function isPermissionSender(sender: chrome.runtime.MessageSender): boolean {
-  if (sender.id !== chrome.runtime.id) return false
+function isPermissionSender(
+  sender: chrome.runtime.MessageSender,
+  pendingRequestId: string,
+  messageRequestId: unknown,
+): boolean {
+  if (
+    sender.id !== chrome.runtime.id ||
+    typeof messageRequestId !== 'string' ||
+    !messageRequestId ||
+    messageRequestId !== pendingRequestId
+  )
+    return false
   try {
     const expected = new URL(permissionUrl())
     const actual = new URL(sender.url ?? '')
@@ -174,8 +187,10 @@ function isPermissionSender(sender: chrome.runtime.MessageSender): boolean {
       actual.pathname === expected.pathname &&
       !actual.username &&
       !actual.password &&
-      !actual.search &&
-      !actual.hash
+      !actual.hash &&
+      actual.search === `?request_id=${encodeURIComponent(pendingRequestId)}` &&
+      actual.href ===
+        `${expected.href}?request_id=${encodeURIComponent(pendingRequestId)}`
     )
   } catch {
     return false
@@ -800,7 +815,7 @@ export function registerZkTlsRuntime(): void {
         !Object.hasOwn(raw, 'type') ||
         !Object.hasOwn(raw, 'requestId') ||
         !pending ||
-        !isPermissionSender(sender) ||
+        !isPermissionSender(sender, pending.requestId, raw.requestId) ||
         raw.requestId !== pending.requestId
       )
         return null
@@ -814,7 +829,7 @@ export function registerZkTlsRuntime(): void {
         !Object.hasOwn(raw, 'requestId') ||
         !Object.hasOwn(raw, 'granted') ||
         !pending ||
-        !isPermissionSender(sender) ||
+        !isPermissionSender(sender, pending.requestId, raw.requestId) ||
         raw.requestId !== pending.requestId ||
         typeof raw.granted !== 'boolean'
       )

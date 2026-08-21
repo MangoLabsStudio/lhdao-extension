@@ -245,7 +245,7 @@ describe('Product zkTLS jobs', () => {
       },
       {
         id: 'extension',
-        url: chrome.runtime.getURL('zktls-permission.html'),
+        url: permissionUrl.href,
       },
     )
 
