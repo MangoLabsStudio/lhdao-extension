@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { sendMessage } from '@/lib/messaging'
+import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
 import type { PromoteAction } from '@/types/messages'
 
 /**
@@ -176,6 +177,10 @@ export function PromoteDialog({
   const [errMsg, setErrMsg] = React.useState('')
   const [balance, setBalance] = React.useState<number | null>(null)
   const [doneMsg, setDoneMsg] = React.useState('')
+  const [deviceDenied, setDeviceDenied] = React.useState(false)
+  const [reconnectState, setReconnectState] = React.useState<
+    'idle' | 'loading' | 'started'
+  >('idle')
 
   const last = React.useMemo(loadLast, [])
 
@@ -216,6 +221,8 @@ export function PromoteDialog({
     !overBudget
 
   const submit = async () => {
+    setDeviceDenied(false)
+    setReconnectState('idle')
     setPhase('loading')
     const payloadActions = actions.map((actionType) => {
       const tierSlots: Record<string, number> = {}
@@ -240,12 +247,31 @@ export function PromoteDialog({
       )
       setPhase('done')
     } else if (r.type === 'promote-result') {
-      setErrMsg(r.message || '推广失败,请重试')
+      const denied =
+        isPluginDeviceDenied(r.code) || isPluginDeviceDenied(r.message)
+      setDeviceDenied(denied)
+      setErrMsg(
+        denied
+          ? '设备授权已失效，请重新连接后再推广。'
+          : r.message || '推广失败,请重试',
+      )
       setPhase('error')
     } else {
       setErrMsg('推广失败,请重试')
       setPhase('error')
     }
+  }
+
+  const reconnect = async () => {
+    if (reconnectState !== 'idle') return
+    setReconnectState('loading')
+    const r = await sendMessage({ type: 'start-pairing' })
+    if (r.type === 'pairing-started' && r.ok) {
+      setReconnectState('started')
+      return
+    }
+    setReconnectState('idle')
+    if (r.type === 'pairing-started') setErrMsg(r.reason)
   }
 
   return (
@@ -372,11 +398,25 @@ export function PromoteDialog({
             )}
             {overBudget && <div className="lh-warn">余额不足</div>}
             {phase === 'error' && <div className="lh-warn">{errMsg}</div>}
+            {phase === 'error' && deviceDenied && (
+              <button
+                type="button"
+                className="lh-primary"
+                disabled={reconnectState !== 'idle'}
+                onClick={reconnect}
+              >
+                {reconnectState === 'loading'
+                  ? '正在打开连接页面…'
+                  : reconnectState === 'started'
+                    ? '请在新页面完成连接'
+                    : '重新连接'}
+              </button>
+            )}
 
             <button
               type="button"
               className="lh-primary"
-              disabled={!canSubmit || phase === 'loading'}
+              disabled={!canSubmit || phase === 'loading' || deviceDenied}
               onClick={submit}
             >
               {phase === 'loading' ? '提交中…' : '确认推广'}

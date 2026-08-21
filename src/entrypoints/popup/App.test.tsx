@@ -97,6 +97,7 @@ let root: Root | null = null
 
 async function renderPopup(
   initialState: ProductExperienceControllerState,
+  popupData: Extract<MsgResponse, { type: 'popup-data' }> = POPUP_DATA,
 ): Promise<PopupHarness> {
   let currentState = initialState
   const requests: unknown[] = []
@@ -108,7 +109,7 @@ async function renderPopup(
     }
     switch (message.type) {
       case 'get-popup-data':
-        return POPUP_DATA
+        return popupData
       case 'get-pairing-status':
         return { type: 'pairing-status-result', state: { kind: 'idle' } }
       case 'get-product-experience-state':
@@ -507,5 +508,24 @@ describe('product experience popup', () => {
       ).toBe(true)
     })
     expect(container.querySelector('li span')?.className).toContain('max-w-')
+  })
+
+  it('reconnects a token that is not bound to the current browser', async () => {
+    const { container, requests } = await renderPopup(productState('ready'), {
+      ...POPUP_DATA,
+      lastSyncError: 'PLUGIN_DEVICE_DENIED: 你没有权限执行此操作。',
+      lastSyncHttpStatus: 200,
+    })
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('设备授权已失效')
+      expect(container.textContent).toContain('此 Token 未绑定当前浏览器')
+    })
+
+    await act(async () => findButton(container, '重新连接').click())
+
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual({ type: 'start-pairing' })
+    })
   })
 })

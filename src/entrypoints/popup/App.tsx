@@ -2,6 +2,7 @@ import * as React from 'react'
 import { ProductExperienceCard } from '@/components/product-experience/ProductExperienceCard'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { sendMessage } from '@/lib/messaging'
+import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
 import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
 import type { UserProfile } from '@/lib/storage'
 import type { PairingState } from '@/types/messages'
@@ -172,7 +173,10 @@ export function App() {
         <ConnectedBlock
           data={data}
           syncing={syncing}
+          pairing={pairing}
           onForceSync={forceSync}
+          onReconnect={startPair}
+          onCancelReconnect={cancelPair}
           onOpenOptions={openOptions}
           onOpenWeb={openWeb}
         />
@@ -228,13 +232,19 @@ function BrandPlate() {
 function ConnectedBlock({
   data,
   syncing,
+  pairing,
   onForceSync,
+  onReconnect,
+  onCancelReconnect,
   onOpenOptions,
   onOpenWeb,
 }: {
   data: PopupData
   syncing: boolean
+  pairing: PairingState
   onForceSync: () => void
+  onReconnect: () => void
+  onCancelReconnect: () => void
   onOpenOptions: () => void
   onOpenWeb: () => void
 }) {
@@ -255,6 +265,9 @@ function ConnectedBlock({
         <SyncErrorBanner
           error={data.lastSyncError ?? ''}
           httpStatus={data.lastSyncHttpStatus}
+          pairing={pairing}
+          onReconnect={onReconnect}
+          onCancelReconnect={onCancelReconnect}
           onOpenOptions={onOpenOptions}
         />
       )}
@@ -732,10 +745,16 @@ function SkeletonBlock() {
 function SyncErrorBanner({
   error,
   httpStatus,
+  pairing,
+  onReconnect,
+  onCancelReconnect,
   onOpenOptions,
 }: {
   error: string
   httpStatus: number | null
+  pairing: PairingState
+  onReconnect: () => void
+  onCancelReconnect: () => void
   onOpenOptions: () => void
 }) {
   const { title, hint, action } = diagnoseSyncError(error, httpStatus)
@@ -766,6 +785,22 @@ function SyncErrorBanner({
               className="mt-1.5 text-[10.5px] font-bold text-rose-700 hover:underline dark:text-rose-300"
             >
               重新粘贴 token →
+            </button>
+          )}
+          {action === 'reconnect' && (
+            <button
+              type="button"
+              disabled={pairing.kind === 'success'}
+              onClick={
+                pairing.kind === 'waiting' ? onCancelReconnect : onReconnect
+              }
+              className="mt-1.5 text-[10.5px] font-bold text-rose-700 hover:underline disabled:cursor-default disabled:no-underline dark:text-rose-300"
+            >
+              {pairing.kind === 'waiting'
+                ? '取消重新连接'
+                : pairing.kind === 'success'
+                  ? '已重新连接，正在同步…'
+                  : '重新连接 →'}
             </button>
           )}
         </div>
@@ -827,13 +862,20 @@ function fmtRelative(epochMs: number): string {
 interface SyncDiagnosis {
   title: string
   hint: string
-  action?: 'reconfigure'
+  action?: 'reconfigure' | 'reconnect'
 }
 
 function diagnoseSyncError(
   err: string,
   httpStatus: number | null,
 ): SyncDiagnosis {
+  if (isPluginDeviceDenied(err)) {
+    return {
+      title: '设备授权已失效',
+      hint: '此 Token 未绑定当前浏览器，请重新连接。',
+      action: 'reconnect',
+    }
+  }
   if (err === 'No API token configured') {
     return {
       title: '未配置 token',
