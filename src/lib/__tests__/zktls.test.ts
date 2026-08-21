@@ -133,7 +133,456 @@ async function signedEnvelopes(ticketDigest?: string) {
   }
 }
 
+function v4Connector(): Record<string, unknown> {
+  return {
+    interpreter_version: 4,
+    connector_id: 'product-volume',
+    revision: 1,
+    disabled: false,
+    purpose: 'METRIC',
+    expires_at: '2030-01-01T00:00:00.000Z',
+    page_origin: 'https://app.example.com',
+    origin: 'https://api.example.com',
+    request: {
+      method: 'POST',
+      matcher: {
+        path: { kind: 'exact', value: '/v1/volume' },
+        query: {
+          required: { day: { $var: 'periodKey' } },
+          optional: {},
+          capture: {},
+        },
+        resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
+      },
+      body: {
+        operation: 'volume',
+        input: {
+          account: { $var: 'accountId' },
+          options: {
+            $object: {
+              mode: 'ALLOW_EXTRA',
+              fields: { day: { $var: 'periodKey' } },
+            },
+          },
+        },
+      },
+      content_type: 'application/json',
+      replay: 'EXACT_CAPTURE',
+      semantics: 'READ_ONLY_QUERY',
+      secret_headers: [],
+      max_sent_data: 8192,
+      max_recv_data: 4096,
+    },
+    variables: [
+      {
+        name: 'accountId',
+        scalarType: 'STRING',
+        source: { kind: 'BOUND_ACCOUNT', bindingKey: 'example' },
+        constraints: {
+          minLength: 1,
+          maxLength: 128,
+          pattern: 'ACCOUNT_ID',
+        },
+      },
+      {
+        name: 'periodKey',
+        scalarType: 'STRING',
+        source: { kind: 'SESSION', field: 'periodKey' },
+        constraints: {
+          minLength: 10,
+          maxLength: 10,
+          pattern: 'ISO_DATE',
+        },
+      },
+    ],
+    resolved_variables: {
+      accountId: { type: 'STRING', value: 'acct-1' },
+      periodKey: { type: 'STRING', value: '2026-08-20' },
+    },
+    response_format: 'json',
+    response_status: 200,
+    disclosure: {
+      key_paths: ['$.data', '$.data.balance'],
+      scalar_paths: ['$.data.balance'],
+      collection_paths: [],
+      max_elements: 200,
+    },
+    pipelines: [
+      {
+        output: 'balance',
+        sourcePath: '$.data.balance',
+        cast: 'DECIMAL',
+        valueUnit: 'USDT',
+        outputUnit: 'USDT',
+      },
+    ],
+    verifier_profile_id: 'lighthouse-v1',
+  }
+}
+
+type MutableV4 = Record<string, unknown> & {
+  request: Record<string, unknown> & {
+    matcher: Record<string, unknown> & {
+      query: Record<string, unknown> & { required: Record<string, unknown> }
+    }
+  }
+  variables: Record<string, unknown>[]
+  resolved_variables: Record<string, unknown>
+  disclosure: Record<string, unknown>
+  pipelines: Record<string, unknown>[]
+}
+
+function testRecord(value: unknown): Record<string, unknown> {
+  return value as Record<string, unknown>
+}
+
+function cloneV4(): MutableV4 {
+  return structuredClone(v4Connector()) as MutableV4
+}
+
 describe('zkTLS strict boundaries', () => {
+  test('parses the exact public full-disclosure V4 connector', async () => {
+    const config = v4Connector()
+
+    expect(validateConnector(config)).toMatchObject({
+      interpreter_version: 4,
+      page_origin: 'https://app.example.com',
+      origin: 'https://api.example.com',
+      purpose: 'METRIC',
+      request: {
+        method: 'POST',
+        replay: 'EXACT_CAPTURE',
+        secret_headers: [],
+        max_recv_data: 4096,
+      },
+    })
+    expect(JSON.parse(JSON.stringify(validateConnector(config)))).toEqual(
+      config,
+    )
+    await expect(configDigest(config)).resolves.toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  test('parses signed account-binding metadata only for binding connectors', () => {
+    const binding = cloneV4()
+    binding.purpose = 'ACCOUNT_BINDING'
+    binding.account_binding = {
+      providerKey: 'example',
+      accountVariable: 'accountId',
+      walletOutput: 'wallet',
+      addressType: 'EVM',
+    }
+    binding.variables = [
+      {
+        name: 'accountId',
+        scalarType: 'STRING',
+        source: {
+          kind: 'CAPTURED_REQUEST',
+          location: 'BODY_JSON',
+          selector: '$.input.account',
+        },
+      },
+    ]
+    binding.resolved_variables = {}
+    binding.request.matcher.query.required = {}
+    binding.request.body = { input: { account: { $var: 'accountId' } } }
+    binding.pipelines = [
+      { output: 'wallet', sourcePath: '$.wallet', cast: 'STRING' },
+    ]
+    binding.disclosure = {
+      key_paths: ['$.wallet'],
+      scalar_paths: ['$.wallet'],
+      collection_paths: [],
+      max_elements: 200,
+    }
+
+    expect(validateConnector(binding)).toMatchObject({
+      purpose: 'ACCOUNT_BINDING',
+      account_binding: { providerKey: 'example' },
+    })
+    expect(() =>
+      validateConnector({ ...v4Connector(), account_binding: {} }),
+    ).toThrow()
+    delete binding.account_binding
+    expect(() => validateConnector(binding)).toThrow()
+  })
+
+  test.each([
+    ['public IPv4 and explicit port', 'https://8.8.8.8:8443'],
+    ['public IPv6 and explicit port', 'https://[2606:4700:4700::1111]:8443'],
+  ])('accepts backend-valid V4 %s', (_name, origin) => {
+    const value = cloneV4()
+    value.page_origin = 'https://localhost:8443'
+    value.origin = origin
+    expect(validateConnector(value)).toMatchObject({ origin })
+  })
+
+  test.each([
+    'https://10.0.0.1:8443',
+    'https://100.64.0.1',
+    'https://127.0.0.1',
+    'https://169.254.1.1',
+    'https://172.16.0.1',
+    'https://192.168.0.1',
+    'https://192.0.2.1',
+    'https://198.51.100.1',
+    'https://203.0.113.1',
+    'https://[2001:db8::1]',
+    'https://[2002::1]',
+    'https://api.internal',
+  ])('rejects backend-invalid V4 target origin %s', (origin) => {
+    const value = cloneV4()
+    value.origin = origin
+    expect(() => validateConnector(value)).toThrow()
+  })
+
+  test('parses V4 GET without POST-only fields', () => {
+    const value = cloneV4()
+    value.request.method = 'GET'
+    delete value.request.body
+    delete value.request.content_type
+    value.request.matcher.query.required = {
+      account: { $var: 'accountId' },
+      day: { $var: 'periodKey' },
+    }
+
+    expect(validateConnector(value)).toMatchObject({
+      request: { method: 'GET', secret_headers: [] },
+    })
+  })
+
+  test.each([
+    1, 65_536,
+  ])('accepts signed dynamic receive limit %i', (max_recv_data) => {
+    const value = cloneV4()
+    value.request.max_recv_data = max_recv_data
+    expect(validateConnector(value)).toMatchObject({
+      request: { max_recv_data },
+    })
+  })
+
+  test.each([
+    [
+      'unknown connector field',
+      () => Object.assign(cloneV4(), { credentialMode: 'NONE' }),
+    ],
+    ['wrong revision', () => Object.assign(cloneV4(), { revision: 2 })],
+    [
+      'enabled-state widening',
+      () => Object.assign(cloneV4(), { disabled: true }),
+    ],
+    [
+      'non-HTTPS page origin',
+      () => Object.assign(cloneV4(), { page_origin: 'http://app.example.com' }),
+    ],
+    [
+      'non-public target origin',
+      () => Object.assign(cloneV4(), { origin: 'https://localhost' }),
+    ],
+    [
+      'page field confused with target origin',
+      () =>
+        Object.assign(cloneV4(), {
+          page_origin: 'https://api.example.com/path',
+        }),
+    ],
+    [
+      'missing replay semantics',
+      () => {
+        const value = cloneV4()
+        delete value.request.semantics
+        return value
+      },
+    ],
+    [
+      'literal secret header',
+      () => {
+        const value = cloneV4()
+        value.request.secret_headers = ['authorization']
+        return value
+      },
+    ],
+    [
+      'non-fixed sent limit',
+      () => {
+        const value = cloneV4()
+        value.request.max_sent_data = 8191
+        return value
+      },
+    ],
+    [
+      'unresolved metric variable',
+      () => {
+        const value = cloneV4()
+        delete value.resolved_variables.accountId
+        return value
+      },
+    ],
+    [
+      'two collection steps',
+      () => {
+        const value = cloneV4()
+        value.pipelines[0].sourcePath = '$.groups[*].items[*]'
+        return value
+      },
+    ],
+    [
+      'tampered disclosure plan',
+      () => {
+        const value = cloneV4()
+        value.disclosure.scalar_paths = []
+        return value
+      },
+    ],
+    [
+      'tampered disclosure element cap',
+      () => {
+        const value = cloneV4()
+        value.disclosure.max_elements = 199
+        return value
+      },
+    ],
+    [
+      'unknown nested template field',
+      () => {
+        const value = cloneV4()
+        const body = testRecord(value.request.body)
+        const input = testRecord(body.input)
+        const options = testRecord(input.options)
+        testRecord(options.$object).extra = true
+        return value
+      },
+    ],
+    [
+      'unknown pipeline field',
+      () => {
+        const value = cloneV4()
+        value.pipelines[0].script = 'return true'
+        return value
+      },
+    ],
+  ])('rejects V4 %s', (_name, candidate) => {
+    expect(() => validateConnector(candidate())).toThrow()
+  })
+
+  test.each([
+    ['zero receive bytes', 0],
+    ['receive bytes above cap', 65_537],
+    ['fractional receive bytes', 1.5],
+  ])('rejects %s', (_name, max_recv_data) => {
+    const value = cloneV4()
+    value.request.max_recv_data = max_recv_data
+    expect(() => validateConnector(value)).toThrow()
+  })
+
+  test('enforces V4 collection, template, variable, pipeline, and predicate limits', () => {
+    const tooManyVariables = cloneV4()
+    tooManyVariables.variables = Array.from({ length: 33 }, (_, index) => ({
+      name: `variable${index}`,
+      scalarType: 'STRING',
+      source: { kind: 'BOUND_ACCOUNT', bindingKey: `binding${index}` },
+    }))
+    tooManyVariables.resolved_variables = Object.fromEntries(
+      tooManyVariables.variables.map((item) => [
+        String(item.name),
+        { type: 'STRING', value: 'account' },
+      ]),
+    )
+
+    const tooManyPipelines = cloneV4()
+    tooManyPipelines.pipelines = Array.from({ length: 21 }, (_, index) => ({
+      output: `output${index}`,
+      sourcePath: '$.data.balance',
+      cast: 'DECIMAL',
+      valueUnit: 'USDT',
+      outputUnit: 'USDT',
+    }))
+
+    const tooManyTemplateItems = cloneV4()
+    tooManyTemplateItems.request.body = Array.from({ length: 201 }, () => 1)
+
+    const deepPredicate = cloneV4()
+    let predicate: Record<string, unknown> = {
+      op: 'EXISTS',
+      path: '$.value',
+    }
+    for (let index = 0; index < 4; index += 1)
+      predicate = { op: 'ALL', predicates: [predicate] }
+    deepPredicate.pipelines[0] = {
+      output: 'balance',
+      sourcePath: '$.data.items[*]',
+      filter: predicate,
+      valuePath: '$.value',
+      cast: 'DECIMAL',
+      reduce: 'SUM',
+      valueUnit: 'USDT',
+      outputUnit: 'USDT',
+    }
+
+    const badConstraint = cloneV4()
+    testRecord(badConstraint.variables[0]?.constraints).maxLength = 1025
+
+    const oversizedBody = cloneV4()
+    oversizedBody.request.body = {
+      account: { $var: 'accountId' },
+      parts: Array.from({ length: 9 }, () => 'x'.repeat(1000)),
+    }
+
+    const tooManyPredicateLeaves = cloneV4()
+    tooManyPredicateLeaves.pipelines[0] = {
+      output: 'balance',
+      sourcePath: '$.data.items[*]',
+      filter: {
+        op: 'ALL',
+        predicates: Array.from({ length: 33 }, () => ({
+          op: 'EXISTS',
+          path: '$.value',
+        })),
+      },
+      valuePath: '$.value',
+      cast: 'DECIMAL',
+      reduce: 'SUM',
+      valueUnit: 'USDT',
+      outputUnit: 'USDT',
+    }
+
+    const tooManyInValues = cloneV4()
+    tooManyInValues.pipelines[0] = {
+      output: 'balance',
+      sourcePath: '$.data.items[*]',
+      filter: {
+        op: 'IN',
+        path: '$.value',
+        value: Array.from({ length: 33 }, (_, index) => index),
+      },
+      valuePath: '$.value',
+      cast: 'DECIMAL',
+      reduce: 'SUM',
+      valueUnit: 'USDT',
+      outputUnit: 'USDT',
+    }
+
+    const emptyFormArray = cloneV4()
+    emptyFormArray.request.content_type = 'application/x-www-form-urlencoded'
+    emptyFormArray.request.body = {
+      account: { $var: 'accountId' },
+      empty: [],
+    }
+
+    for (const candidate of [
+      tooManyVariables,
+      tooManyPipelines,
+      tooManyTemplateItems,
+      deepPredicate,
+      badConstraint,
+      oversizedBody,
+      tooManyPredicateLeaves,
+      tooManyInValues,
+      emptyFormArray,
+    ]) {
+      expect(() => validateConnector(candidate)).toThrow()
+    }
+  })
+
   test('accepts only the fixed connector language', async () => {
     expect(validateConnector(connector)).toMatchObject({
       connector_id: 'github-login',
