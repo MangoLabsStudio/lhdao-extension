@@ -9,13 +9,14 @@ import {
 const encoder = new TextEncoder()
 const CONFIG_DOMAIN = 'lighthouse-zktls/config/v1:'
 const TICKET_DOMAIN = 'lighthouse-zktls/session-ticket/v1:'
+const MAX_SIGNED_CONFIG_RESPONSE_BYTES = 72 * 1024
 
 export type Ticket = {
   schema: 1
   session_id: string
   connector_id: string
   revision: number
-  interpreter_version: 1 | 2 | 3
+  interpreter_version: 1 | 2 | 3 | 4
   config_digest: string
   issued_at: string
   expires_at: string
@@ -37,6 +38,55 @@ export type TicketEnvelope = {
 
 function fail(message: string): never {
   throw new Error(message)
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const key of Reflect.ownKeys(value))
+      deepFreeze((value as Record<PropertyKey, unknown>)[key])
+    Object.freeze(value)
+  }
+  return value
+}
+
+async function boundedResponseJson(response: Response): Promise<unknown> {
+  const declared = response.headers.get('content-length')
+  if (
+    declared !== null &&
+    (!/^\d+$/.test(declared) ||
+      Number(declared) > MAX_SIGNED_CONFIG_RESPONSE_BYTES)
+  )
+    fail('signed config response is too large.')
+  if (!response.body) fail('signed config response body is missing.')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  let total = 0
+  let text = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_SIGNED_CONFIG_RESPONSE_BYTES) {
+        await reader.cancel()
+        fail('signed config response is too large.')
+      }
+      text += decoder.decode(value, { stream: true })
+    }
+    text += decoder.decode()
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === 'signed config response is too large.'
+    )
+      throw error
+    fail('signed config response is invalid.')
+  }
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    fail('signed config response is invalid.')
+  }
 }
 function object(
   value: unknown,
@@ -151,7 +201,8 @@ function validateTicket(value: unknown): Ticket {
     value.schema !== 1 ||
     (value.interpreter_version !== 1 &&
       value.interpreter_version !== 2 &&
-      value.interpreter_version !== 3) ||
+      value.interpreter_version !== 3 &&
+      value.interpreter_version !== 4) ||
     typeof value.revision !== 'number' ||
     !Number.isInteger(value.revision) ||
     value.revision < 1
@@ -256,7 +307,7 @@ export async function fetchAndVerifySignedConfig(
     fail('signed config endpoint is invalid.')
   const response = await fetch(url.href, { credentials: 'omit' })
   if (!response.ok) fail('signed config request failed.')
-  const payload: unknown = await response.json()
+  const payload = await boundedResponseJson(response)
   keys(
     payload,
     ['config_envelope', 'ticket_envelope'],
@@ -273,10 +324,12 @@ export async function fetchAndVerifySignedConfig(
     now: options.now,
   })
   assertConnectorAvailable(config, options.now)
+  const configEnvelope = deepFreeze(payload.config_envelope as ConfigEnvelope)
+  const ticketEnvelope = deepFreeze(payload.ticket_envelope as TicketEnvelope)
   return {
     config,
     ticket,
-    configEnvelope: payload.config_envelope as ConfigEnvelope,
-    ticketEnvelope: payload.ticket_envelope as TicketEnvelope,
+    configEnvelope,
+    ticketEnvelope,
   }
 }

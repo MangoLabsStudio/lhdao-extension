@@ -1322,15 +1322,23 @@ function v4HasEmptyArray(value: unknown): boolean {
   return Object.values(input).some((item) => v4HasEmptyArray(item))
 }
 
-function v4Decimal(value: string): boolean {
-  if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)) return false
-  if (/^-0(?:\.0+)?$/.test(value)) return false
-  const unsigned = value.startsWith('-') ? value.slice(1) : value
+function v4Decimal(value: unknown): boolean {
+  const lexeme =
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    !Object.is(value, -0)
+      ? String(value)
+      : typeof value === 'string'
+        ? value
+        : null
+  if (!lexeme || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(lexeme)) return false
+  if (/^-0(?:\.0+)?$/.test(lexeme)) return false
+  const unsigned = lexeme.startsWith('-') ? lexeme.slice(1) : lexeme
   const [whole, fraction = ''] = unsigned.split('.')
   if (fraction.length > 8) return false
   const magnitude =
     BigInt(whole) * V4_DECIMAL_SCALE + BigInt(fraction.padEnd(8, '0'))
-  const scaled = value.startsWith('-') ? -magnitude : magnitude
+  const scaled = lexeme.startsWith('-') ? -magnitude : magnitude
   return scaled >= -V4_DECIMAL_MAX_SCALED && scaled <= V4_DECIMAL_MAX_SCALED
 }
 
@@ -1823,8 +1831,7 @@ function v4Pipelines(
       const operand = v4OperandType(predicate.value, variables, references)
       let operandType = operand.type
       if (stageType === 'DECIMAL' && !operand.variable) {
-        if (!v4Decimal(String(predicate.value)))
-          fail('pipeline.postFilter is invalid.')
+        if (!v4Decimal(predicate.value)) fail('pipeline.postFilter is invalid.')
         operandType = 'DECIMAL'
       } else if (stageType === 'UTC_TIMESTAMP' && !operand.variable) {
         if (

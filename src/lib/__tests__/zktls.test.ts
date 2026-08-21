@@ -90,6 +90,13 @@ function base64Url(value: ArrayBuffer): string {
     .replaceAll('=', '')
 }
 
+function jsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
 async function signedEnvelopes(ticketDigest?: string) {
   const config_digest = await configDigest(htmlConnector)
   const key = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, [
@@ -251,7 +258,7 @@ function decimalVariableConnector(value: string): MutableV4 {
   return config
 }
 
-function decimalPostFilterConnector(value: string): MutableV4 {
+function decimalPostFilterConnector(value: string | number): MutableV4 {
   const config = cloneV4()
   config.pipelines = [
     {
@@ -360,7 +367,219 @@ function exact64KiBV4Connector(): MutableV4 {
   throw new Error('could not construct an exact 64 KiB V4 fixture')
 }
 
+async function signedV4Envelopes(
+  config: Record<string, unknown> = v4Connector(),
+) {
+  const config_digest = await configDigest(config)
+  const key = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, [
+    'sign',
+    'verify',
+  ])
+  const config_envelope = {
+    key_id: 'k1',
+    config,
+    config_digest,
+    signature: base64Url(
+      await crypto.subtle.sign(
+        'Ed25519',
+        key.privateKey,
+        new TextEncoder().encode(`lighthouse-zktls/config/v1:${config_digest}`),
+      ),
+    ),
+  }
+  const signedTicket = {
+    ...ticket,
+    connector_id: 'product-volume',
+    interpreter_version: 4 as const,
+    config_digest,
+  }
+  const signTicket = async (value: unknown) =>
+    base64Url(
+      await crypto.subtle.sign(
+        'Ed25519',
+        key.privateKey,
+        new TextEncoder().encode(
+          `lighthouse-zktls/session-ticket/v1:${canonicalJson(value)}`,
+        ),
+      ),
+    )
+  const ticket_envelope = {
+    key_id: 'k1',
+    ticket: signedTicket,
+    signature: await signTicket(signedTicket),
+  }
+  return {
+    config_envelope,
+    ticket_envelope,
+    publicKeys: { k1: await crypto.subtle.exportKey('jwk', key.publicKey) },
+    signTicket,
+  }
+}
+
 describe('zkTLS strict boundaries', () => {
+  test('verifies a real signed V4 config and ticket envelope round-trip', async () => {
+    const payload = await signedV4Envelopes()
+    const { publicKeys, signTicket: _signTicket, ...response } = payload
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+    try {
+      const result = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        },
+      )
+      expect(result).toMatchObject({
+        config: { interpreter_version: 4 },
+        ticket: { interpreter_version: 4 },
+      })
+      expect(Object.isFrozen(result.config)).toBe(true)
+      expect(Object.isFrozen(result.config.request)).toBe(true)
+      expect(Object.isFrozen(result.configEnvelope)).toBe(true)
+      expect(Object.isFrozen(result.ticketEnvelope)).toBe(true)
+      expect(result.configEnvelope.config).toBe(result.config)
+      expect(() => {
+        ;(result.config as MutableV4).origin = 'https://evil.example.com'
+      }).toThrow()
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('rejects numeric negative zero in a DECIMAL postFilter', () => {
+    expect(() => validateConnector(decimalPostFilterConnector(-0))).toThrow()
+  })
+
+  test('rejects an oversized signed response before JSON parsing', async () => {
+    const payload = await signedV4Envelopes()
+    const { publicKeys, signTicket: _signTicket, ...response } = payload
+    const oversized = `${' '.repeat(80 * 1024)}${JSON.stringify(response)}`
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(oversized, { status: 200 }))
+    try {
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        }),
+      ).rejects.toThrow('signed config response is too large')
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('admits an exact 64 KiB signed V4 config within the response cap', async () => {
+    const payload = await signedV4Envelopes(exact64KiBV4Connector())
+    const { publicKeys, signTicket: _signTicket, ...response } = payload
+    const encoded = new TextEncoder().encode(JSON.stringify(response))
+    expect(encoded.byteLength).toBeGreaterThan(65_536)
+    expect(encoded.byteLength).toBeLessThanOrEqual(72 * 1024)
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+    try {
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        }),
+      ).resolves.toMatchObject({ config: { interpreter_version: 4 } })
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('uses bounded raw JSON instead of a response.json Proxy path', async () => {
+    const payload = await signedV4Envelopes()
+    const { publicKeys, signTicket: _signTicket, ...response } = payload
+    let proxyReads = 0
+    const proxied = new Proxy(response, {
+      get(target, property, receiver) {
+        proxyReads += 1
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    const networkResponse = jsonResponse(response)
+    const json = vi
+      .spyOn(networkResponse, 'json')
+      .mockResolvedValue(proxied as unknown)
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(networkResponse)
+    try {
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        }),
+      ).resolves.toMatchObject({ config: { interpreter_version: 4 } })
+      expect(json).not.toHaveBeenCalled()
+      expect(proxyReads).toBe(0)
+    } finally {
+      fetch.mockRestore()
+      json.mockRestore()
+    }
+  })
+
+  test('rejects signed V4 config and ticket tampering', async () => {
+    const configPayload = await signedV4Envelopes()
+    const configResponse = {
+      config_envelope: structuredClone(configPayload.config_envelope),
+      ticket_envelope: structuredClone(configPayload.ticket_envelope),
+    }
+    testRecord(configResponse.config_envelope.config).origin =
+      'https://other.example.com'
+    const configFetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(configResponse))
+    try {
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys: configPayload.publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        }),
+      ).rejects.toThrow('config_digest did not match config')
+    } finally {
+      configFetch.mockRestore()
+    }
+
+    const ticketPayload = await signedV4Envelopes()
+    const tamperedTicket = {
+      ...ticketPayload.ticket_envelope.ticket,
+      interpreter_version: 3,
+    }
+    const ticketResponse = {
+      config_envelope: ticketPayload.config_envelope,
+      ticket_envelope: {
+        ...ticketPayload.ticket_envelope,
+        ticket: tamperedTicket,
+        signature: await ticketPayload.signTicket(tamperedTicket),
+      },
+    }
+    const ticketFetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(ticketResponse))
+    try {
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys: ticketPayload.publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        }),
+      ).rejects.toThrow('ticket did not bind the verified config')
+    } finally {
+      ticketFetch.mockRestore()
+    }
+  })
+
   test.each([
     '999999999999.99999999',
     '-999999999999.99999999',
@@ -936,7 +1155,7 @@ describe('zkTLS strict boundaries', () => {
     const { publicKeys, ...response } = payload
     const fetch = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue({ ok: true, json: async () => response } as Response)
+      .mockResolvedValue(jsonResponse(response))
     try {
       const result = await fetchAndVerifySignedConfig(
         'http://localhost/config',
@@ -946,8 +1165,8 @@ describe('zkTLS strict boundaries', () => {
           local: true,
         },
       )
-      expect(result.configEnvelope).toBe(payload.config_envelope)
-      expect(result.ticketEnvelope).toBe(payload.ticket_envelope)
+      expect(result.configEnvelope).toStrictEqual(payload.config_envelope)
+      expect(result.ticketEnvelope).toStrictEqual(payload.ticket_envelope)
     } finally {
       fetch.mockRestore()
     }
@@ -958,7 +1177,7 @@ describe('zkTLS strict boundaries', () => {
     const { publicKeys, ...response } = payload
     const fetch = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue({ ok: true, json: async () => response } as Response)
+      .mockResolvedValue(jsonResponse(response))
     try {
       await expect(
         fetchAndVerifySignedConfig('http://localhost/config', {
@@ -1024,7 +1243,7 @@ describe('zkTLS strict boundaries', () => {
       const { publicKeys, ...response } = payload
       const fetch = vi
         .spyOn(globalThis, 'fetch')
-        .mockResolvedValue({ ok: true, json: async () => response } as Response)
+        .mockResolvedValue(jsonResponse(response))
       try {
         await expect(
           fetchAndVerifySignedConfig('http://localhost/config', {
