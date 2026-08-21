@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
   revealConfig,
   sessionRegistrationPayload,
   verifierUrls,
 } from '@/entrypoints/zktls-offscreen/worker'
+import { CaptureSession } from '@/lib/zktls/capture'
 import {
   assertConnectorAvailable,
   canonicalJson,
@@ -1599,6 +1600,19 @@ describe('zkTLS strict boundaries', () => {
 })
 
 describe('zkTLS V4 page and target permissions', () => {
+  beforeEach(() => {
+    const removed = chrome.permissions.onRemoved as unknown as {
+      addListener(
+        listener: (value: chrome.permissions.Permissions) => void,
+      ): void
+      removeListener(
+        listener: (value: chrome.permissions.Permissions) => void,
+      ): void
+    }
+    vi.spyOn(removed, 'addListener').mockImplementation(() => undefined)
+    vi.spyOn(removed, 'removeListener').mockImplementation(() => undefined)
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
     Object.assign(ZKTLS_PROFILE, {
@@ -1738,12 +1752,36 @@ describe('zkTLS V4 page and target permissions', () => {
     ).searchParams.get('request_id')
     const sender = { id: 'extension', url: permissionPage }
 
-    expect(() =>
+    expect(
       messageListener?.(
         { type: 'zktls-permission-preview', requestId },
         { id: 'extension', url: 'not a URL' },
       ),
-    ).not.toThrow()
+    ).toBeNull()
+    for (const invalidSender of [
+      {
+        id: 'extension',
+        url: `https://${new URL(permissionPage).host}${new URL(permissionPage).pathname}`,
+      },
+      {
+        id: 'wrong-extension',
+        url: permissionPage,
+      },
+      {
+        id: 'extension',
+        url: `${permissionPage}?origin=https://evil.example.com`,
+      },
+      {
+        id: 'extension',
+        url: `${permissionPage}#permission`,
+      },
+    ])
+      expect(
+        messageListener?.(
+          { type: 'zktls-permission-preview', requestId },
+          invalidSender,
+        ),
+      ).toBeNull()
     expect(
       messageListener?.(
         {
@@ -1934,5 +1972,188 @@ describe('zkTLS V4 page and target permissions', () => {
       status: 'error',
       code: 'ZKTLS_CAPTURE_FAILED',
     })
+  })
+
+  test('settles an active V4 job as permission denied when a required origin is removed', async () => {
+    const rawConfig = v4Connector()
+    const config = validateConnector(rawConfig)
+    const signed = await signedV4Envelopes(rawConfig)
+    vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
+      config,
+      ticket: signed.ticket_envelope.ticket,
+      configEnvelope: { ...signed.config_envelope, config },
+      ticketEnvelope: signed.ticket_envelope,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation(
+      (async () => true) as never,
+    )
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([
+      { id: 7, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
+    ])
+    vi.spyOn(chrome.tabs, 'update').mockImplementation((async () => ({
+      id: 7,
+      url: 'https://app.example.com/dashboard',
+    })) as never)
+    let removed:
+      | ((permissions: chrome.permissions.Permissions) => void)
+      | undefined
+    const removedEvent = chrome.permissions.onRemoved as unknown as {
+      addListener(
+        listener: (value: chrome.permissions.Permissions) => void,
+      ): void
+      removeListener(
+        listener: (value: chrome.permissions.Permissions) => void,
+      ): void
+    }
+    const addRemoved = vi
+      .spyOn(removedEvent, 'addListener')
+      .mockImplementation((listener) => {
+        removed = listener
+      })
+    const removeRemoved = vi
+      .spyOn(removedEvent, 'removeListener')
+      .mockImplementation(() => undefined)
+    const clear = vi.spyOn(CaptureSession.prototype, 'clear')
+
+    const proving = proveZkTlsSession({
+      correlationId: 'v4-permission-removed',
+      sessionId: 's1',
+      connectorId: 'product-volume',
+    })
+    await vi.waitFor(() => expect(chrome.tabs.update).toHaveBeenCalled())
+    expect(addRemoved).toHaveBeenCalledTimes(1)
+    removed?.({ origins: ['https://unrelated.example.com/*'] })
+    expect(removeRemoved).not.toHaveBeenCalled()
+    removed?.({ origins: ['https://api.example.com/*'] })
+    removed?.({ origins: ['https://app.example.com/*'] })
+
+    await expect(proving).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'v4-permission-removed',
+      status: 'error',
+      code: 'PERMISSION_DENIED',
+    })
+    expect(clear).toHaveBeenCalledTimes(1)
+    expect(removeRemoved).toHaveBeenCalledTimes(1)
+    expect(removeRemoved).toHaveBeenCalledWith(removed)
+  })
+
+  test('settles a concurrent V4 capture completion and permission removal once', async () => {
+    const rawConfig = v4Connector()
+    const config = validateConnector(rawConfig)
+    const signed = await signedV4Envelopes(rawConfig)
+    vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
+      config,
+      ticket: signed.ticket_envelope.ticket,
+      configEnvelope: { ...signed.config_envelope, config },
+      ticketEnvelope: signed.ticket_envelope,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation(
+      (async () => true) as never,
+    )
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([
+      { id: 7, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
+    ])
+    vi.spyOn(chrome.tabs, 'update').mockImplementation((async () => ({
+      id: 7,
+      url: 'https://app.example.com/dashboard',
+    })) as never)
+    let body: ((details: unknown) => void) | undefined
+    let headers: ((details: unknown) => void) | undefined
+    let complete: ((details: unknown) => void) | undefined
+    vi.spyOn(
+      chrome.webRequest.onBeforeRequest,
+      'addListener',
+    ).mockImplementation(((listener: (details: unknown) => void) => {
+      body = listener
+    }) as never)
+    vi.spyOn(
+      chrome.webRequest.onBeforeSendHeaders,
+      'addListener',
+    ).mockImplementation(((listener: (details: unknown) => void) => {
+      headers = listener
+    }) as never)
+    vi.spyOn(chrome.webRequest.onCompleted, 'addListener').mockImplementation(((
+      listener: (details: unknown) => void,
+    ) => {
+      complete = listener
+    }) as never)
+    for (const event of [
+      chrome.webRequest.onBeforeRedirect,
+      chrome.webRequest.onErrorOccurred,
+      chrome.runtime.onMessage,
+      chrome.tabs.onUpdated,
+    ])
+      vi.spyOn(event, 'addListener').mockImplementation(
+        (() => undefined) as never,
+      )
+    let removed:
+      | ((permissions: chrome.permissions.Permissions) => void)
+      | undefined
+    const removedEvent = chrome.permissions.onRemoved as unknown as {
+      addListener(
+        listener: (value: chrome.permissions.Permissions) => void,
+      ): void
+      removeListener(
+        listener: (value: chrome.permissions.Permissions) => void,
+      ): void
+    }
+    vi.spyOn(removedEvent, 'addListener').mockImplementation((listener) => {
+      removed = listener
+    })
+    const removeRemoved = vi
+      .spyOn(removedEvent, 'removeListener')
+      .mockImplementation(() => undefined)
+    const offscreen = vi.spyOn(chrome.runtime, 'sendMessage')
+    registerZkTlsRuntime()
+
+    const proving = proveZkTlsSession({
+      correlationId: 'v4-complete-remove-race',
+      sessionId: 's1',
+      connectorId: 'product-volume',
+    })
+    await vi.waitFor(() => expect(chrome.tabs.update).toHaveBeenCalled())
+    const request = {
+      requestId: 'race',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://api.example.com/v1/volume?day=2026-08-20',
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+    }
+    const encoded = new TextEncoder().encode(
+      '{"operation":"volume","input":{"account":"acct-1","options":{"day":"2026-08-20"}}}',
+    )
+    body?.({
+      ...request,
+      requestBody: { raw: [{ bytes: encoded.buffer }] },
+    })
+    headers?.({
+      ...request,
+      requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+    })
+    complete?.({ requestId: 'race' })
+    removed?.({ origins: ['https://api.example.com/*'] })
+    removed?.({ origins: ['https://app.example.com/*'] })
+
+    await expect(proving).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'v4-complete-remove-race',
+      status: 'error',
+      code: 'PERMISSION_DENIED',
+    })
+    expect(removeRemoved).toHaveBeenCalledTimes(1)
+    expect(offscreen).not.toHaveBeenCalled()
   })
 })

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AvailableEngagement } from '@/lib/queries'
 import { CaptureSession } from '@/lib/zktls/capture'
 import { validateConnector } from '@/lib/zktls/interpreter'
@@ -10,6 +10,17 @@ import {
 } from '@/lib/zktls/runtime'
 import * as signedConfig from '@/lib/zktls/signed-config'
 import { buildActiveCampaignSummaries, flattenTasks } from '../background'
+
+beforeEach(() => {
+  const removed = chrome.permissions.onRemoved as unknown as {
+    addListener(listener: (value: chrome.permissions.Permissions) => void): void
+    removeListener(
+      listener: (value: chrome.permissions.Permissions) => void,
+    ): void
+  }
+  vi.spyOn(removed, 'addListener').mockImplementation(() => undefined)
+  vi.spyOn(removed, 'removeListener').mockImplementation(() => undefined)
+})
 
 afterEach(() => {
   vi.restoreAllMocks()

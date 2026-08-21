@@ -30,7 +30,18 @@ import {
   type TicketEnvelope,
 } from './signed-config'
 
-type V1Job = {
+type PermissionRemovalListener = (
+  permissions: chrome.permissions.Permissions,
+) => void
+type PermissionRemovedEvent = {
+  addListener(listener: PermissionRemovalListener): void
+  removeListener(listener: PermissionRemovalListener): void
+}
+type JobAuthorization = {
+  permissionDenied?: boolean
+  permissionRemovalListener?: PermissionRemovalListener
+}
+type V1Job = JobAuthorization & {
   kind: 'v1'
   sessionId: string
   connectorId: string
@@ -42,7 +53,7 @@ type V1Job = {
   done?: (cookie: string | null) => void
 }
 type RuntimeCapturedConnector = CapturedConnector | V4Connector
-type CaptureJob = {
+type CaptureJob = JobAuthorization & {
   kind: 'capture'
   sessionId: string
   connectorId: string
@@ -83,6 +94,10 @@ let productWaiter = false
 
 class ZkTlsPermissionDeniedError extends Error {}
 
+function permissionRemovedEvent(): PermissionRemovedEvent {
+  return chrome.permissions.onRemoved as unknown as PermissionRemovedEvent
+}
+
 function permissionOrigins(
   values: readonly string[],
 ): readonly [string] | readonly [string, string] {
@@ -118,9 +133,29 @@ function exactOriginPattern(origin: string): string {
   return permissionPatterns(permissionOrigins([origin]))[0]
 }
 function clearJob(): void {
-  if (job?.kind === 'v1') job.cookie = undefined
-  if (job?.kind === 'capture') job.capture.clear()
+  const active = job
   job = null
+  if (active?.permissionRemovalListener)
+    permissionRemovedEvent().removeListener(active.permissionRemovalListener)
+  if (active?.kind === 'v1') active.cookie = undefined
+  if (active?.kind === 'capture') active.capture.clear()
+}
+
+function armJob(active: Job, origins: readonly string[]): void {
+  const required = new Set(permissionPatterns(permissionOrigins(origins)))
+  const listener = (removed: chrome.permissions.Permissions) => {
+    if (
+      job !== active ||
+      !removed.origins?.some((origin) => required.has(origin))
+    )
+      return
+    active.permissionDenied = true
+    active.done?.(null)
+    clearJob()
+  }
+  permissionRemovedEvent().addListener(listener)
+  active.permissionRemovalListener = listener
+  job = active
 }
 function permissionUrl(): string {
   return chrome.runtime.getURL('zktls-permission.html')
@@ -129,9 +164,18 @@ function permissionUrl(): string {
 function isPermissionSender(sender: chrome.runtime.MessageSender): boolean {
   if (sender.id !== chrome.runtime.id) return false
   try {
+    const expected = new URL(permissionUrl())
+    const actual = new URL(sender.url ?? '')
     return (
-      new URL(sender.url ?? 'chrome://invalid').pathname ===
-      new URL(permissionUrl()).pathname
+      (expected.protocol === 'chrome-extension:' ||
+        expected.protocol === 'moz-extension:') &&
+      actual.protocol === expected.protocol &&
+      actual.host === expected.host &&
+      actual.pathname === expected.pathname &&
+      !actual.username &&
+      !actual.password &&
+      !actual.search &&
+      !actual.hash
     )
   } catch {
     return false
@@ -385,7 +429,7 @@ async function proveCapturedRequest(
           }),
     ),
   }
-  job = active
+  armJob(active, [pageOrigin, config.origin])
   const captured = waitForCapture(active)
   let value: CapturedRequest | null
   try {
@@ -402,8 +446,10 @@ async function proveCapturedRequest(
     )
     value = await captured
   } catch {
+    const permissionDenied = active.permissionDenied
     active.done?.(null)
     clearJob()
+    if (permissionDenied) throw new ZkTlsPermissionDeniedError()
     return {
       type: 'zktls-prove-result',
       correlationId: request.correlationId,
@@ -412,6 +458,10 @@ async function proveCapturedRequest(
     }
   }
   clearJob()
+  if (active.permissionDenied) {
+    if (value) clearCapturedRequest(value)
+    throw new ZkTlsPermissionDeniedError()
+  }
   if (!value)
     return {
       type: 'zktls-prove-result',
@@ -507,11 +557,12 @@ async function runValidatedZkTlsRequest(
       origin: config.origin,
       tabId: tab.id,
     }
-    job = active
+    armJob(active, [config.origin])
     const cookie = waitForCookie(active)
     await chrome.tabs.reload(tab.id)
     const value = await cookie
     clearJob()
+    if (active.permissionDenied) throw new ZkTlsPermissionDeniedError()
     if (!value) {
       await chrome.tabs.update(tab.id, { active: true })
       return {
