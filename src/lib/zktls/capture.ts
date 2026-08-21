@@ -32,6 +32,23 @@ export const BODY_CONTENT_TYPES = [
 ] as const
 export type BodyContentType = (typeof BODY_CONTENT_TYPES)[number]
 const MAX_CAPTURED_BODY_BYTES = 8192
+const V4_PUBLIC_HEADER_NAMES = new Set([
+  'content-type',
+  'content-length',
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'cache-control',
+  'connection',
+  'dnt',
+  'host',
+  'origin',
+  'pragma',
+  'priority',
+  'referer',
+  'user-agent',
+  'upgrade-insecure-requests',
+])
 
 export type BodyMatcher = {
   content_type: BodyContentType
@@ -111,7 +128,7 @@ export type V4CaptureBinding = {
     resource_types: readonly ResourceType[]
   }
   template?: V4TemplateValue
-  contentType?: BodyContentType
+  contentType?: 'application/json'
   variables: readonly V4VariableDeclaration[]
   resolvedVariables: Readonly<Record<string, V4ResolvedVariable>>
 }
@@ -125,6 +142,7 @@ export type RequestDetails = {
   method: string
   url: string
   type?: string
+  initiator?: string
   requestHeaders?: { name: string; value?: string }[]
 }
 
@@ -346,6 +364,23 @@ function isV4Binding(binding: CaptureBinding): binding is V4CaptureBinding {
   return 'interpreterVersion' in binding && binding.interpreterVersion === 4
 }
 
+function v4PublicHeader(name: string): boolean {
+  const normalized = name.toLowerCase()
+  return (
+    V4_PUBLIC_HEADER_NAMES.has(normalized) ||
+    normalized.startsWith('sec-ch-') ||
+    normalized.startsWith('sec-fetch-')
+  )
+}
+
+function requireV4Initiator(
+  details: RequestDetails,
+  binding: V4CaptureBinding,
+): void {
+  if (details.initiator !== binding.pageOrigin)
+    fail('captured request initiator did not match')
+}
+
 export function createCaptureBinding(input: V4CaptureBinding): V4CaptureBinding
 export function createCaptureBinding(
   input: LegacyCaptureBinding,
@@ -362,7 +397,6 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
     if (
       !pageOrigin.startsWith('https://') ||
       !targetOrigin.startsWith('https://') ||
-      pageOrigin === targetOrigin ||
       matcher.path.kind !== 'exact' ||
       validateRequestMatcher({
         path: matcher.path,
@@ -384,6 +418,8 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
       (input.method !== 'GET' && input.method !== 'POST')
     )
       fail('capture body is invalid')
+    if (input.method === 'POST' && input.contentType !== 'application/json')
+      fail('capture content type is invalid')
     if (
       !Array.isArray(input.variables) ||
       !input.resolvedVariables ||
@@ -713,6 +749,14 @@ export class CaptureSession {
     }
     const matched = this.#candidate
     if (!matched || this.#requestId !== details.requestId) return
+    if (v4) requireV4Initiator(details, binding)
+    if (
+      v4 &&
+      (details.requestHeaders ?? []).some(
+        (header) => !v4PublicHeader(header.name),
+      )
+    )
+      fail('captured request contains an unsupported header')
     const secrets: Partial<Record<SecretHeader, string>> = {}
     if (!v4) {
       for (const header of details.requestHeaders ?? []) {
@@ -832,6 +876,7 @@ export class CaptureSession {
           ? {}
           : null
     if (querySlots === null) return
+    if (v4) requireV4Initiator(details, binding)
     if (this.#used || this.#failed || this.#candidate || this.#captured)
       fail('capture already completed')
     if (binding.method === 'POST') {

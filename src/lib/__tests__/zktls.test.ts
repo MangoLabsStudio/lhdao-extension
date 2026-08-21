@@ -878,6 +878,25 @@ describe('zkTLS strict boundaries', () => {
     })
   })
 
+  test('accepts a same-origin V4 page and public target', () => {
+    const value = cloneV4()
+    value.page_origin = value.origin as string
+    expect(validateConnector(value)).toMatchObject({
+      page_origin: value.origin,
+      origin: value.origin,
+    })
+  })
+
+  test('rejects form POST connectors until exact raw form capture is available', () => {
+    const value = cloneV4()
+    value.request.content_type = 'application/x-www-form-urlencoded'
+    value.request.matcher.query.required = {
+      day: { $var: 'periodKey' },
+    }
+    value.request.body = { account: { $var: 'accountId' } }
+    expect(() => validateConnector(value)).toThrow('content_type')
+  })
+
   test.each([
     1, 65_536,
   ])('accepts signed dynamic receive limit %i', (max_recv_data) => {

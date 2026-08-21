@@ -615,6 +615,8 @@ export function matchV4Body(
       ? null
       : { exactBody, semanticCanonical: canonicalJson(value), captured }
   }
+  // Reserved for a later interpreter: V4 runtime currently rejects form POST
+  // because Chrome may expose only formData, which is not exact replay bytes.
   const form = parseForm(exactBody)
   const captured = matchForm(form, template, resolved, declarations)
   return captured === null

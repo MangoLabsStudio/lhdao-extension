@@ -232,7 +232,7 @@ export type V4Connector = {
       resource_types: ['main_frame', 'xmlhttprequest', 'fetch']
     }
     body?: V4TemplateValue
-    content_type?: 'application/json' | 'application/x-www-form-urlencoded'
+    content_type?: 'application/json'
     replay: 'EXACT_CAPTURE'
     semantics: 'READ_ONLY_QUERY'
     secret_headers: []
@@ -1309,19 +1309,6 @@ function v4TemplateObject(
   }
 }
 
-function v4HasEmptyArray(value: unknown): boolean {
-  if (Array.isArray(value))
-    return value.length === 0 || value.some((item) => v4HasEmptyArray(item))
-  if (!value || typeof value !== 'object') return false
-  const input = value as V4Record
-  if (Object.hasOwn(input, '$var')) return false
-  if (Object.hasOwn(input, '$object')) {
-    const wrapper = input.$object as V4Record
-    return v4HasEmptyArray(wrapper.fields)
-  }
-  return Object.values(input).some((item) => v4HasEmptyArray(item))
-}
-
 function v4Decimal(value: unknown): boolean {
   const lexeme =
     typeof value === 'number' &&
@@ -2002,6 +1989,8 @@ function validateV4Connector(value: unknown): V4Connector {
     'max_recv_data',
   ]
   const request = v4Exact(requestInput, requestFields, 'request')
+  if (method === 'POST' && request.content_type !== 'application/json')
+    fail('request.content_type is invalid.')
   if (
     (method !== 'GET' && method !== 'POST') ||
     request.replay !== 'EXACT_CAPTURE' ||
@@ -2011,10 +2000,7 @@ function validateV4Connector(value: unknown): V4Connector {
     (request.max_recv_data as number) < 1 ||
     (request.max_recv_data as number) > 65_536 ||
     !Array.isArray(request.secret_headers) ||
-    request.secret_headers.length !== 0 ||
-    (method === 'POST' &&
-      request.content_type !== 'application/json' &&
-      request.content_type !== 'application/x-www-form-urlencoded')
+    request.secret_headers.length !== 0
   )
     fail('V4 request is invalid.')
   const matcher = v4Exact(
@@ -2058,17 +2044,6 @@ function validateV4Connector(value: unknown): V4Connector {
     v4Template(request.body, variables, references)
     if (bytes(JSON.stringify(request.body)) > 8192)
       fail('request body is too large.')
-    if (request.content_type === 'application/x-www-form-urlencoded') {
-      if (
-        !request.body ||
-        typeof request.body !== 'object' ||
-        Array.isArray(request.body) ||
-        Object.hasOwn(request.body, '$var') ||
-        Object.hasOwn(request.body, '$object') ||
-        v4HasEmptyArray(request.body)
-      )
-        fail('request form body is invalid.')
-    }
   }
 
   const pipelines = v4Pipelines(input.pipelines, variables, references)

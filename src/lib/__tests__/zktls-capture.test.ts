@@ -688,6 +688,7 @@ describe('zkTLS v4 capture', () => {
       method: 'POST',
       url,
       type: 'fetch',
+      initiator: 'https://app.example.com',
       requestBody: {
         raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
       },
@@ -699,9 +700,217 @@ describe('zkTLS v4 capture', () => {
       method: 'POST',
       url,
       type: 'fetch',
+      initiator: 'https://app.example.com',
       requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
     })
   }
+
+  test.each([
+    undefined,
+    'https://evil.example.com',
+    'null',
+  ])('rejects a matching target request with initiator %s', (initiator) => {
+    const capture = v4Session()
+    expect(() =>
+      capture.observeBody({
+        requestId: 'bad-initiator',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator,
+        requestBody: {
+          raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+        },
+      }),
+    ).toThrow('initiator')
+  })
+
+  test('rejects a main-frame target without the exact page initiator', () => {
+    const capture = v4Session()
+    expect(() =>
+      capture.observeBody({
+        requestId: 'main-frame-initiator',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'main_frame',
+        requestBody: {
+          raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+        },
+      }),
+    ).toThrow('initiator')
+  })
+
+  test('rejects credential and custom headers without reading values', () => {
+    for (const name of [
+      'Cookie',
+      'Authorization',
+      'Proxy-Authorization',
+      'X-Api-Key',
+      'X-Api-Token',
+      'X-CSRF-Token',
+      'X-XSRF-Token',
+      'X-Session-Id',
+      'X-Custom-Auth',
+      'X-Signature',
+      'X-Key',
+      'X-Benign-Metadata',
+    ]) {
+      const capture = v4Session()
+      capture.observeBody({
+        requestId: name,
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestBody: {
+          raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+        },
+      })
+      let valueReads = 0
+      const credential = { name } as { name: string; value?: string }
+      Object.defineProperty(credential, 'value', {
+        get() {
+          valueReads += 1
+          return 'private'
+        },
+      })
+      expect(() =>
+        capture.observe({
+          requestId: name,
+          tabId: 7,
+          frameId: 0,
+          method: 'POST',
+          url,
+          type: 'fetch',
+          initiator: 'https://app.example.com',
+          requestHeaders: [
+            { name: 'Content-Type', value: 'application/json' },
+            credential,
+          ],
+        }),
+      ).toThrow('unsupported header')
+      expect(valueReads).toBe(0)
+    }
+  })
+
+  test('allows a same-origin V4 page and public target', () => {
+    const binding = createCaptureBinding({
+      interpreterVersion: 4,
+      tabId: 7,
+      frameId: 0,
+      sessionId: 'same-origin',
+      providerId: 'same-origin',
+      revision: 1,
+      pageOrigin: 'https://app.example.com',
+      targetOrigin: 'https://app.example.com',
+      method: 'GET',
+      matcher: {
+        path: { kind: 'exact', value: '/v1/get' },
+        query: { required: {}, optional: {}, capture: {} },
+        resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
+      },
+      variables: [],
+      resolvedVariables: {},
+    })
+    const capture = new CaptureSession(binding)
+    capture.observe({
+      requestId: 'same-origin',
+      tabId: 7,
+      frameId: 0,
+      method: 'GET',
+      url: 'https://app.example.com/v1/get',
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestHeaders: [],
+    })
+    expect(capture.take()).toMatchObject({ path: '/v1/get' })
+  })
+
+  test('allows ordinary browser metadata headers on a public JSON request', () => {
+    const capture = v4Session()
+    let metadataValueReads = 0
+    const accept = { name: 'Accept' } as { name: string; value?: string }
+    Object.defineProperty(accept, 'value', {
+      get() {
+        metadataValueReads += 1
+        return 'application/json'
+      },
+    })
+    capture.observeBody({
+      requestId: 'browser-headers',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    })
+    capture.observe({
+      requestId: 'browser-headers',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestHeaders: [
+        { name: 'Content-Type', value: 'application/json' },
+        accept,
+        { name: 'Origin', value: 'https://app.example.com' },
+        { name: 'Referer', value: 'https://app.example.com/' },
+        { name: 'User-Agent', value: 'Chrome' },
+        { name: 'Sec-Fetch-Site', value: 'cross-site' },
+      ],
+    })
+    expect(capture.take()).toMatchObject({
+      body: expect.stringContaining('acct-body'),
+    })
+    expect(metadataValueReads).toBe(0)
+  })
+
+  test('rejects a V4 form binding before observing the network', () => {
+    expect(() =>
+      createCaptureBinding({
+        interpreterVersion: 4,
+        tabId: 7,
+        frameId: 0,
+        sessionId: 'form-rejected',
+        providerId: 'form-rejected',
+        revision: 1,
+        pageOrigin: 'https://app.example.com',
+        targetOrigin: 'https://api.example.com',
+        method: 'POST',
+        matcher: {
+          path: { kind: 'exact', value: '/v1/form' },
+          query: { required: {}, optional: {}, capture: {} },
+          resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
+        },
+        template: { account: { $var: 'accountId' } },
+        contentType: 'application/x-www-form-urlencoded' as never,
+        variables: [
+          {
+            name: 'accountId',
+            scalarType: 'STRING',
+            source: {
+              kind: 'CAPTURED_REQUEST',
+              location: 'BODY_FORM',
+              selector: 'account',
+            },
+          },
+        ],
+        resolvedVariables: {},
+      }),
+    ).toThrow('content type')
+  })
 
   test('matches a cross-origin nested POST and joins all raw chunks exactly', () => {
     const capture = v4Session()
@@ -756,6 +965,7 @@ describe('zkTLS v4 capture', () => {
         method: change.method ?? 'POST',
         url: change.url ?? url,
         type: change.type ?? 'fetch',
+        initiator: 'https://app.example.com',
         requestBody: { raw: chunks.map((chunk) => ({ bytes: chunk.buffer })) },
       })
       expect(() => capture.take()).toThrow('no provider request')
@@ -769,6 +979,7 @@ describe('zkTLS v4 capture', () => {
       method: 'POST',
       url,
       type: 'fetch',
+      initiator: 'https://app.example.com',
       requestBody: { raw: chunks.map((chunk) => ({ bytes: chunk.buffer })) },
     })
     expect(() =>
@@ -779,6 +990,7 @@ describe('zkTLS v4 capture', () => {
         method: 'POST',
         url,
         type: 'fetch',
+        initiator: 'https://app.example.com',
         requestHeaders: [
           { name: 'Content-Type', value: 'application/json; charset=utf-8' },
         ],
@@ -797,6 +1009,7 @@ describe('zkTLS v4 capture', () => {
       method: 'POST',
       url,
       type: 'fetch',
+      initiator: 'https://app.example.com',
       requestBody: { raw: chunks.map((chunk) => ({ bytes: chunk.buffer })) },
     })
     expect(() =>
@@ -807,6 +1020,7 @@ describe('zkTLS v4 capture', () => {
         method: 'POST',
         url,
         type: 'fetch',
+        initiator: 'https://app.example.com',
         requestBody: { raw: chunks.map((chunk) => ({ bytes: chunk.buffer })) },
       }),
     ).toThrow('capture already completed')
@@ -819,6 +1033,7 @@ describe('zkTLS v4 capture', () => {
         method: 'POST',
         url,
         type: 'fetch',
+        initiator: 'https://app.example.com',
       }),
     ).toThrow('POST body')
 
@@ -850,6 +1065,7 @@ describe('zkTLS v4 capture', () => {
         method: 'GET',
         url: 'https://api.example.com/v1/get',
         type: 'fetch',
+        initiator: 'https://app.example.com',
         requestBody: {
           raw: [{ bytes: new TextEncoder().encode('{}').buffer }],
         },
@@ -867,91 +1083,6 @@ describe('zkTLS v4 capture', () => {
     observePost(cleared, 'cleared')
     cleared.clear()
     expect(() => cleared.take()).toThrow('no provider request')
-  })
-
-  test('captures a raw form POST with fixed repeated fields', () => {
-    const capture = new CaptureSession(
-      createCaptureBinding({
-        interpreterVersion: 4,
-        tabId: 7,
-        frameId: 0,
-        sessionId: 'form-v4',
-        providerId: 'form-v4',
-        revision: 1,
-        pageOrigin: 'https://app.example.com',
-        targetOrigin: 'https://api.example.com',
-        method: 'POST',
-        matcher: {
-          path: { kind: 'exact', value: '/v1/form' },
-          query: {
-            required: { network: 'mainnet' },
-            optional: {},
-            capture: {},
-          },
-          resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
-        },
-        template: {
-          account: { $var: 'accountId' },
-          day: { $var: 'periodKey' },
-          tags: ['one', 'two'],
-        },
-        contentType: 'application/x-www-form-urlencoded',
-        variables: [
-          {
-            name: 'accountId',
-            scalarType: 'STRING',
-            source: {
-              kind: 'CAPTURED_REQUEST',
-              location: 'BODY_FORM',
-              selector: 'account',
-            },
-          },
-          {
-            name: 'periodKey',
-            scalarType: 'STRING',
-            source: { kind: 'SESSION', field: 'periodKey' },
-          },
-        ],
-        resolvedVariables: {
-          periodKey: { type: 'STRING', value: '2026-08-21' },
-        },
-      }),
-    )
-    const exactBody = 'day=2026-08-21&account=acct%2Dform&tags=one&tags=two'
-    const bytes = new TextEncoder().encode(exactBody)
-    capture.observeBody({
-      requestId: 'form',
-      tabId: 7,
-      frameId: 0,
-      method: 'POST',
-      url: 'https://api.example.com/v1/form?network=mainnet',
-      type: 'xmlhttprequest',
-      requestBody: {
-        raw: [
-          { bytes: bytes.slice(0, 20).buffer },
-          { bytes: bytes.slice(20).buffer },
-        ],
-      },
-    })
-    capture.observe({
-      requestId: 'form',
-      tabId: 7,
-      frameId: 0,
-      method: 'POST',
-      url: 'https://api.example.com/v1/form?network=mainnet',
-      type: 'xmlhttprequest',
-      requestHeaders: [
-        {
-          name: 'Content-Type',
-          value: 'application/x-www-form-urlencoded',
-        },
-      ],
-    })
-    expect(capture.take()).toMatchObject({
-      body: exactBody,
-      capturedVariables: { accountId: 'acct-form' },
-      semanticCanonical: 'account=acct-form&day=2026-08-21&tags=one&tags=two',
-    })
   })
 
   test('captures a V4 GET query variable without request credentials', () => {
@@ -996,6 +1127,7 @@ describe('zkTLS v4 capture', () => {
       method: 'GET',
       url: 'https://api.example.com/v1/get?account=acct-get',
       type: 'fetch',
+      initiator: 'https://app.example.com',
       requestHeaders: [],
     })
     expect(capture.take()).toEqual({
@@ -1052,6 +1184,7 @@ describe('zkTLS v4 capture', () => {
       method: 'GET',
       url: 'https://api.example.com/v1/get?account=own-value',
       type: 'fetch',
+      initiator: 'https://app.example.com',
       requestHeaders: [],
     })
     const variables = capture.take().capturedVariables!
