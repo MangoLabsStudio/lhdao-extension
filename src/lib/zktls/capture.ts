@@ -1,3 +1,10 @@
+import type {
+  V4ResolvedVariable,
+  V4TemplateValue,
+  V4VariableDeclaration,
+} from './interpreter'
+import { matchV4Body, matchV4Value } from './v4-template'
+
 export const SECRET_HEADERS = [
   'cookie',
   'authorization',
@@ -40,6 +47,8 @@ export type CapturedRequest = {
   secrets: Partial<Record<SecretHeader, string>>
   slots?: Record<string, string>
   resource_type?: ResourceType
+  semanticCanonical?: string
+  capturedVariables?: Record<string, string | boolean>
 }
 
 export function clearSecrets(
@@ -60,9 +69,15 @@ export function clearCapturedRequest(captured: CapturedRequest): void {
   captured.content_type = undefined
   captured.method = undefined
   captured.resource_type = undefined
+  captured.semanticCanonical = ''
+  if (captured.capturedVariables) {
+    for (const key of Object.keys(captured.capturedVariables))
+      captured.capturedVariables[key] = ''
+    captured.capturedVariables = {}
+  }
 }
 
-export type CaptureBinding = {
+export type LegacyCaptureBinding = {
   tabId: number
   frameId: number
   sessionId: string
@@ -75,6 +90,33 @@ export type CaptureBinding = {
   bodyMatcher?: BodyMatcher
   secretHeaders: SecretHeader[]
 }
+
+export type V4CaptureBinding = {
+  interpreterVersion: 4
+  tabId: number
+  frameId: number
+  sessionId: string
+  providerId: string
+  revision: number
+  pageOrigin: string
+  targetOrigin: string
+  method: 'GET' | 'POST'
+  matcher: {
+    path: { kind: 'exact'; value: string }
+    query: {
+      required: Record<string, V4TemplateValue>
+      optional: Record<string, never>
+      capture: Record<string, never>
+    }
+    resource_types: readonly ResourceType[]
+  }
+  template?: V4TemplateValue
+  contentType?: BodyContentType
+  variables: readonly V4VariableDeclaration[]
+  resolvedVariables: Readonly<Record<string, V4ResolvedVariable>>
+}
+
+export type CaptureBinding = LegacyCaptureBinding | V4CaptureBinding
 
 export type RequestDetails = {
   requestId: string
@@ -294,7 +336,62 @@ export function validateRequestMatcher(value: unknown): RequestMatcher {
   }
 }
 
+function exactOrigin(value: string, name: string): string {
+  const origin = new URL(value)
+  if (origin.href !== `${origin.origin}/`) fail(`${name} is invalid`)
+  return origin.origin
+}
+
+function isV4Binding(binding: CaptureBinding): binding is V4CaptureBinding {
+  return 'interpreterVersion' in binding && binding.interpreterVersion === 4
+}
+
+export function createCaptureBinding(input: V4CaptureBinding): V4CaptureBinding
+export function createCaptureBinding(
+  input: LegacyCaptureBinding,
+): LegacyCaptureBinding
+export function createCaptureBinding(input: CaptureBinding): CaptureBinding
 export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
+  if (isV4Binding(input)) {
+    const pageOrigin = exactOrigin(input.pageOrigin, 'capture page origin')
+    const targetOrigin = exactOrigin(
+      input.targetOrigin,
+      'capture target origin',
+    )
+    const matcher = input.matcher
+    if (
+      !pageOrigin.startsWith('https://') ||
+      !targetOrigin.startsWith('https://') ||
+      pageOrigin === targetOrigin ||
+      matcher.path.kind !== 'exact' ||
+      validateRequestMatcher({
+        path: matcher.path,
+        query: { required: {}, optional: {}, capture: {} },
+        resource_types: matcher.resource_types,
+      }).path.value !== matcher.path.value ||
+      Object.keys(matcher.query.optional).length !== 0 ||
+      Object.keys(matcher.query.capture).length !== 0 ||
+      matcher.resource_types.length !== 3 ||
+      matcher.resource_types.some(
+        (type, index) =>
+          type !== ['main_frame', 'xmlhttprequest', 'fetch'][index],
+      )
+    )
+      fail('capture matcher is invalid')
+    if (
+      (input.method === 'POST') !==
+        (input.template !== undefined && input.contentType !== undefined) ||
+      (input.method !== 'GET' && input.method !== 'POST')
+    )
+      fail('capture body is invalid')
+    if (
+      !Array.isArray(input.variables) ||
+      !input.resolvedVariables ||
+      typeof input.resolvedVariables !== 'object'
+    )
+      fail('capture variables are invalid')
+    return { ...input, pageOrigin, targetOrigin }
+  }
   const origin = new URL(input.origin)
   if (origin.href !== `${origin.origin}/`) fail('capture origin is invalid')
   if ((input.path === undefined) === (input.matcher === undefined))
@@ -381,6 +478,58 @@ export function matchRequest(
     slots[slot] = value
   }
   return slots
+}
+
+function matchV4Request(
+  path: string,
+  type: string | undefined,
+  binding: V4CaptureBinding,
+): Record<string, string | boolean> | null {
+  if (!type || !binding.matcher.resource_types.includes(type as ResourceType))
+    return null
+  let url: URL
+  try {
+    if (normalizePathQuery(path) !== path) return null
+    url = new URL(path, 'https://capture.invalid')
+  } catch {
+    return null
+  }
+  if (url.pathname !== binding.matcher.path.value) return null
+  const values = new Map<string, string>()
+  for (const [name, value] of url.searchParams) {
+    if (values.has(name)) return null
+    values.set(name, value)
+  }
+  const templates = binding.matcher.query.required
+  if (
+    values.size !== Object.keys(templates).length ||
+    [...values.keys()].some((name) => !Object.hasOwn(templates, name))
+  )
+    return null
+  const captured: Record<string, string | boolean> = {}
+  const queryVariables = binding.variables.filter(
+    (variable) =>
+      variable.source.kind === 'CAPTURED_REQUEST' &&
+      variable.source.location === 'QUERY',
+  )
+  for (const [name, template] of Object.entries(templates)) {
+    const matched = matchV4Value(
+      values.get(name)!,
+      template,
+      binding.resolvedVariables,
+      queryVariables.filter(
+        (variable) =>
+          variable.source.kind === 'CAPTURED_REQUEST' &&
+          variable.source.selector === name,
+      ),
+      true,
+    )
+    if (matched === null) return null
+    if (Object.keys(matched).some((key) => Object.hasOwn(captured, key)))
+      fail('captured request variables are ambiguous')
+    Object.assign(captured, matched)
+  }
+  return captured
 }
 
 function canonicalForm(entries: Record<string, string[]>): {
@@ -485,6 +634,27 @@ export function matchRequestBody(
   return slots
 }
 
+function joinedRawBody(
+  requestBody: RequestBodyDetails['requestBody'],
+): Uint8Array {
+  const entries = requestBody?.raw
+  if (!entries?.length || entries.some((entry) => !entry.bytes))
+    fail('captured POST body is invalid')
+  const length = entries.reduce(
+    (total, entry) => total + entry.bytes!.byteLength,
+    0,
+  )
+  if (length > MAX_CAPTURED_BODY_BYTES) fail('captured body exceeds its limit')
+  const result = new Uint8Array(length)
+  let offset = 0
+  for (const entry of entries) {
+    const chunk = new Uint8Array(entry.bytes!)
+    result.set(chunk, offset)
+    offset += chunk.length
+  }
+  return result
+}
+
 export class CaptureSession {
   #binding: CaptureBinding
   #requestId: string | null = null
@@ -499,59 +669,122 @@ export class CaptureSession {
   }
 
   observe(details: RequestDetails): void {
+    const binding = this.#binding
     if (
-      details.tabId !== this.#binding.tabId ||
-      details.frameId !== this.#binding.frameId ||
-      details.method !== this.#binding.method
+      details.tabId !== binding.tabId ||
+      details.frameId !== binding.frameId ||
+      details.method !== binding.method
     )
       return
-    const path = requestPath(details.url, this.#binding.origin)
+    const v4 = isV4Binding(binding)
+    const path = requestPath(
+      details.url,
+      v4 ? binding.targetOrigin : binding.origin,
+    )
     if (path === null) return
     const candidate = this.#candidate
     if (!candidate || this.#requestId !== details.requestId) {
-      if (this.#binding.method === 'POST') return
+      if (binding.method === 'POST') return
       this.observeBody(details)
     }
     const matched = this.#candidate
     if (!matched || this.#requestId !== details.requestId) return
     const secrets: Partial<Record<SecretHeader, string>> = {}
-    for (const header of details.requestHeaders ?? []) {
-      const name = header.name.toLowerCase() as SecretHeader
-      if (!this.#binding.secretHeaders.includes(name)) continue
-      if (!header.value || secrets[name] !== undefined)
-        fail('captured secret headers were invalid')
-      secrets[name] = header.value
-    }
-    for (const name of this.#binding.secretHeaders)
-      if (!secrets[name]) fail('captured secret headers were missing')
-    if (this.#binding.method === 'POST') {
-      const type = contentType(details.requestHeaders)
-      if (!type || !this.#binding.bodyMatcher)
-        fail('captured request content type is unsupported')
-      let body: string
-      if (type === 'application/json') {
-        if (
-          !this.#requestBody?.raw ||
-          this.#requestBody.raw.length !== 1 ||
-          !this.#requestBody.raw[0]?.bytes
-        )
-          fail('captured JSON body is invalid')
-        body = canonicalJsonBody(this.#requestBody.raw[0].bytes).body
-      } else {
-        if (!this.#requestBody?.formData) fail('captured form body is invalid')
-        body = canonicalForm(this.#requestBody.formData).body
+    if (!v4) {
+      for (const header of details.requestHeaders ?? []) {
+        const name = header.name.toLowerCase() as SecretHeader
+        if (!binding.secretHeaders.includes(name)) continue
+        if (!header.value || secrets[name] !== undefined)
+          fail('captured secret headers were invalid')
+        secrets[name] = header.value
       }
-      const bodySlots = matchRequestBody(body, type, this.#binding.bodyMatcher)
-      if (bodySlots === null) fail('captured request body did not match')
-      const slots = { ...(matched.slots ?? {}), ...bodySlots }
-      if (
-        Object.keys(slots).length !==
-        Object.keys(matched.slots ?? {}).length + Object.keys(bodySlots).length
-      )
-        fail('captured request slots are ambiguous')
-      matched.body = body
-      matched.content_type = type
-      matched.slots = slots
+      for (const name of binding.secretHeaders)
+        if (!secrets[name]) fail('captured secret headers were missing')
+    }
+    if (binding.method === 'POST') {
+      const type = contentType(details.requestHeaders)
+      if (!type) fail('captured request content type is unsupported')
+      if (v4) {
+        if (type !== binding.contentType)
+          fail('captured request content type did not match')
+        const contentTypeHeaders = (details.requestHeaders ?? []).filter(
+          (header) => header.name.toLowerCase() === 'content-type',
+        )
+        if (
+          contentTypeHeaders.length !== 1 ||
+          contentTypeHeaders[0]?.value !== type
+        )
+          fail('captured request content type did not match')
+        const raw = joinedRawBody(this.#requestBody)
+        const bodyVariables = binding.variables.filter(
+          (variable) =>
+            variable.source.kind === 'CAPTURED_REQUEST' &&
+            variable.source.location !== 'QUERY',
+        )
+        const bodyMatch = matchV4Body(
+          raw,
+          type,
+          binding.template!,
+          binding.resolvedVariables,
+          bodyVariables,
+        )
+        if (!bodyMatch) fail('captured request body did not match')
+        const capturedVariables = {
+          ...(matched.capturedVariables ?? {}),
+          ...bodyMatch.captured,
+        }
+        if (
+          Object.keys(capturedVariables).length !==
+          Object.keys(matched.capturedVariables ?? {}).length +
+            Object.keys(bodyMatch.captured).length
+        )
+          fail('captured request variables are ambiguous')
+        const expected = binding.variables.filter(
+          (variable) => variable.source.kind === 'CAPTURED_REQUEST',
+        ).length
+        if (Object.keys(capturedVariables).length !== expected)
+          fail('captured request variables were incomplete')
+        matched.body = bodyMatch.exactBody
+        matched.content_type = type
+        matched.semanticCanonical = bodyMatch.semanticCanonical
+        matched.capturedVariables = capturedVariables
+      } else {
+        if (!binding.bodyMatcher)
+          fail('captured request content type is unsupported')
+        let body: string
+        if (type === 'application/json') {
+          if (
+            !this.#requestBody?.raw ||
+            this.#requestBody.raw.length !== 1 ||
+            !this.#requestBody.raw[0]?.bytes
+          )
+            fail('captured JSON body is invalid')
+          body = canonicalJsonBody(this.#requestBody.raw[0].bytes).body
+        } else {
+          if (!this.#requestBody?.formData)
+            fail('captured form body is invalid')
+          body = canonicalForm(this.#requestBody.formData).body
+        }
+        const bodySlots = matchRequestBody(body, type, binding.bodyMatcher)
+        if (bodySlots === null) fail('captured request body did not match')
+        const slots = { ...(matched.slots ?? {}), ...bodySlots }
+        if (
+          Object.keys(slots).length !==
+          Object.keys(matched.slots ?? {}).length +
+            Object.keys(bodySlots).length
+        )
+          fail('captured request slots are ambiguous')
+        matched.body = body
+        matched.content_type = type
+        matched.slots = slots
+      }
+    }
+    if (v4 && binding.method === 'GET') {
+      const expected = binding.variables.filter(
+        (variable) => variable.source.kind === 'CAPTURED_REQUEST',
+      ).length
+      if (Object.keys(matched.capturedVariables ?? {}).length !== expected)
+        fail('captured request variables were incomplete')
     }
     this.#captured = {
       ...matched,
@@ -560,23 +793,30 @@ export class CaptureSession {
   }
 
   observeBody(details: RequestBodyDetails): void {
+    const binding = this.#binding
     if (
-      details.tabId !== this.#binding.tabId ||
-      details.frameId !== this.#binding.frameId ||
-      details.method !== this.#binding.method
+      details.tabId !== binding.tabId ||
+      details.frameId !== binding.frameId ||
+      details.method !== binding.method
     )
       return
-    const path = requestPath(details.url, this.#binding.origin)
+    const v4 = isV4Binding(binding)
+    const path = requestPath(
+      details.url,
+      v4 ? binding.targetOrigin : binding.origin,
+    )
     if (path === null) return
-    const querySlots = this.#binding.matcher
-      ? matchRequest(path, details.type, this.#binding.matcher)
-      : path === this.#binding.path
-        ? {}
-        : null
+    const querySlots = v4
+      ? matchV4Request(path, details.type, binding)
+      : binding.matcher
+        ? matchRequest(path, details.type, binding.matcher)
+        : path === binding.path
+          ? {}
+          : null
     if (querySlots === null) return
     if (this.#used || this.#failed || this.#candidate || this.#captured)
       fail('capture already completed')
-    if (this.#binding.method === 'POST') {
+    if (binding.method === 'POST') {
       const requestBody = details.requestBody
       if (!requestBody) fail('captured POST body is invalid')
       this.#requestBody = requestBody
@@ -587,9 +827,17 @@ export class CaptureSession {
     this.#candidate = {
       path,
       secrets: {},
-      ...(this.#binding.method === 'POST' ? { method: 'POST' as const } : {}),
-      ...(this.#binding.matcher
-        ? { slots: querySlots, resource_type: details.type as ResourceType }
+      ...(binding.method === 'POST' ? { method: 'POST' as const } : {}),
+      ...(binding.matcher
+        ? v4
+          ? {
+              capturedVariables: querySlots,
+              resource_type: details.type as ResourceType,
+            }
+          : {
+              slots: querySlots as Record<string, string>,
+              resource_type: details.type as ResourceType,
+            }
         : {}),
     }
   }
