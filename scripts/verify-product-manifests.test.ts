@@ -27,6 +27,14 @@ const PRODUCTION_HOSTS = [
   'https://app.lhdao.top/*',
 ]
 
+const BETA_HOSTS = [
+  'https://x.com/*',
+  'https://twitter.com/*',
+  'https://www.binance.com/*',
+  'https://service.lhdaobeta.top/*',
+  'https://app.lhdaobeta.top/*',
+]
+
 function validManifest(overrides = {}) {
   return {
     manifest_version: 3,
@@ -135,6 +143,56 @@ test('accepts an exact production MV3 manifest with a runtime evaluator', async 
   const directory = await manifestDirectory()
 
   await assert.doesNotReject(verify(directory))
+})
+
+test('accepts the exact beta endpoint pair and manifest surfaces', async () => {
+  const verify = productionManifestVerifier()
+  const directory = await manifestDirectory(
+    validManifest({
+      host_permissions: BETA_HOSTS,
+      content_scripts: [
+        {
+          matches: ['https://app.lhdaobeta.top/*'],
+          js: ['content-scripts/web-presence.js'],
+        },
+      ],
+    }),
+  )
+
+  await assert.doesNotReject(
+    verify(directory, {
+      environment: {
+        WXT_API_ENDPOINT: 'https://service.lhdaobeta.top/graphql',
+        WXT_WEB_ENDPOINT: 'https://app.lhdaobeta.top',
+      },
+    }),
+  )
+})
+
+test.each([
+  [
+    'unknown endpoints',
+    'https://service.unknown.example/graphql',
+    'https://app.unknown.example',
+  ],
+  [
+    'mixed production and beta endpoints',
+    'https://service.lhdaobeta.top/graphql',
+    'https://app.lhdao.top',
+  ],
+])('rejects %s as a release profile', async (_name, api, web) => {
+  const verify = productionManifestVerifier()
+  const directory = await manifestDirectory()
+
+  await assert.rejects(
+    verify(directory, {
+      environment: {
+        WXT_API_ENDPOINT: api,
+        WXT_WEB_ENDPOINT: web,
+      },
+    }),
+    /release endpoint profile is unsupported/i,
+  )
 })
 
 describe('requires exact version, permissions, and host permissions', () => {
@@ -321,7 +379,7 @@ test('requires the runtime evaluator artifact in every output', async () => {
   )
 })
 
-test('never lets endpoint environment expand the release host allowlist', async () => {
+test('never lets an unknown endpoint environment expand the release allowlist', async () => {
   const verify = productionManifestVerifier()
   const directory = await manifestDirectory(
     validManifest({
@@ -342,7 +400,7 @@ test('never lets endpoint environment expand the release host allowlist', async 
         WXT_WEB_ENDPOINT: 'https://also-evil.example',
       },
     }),
-    /host_permissions.*evil\.example/i,
+    /release endpoint profile is unsupported/i,
   )
 })
 

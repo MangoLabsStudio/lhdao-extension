@@ -13,20 +13,21 @@ const FIXED_HOST_PERMISSIONS = [
 ]
 const DEFAULT_API_ENDPOINT = 'https://service.lhdao.top/graphql'
 const DEFAULT_WEB_ENDPOINT = 'https://app.lhdao.top'
-const EXPECTED_HOST_PERMISSIONS = [
-  ...FIXED_HOST_PERMISSIONS,
-  'https://service.lhdao.top/*',
-  'https://app.lhdao.top/*',
+const RELEASE_ENDPOINT_PROFILES = [
+  [DEFAULT_API_ENDPOINT, DEFAULT_WEB_ENDPOINT],
+  [
+    'https://service.lhdaobeta.top/graphql',
+    'https://app.lhdaobeta.top',
+  ],
 ]
-const APPROVED_PAGE_MATCHES = new Set([
+const FIXED_PAGE_MATCHES = [
   'https://x.com/*',
   'https://twitter.com/*',
   '*://x.com/*',
   '*://twitter.com/*',
   'https://www.binance.com/*/square/*',
   'https://www.binance.com/square/*',
-  'https://app.lhdao.top/*',
-])
+]
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
 const RUNTIME_EVALUATOR_PATH = 'content-scripts/product-experience.js'
 
@@ -96,6 +97,16 @@ export function resolveEndpointPolicy(environment = process.env) {
     webHostPattern: `${webUrl.origin}/*`,
     localBuild,
   }
+}
+
+function resolveReleaseEndpointPolicy(environment) {
+  const policy = resolveEndpointPolicy(environment)
+  const supported = RELEASE_ENDPOINT_PROFILES.some(
+    ([apiEndpoint, webEndpoint]) =>
+      policy.apiEndpoint === apiEndpoint && policy.webEndpoint === webEndpoint,
+  )
+  if (!supported) throw new Error('Release endpoint profile is unsupported.')
+  return policy
 }
 
 export function resolveRequestedDirectories(argumentsList) {
@@ -221,25 +232,30 @@ function assertRuntimeOnlyEvaluator(manifest) {
   }
 }
 
-function assertApprovedPageMatches(label, matches) {
+function assertApprovedPageMatches(label, matches, approvedPageMatches) {
   if (!Array.isArray(matches)) {
     throw new Error(`${label} must be an array of approved match patterns`)
   }
   for (const pattern of matches) {
-    if (typeof pattern !== 'string' || !APPROVED_PAGE_MATCHES.has(pattern)) {
+    if (typeof pattern !== 'string' || !approvedPageMatches.has(pattern)) {
       throw new Error(`${label} contains an unapproved match: ${String(pattern)}`)
     }
   }
 }
 
-function assertApprovedPageSurfaces(manifest) {
+function assertApprovedPageSurfaces(manifest, approvedPageMatches) {
   for (const contentScript of manifest.content_scripts ?? []) {
-    assertApprovedPageMatches('content_scripts.matches', contentScript?.matches)
+    assertApprovedPageMatches(
+      'content_scripts.matches',
+      contentScript?.matches,
+      approvedPageMatches,
+    )
   }
   for (const resource of manifest.web_accessible_resources ?? []) {
     assertApprovedPageMatches(
       'web_accessible_resources.matches',
       resource?.matches,
+      approvedPageMatches,
     )
   }
   for (const [key, value] of Object.entries(
@@ -280,6 +296,20 @@ async function assertTlsnAssets(directory) {
 
 export async function verifyManifestDirectory(directory, options = {}) {
   const browser = typeof options === 'string' ? options : options.browser ?? 'chrome'
+  const environment =
+    typeof options === 'object' && options.environment
+      ? options.environment
+      : process.env
+  const endpointPolicy = resolveReleaseEndpointPolicy(environment)
+  const expectedHostPermissions = [
+    ...FIXED_HOST_PERMISSIONS,
+    endpointPolicy.apiHostPattern,
+    endpointPolicy.webHostPattern,
+  ]
+  const approvedPageMatches = new Set([
+    ...FIXED_PAGE_MATCHES,
+    endpointPolicy.webHostPattern,
+  ])
   const absoluteDirectory = resolve(directory)
   const manifestPath = resolve(absoluteDirectory, 'manifest.json')
   let manifest
@@ -312,7 +342,7 @@ export async function verifyManifestDirectory(directory, options = {}) {
   assertExactStringSet(
     'host_permissions',
     manifest.host_permissions,
-    EXPECTED_HOST_PERMISSIONS,
+    expectedHostPermissions,
   )
   assertExactStringSet(
     'optional_host_permissions',
@@ -337,7 +367,7 @@ export async function verifyManifestDirectory(directory, options = {}) {
       }
     }
   }
-  assertApprovedPageSurfaces(manifest)
+  assertApprovedPageSurfaces(manifest, approvedPageMatches)
   return { directory: absoluteDirectory, manifestPath }
 }
 
