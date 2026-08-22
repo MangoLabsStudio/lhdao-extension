@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
+  proofHttpRequest,
   revealConfig,
   sessionRegistrationPayload,
   verifierUrls,
@@ -1419,6 +1420,16 @@ describe('zkTLS strict boundaries', () => {
     expect(() => verifierUrls('ws://localhost:7047/session', 'bad/id')).toThrow(
       'verifier rejected session',
     )
+    const replay = proofHttpRequest(message)
+    expect(replay.uri).toBe('/profile/octocat')
+    expect([...replay.headers.keys()]).toEqual([
+      'host',
+      'accept-encoding',
+      'connection',
+      'x-requested-with',
+      'cookie',
+    ])
+    expect(replay.body).toBeUndefined()
     const sent = new TextEncoder().encode(
       'GET /profile/octocat HTTP/1.1\r\nHost: github.com\r\n\r\n',
     )
@@ -1462,6 +1473,83 @@ describe('zkTLS strict boundaries', () => {
     expect(payload).not.toContain('Bearer private')
     expect(payload).not.toContain('{"token":"private"}')
     expect(payload).not.toContain('"captured"')
+  })
+
+  test('replays an immutable V4 capture with only complete public headers', () => {
+    const config = validateConnector(v4Connector())
+    if (config.interpreter_version !== 4) throw new Error('wrong connector')
+    const captured = {
+      path: '/v1/volume?day=2026-08-20',
+      method: 'POST' as const,
+      body: '{"operation":"volume","input":{"account":"acct-1","options":{"day":"2026-08-20"}}}',
+      content_type: 'application/json' as const,
+      secrets: {},
+      resource_type: 'fetch' as const,
+      capturedVariables: {},
+    }
+    const message = {
+      id: 'v4-job',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: config.connector_id,
+      config,
+      ticket: { ...ticket, interpreter_version: 4 as const },
+      configEnvelope: { ...configEnvelope, config },
+      ticketEnvelope,
+      captured,
+    }
+
+    const request = proofHttpRequest(message)
+    captured.path = '/changed'
+    captured.body = '{"changed":true}'
+
+    expect(request.uri).toBe('/v1/volume?day=2026-08-20')
+    expect(new TextDecoder().decode(new Uint8Array(request.body!))).toBe(
+      '{"operation":"volume","input":{"account":"acct-1","options":{"day":"2026-08-20"}}}',
+    )
+    expect([...request.headers.keys()]).toEqual([
+      'host',
+      'connection',
+      'content-type',
+      'content-length',
+    ])
+    expect(
+      new TextDecoder().decode(
+        new Uint8Array(request.headers.get('content-length')!),
+      ),
+    ).toBe(String(request.body!.length))
+  })
+
+  test('replays a V4 GET without content, custom, or secret headers', () => {
+    const raw = v4Connector()
+    const requestConfig = testRecord(raw.request)
+    requestConfig.method = 'GET'
+    delete requestConfig.body
+    delete requestConfig.content_type
+    testRecord(
+      testRecord(testRecord(requestConfig.matcher).query).required,
+    ).account = { $var: 'accountId' }
+    const config = validateConnector(raw)
+    if (config.interpreter_version !== 4) throw new Error('wrong connector')
+    const request = proofHttpRequest({
+      id: 'v4-get-job',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: config.connector_id,
+      config,
+      ticket: { ...ticket, interpreter_version: 4 as const },
+      configEnvelope: { ...configEnvelope, config },
+      ticketEnvelope,
+      captured: {
+        path: '/v1/volume?day=2026-08-20&account=acct-1',
+        secrets: {},
+        resource_type: 'fetch' as const,
+        capturedVariables: {},
+      },
+    })
+
+    expect(request.body).toBeUndefined()
+    expect([...request.headers.keys()]).toEqual(['host', 'connection'])
   })
 
   test('reveals a unique JSON regex scalar but keeps JSONPath disabled', () => {
@@ -1514,6 +1602,15 @@ describe('zkTLS strict boundaries', () => {
     const sent = new TextEncoder().encode(
       'GET /viewer HTTP/1.1\r\nHost: github.com\r\n\r\n',
     )
+    const replay = proofHttpRequest(message)
+    expect(replay.uri).toBe('/viewer')
+    expect([...replay.headers.keys()]).toEqual([
+      'host',
+      'accept-encoding',
+      'connection',
+      'accept',
+      'cookie',
+    ])
     const received = new TextEncoder().encode(
       'HTTP/1.1 200 OK\r\nX-Private: "volume":9999\r\nContent-Type: application/json\r\n\r\n{"volume":7200}',
     )

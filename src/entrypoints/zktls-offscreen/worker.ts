@@ -15,6 +15,7 @@ import {
   regexDisclosureRanges,
   requestTarget,
   type V1Connector,
+  type V4Connector,
 } from '@/lib/zktls/interpreter'
 import { assertVerifierProfile, ZKTLS_PROFILE } from '@/lib/zktls/profile'
 import {
@@ -23,6 +24,7 @@ import {
   type Ticket,
   type TicketEnvelope,
 } from '@/lib/zktls/signed-config'
+import { v4RequestDisclosureRanges } from '@/lib/zktls/v4-disclosure'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -47,10 +49,18 @@ type CapturedProveMessage = CommonProveMessage & {
   config: CapturedConnector
   captured: CapturedRequest
 }
-type ProveMessage = V1ProveMessage | CapturedProveMessage
+type V4ProveMessage = CommonProveMessage & {
+  config: V4Connector
+  captured: CapturedRequest
+}
+type ProveMessage = V1ProveMessage | CapturedProveMessage | V4ProveMessage
 
 function isV1Message(message: ProveMessage): message is V1ProveMessage {
   return message.config.interpreter_version === 1
+}
+
+function isV4Message(message: ProveMessage): message is V4ProveMessage {
+  return message.config.interpreter_version === 4
 }
 
 type SocketIo = {
@@ -65,6 +75,96 @@ type RevealRange = Range & {
     type: 'SENT' | 'RECV'
     part: 'START_LINE' | 'BODY'
     action: { kind: 'REVEAL' }
+  }
+}
+
+type ProofHttpRequest = {
+  uri: string
+  method: 'GET' | 'POST'
+  headers: Map<string, number[]>
+  body: number[] | undefined
+}
+
+function header(value: string): number[] {
+  return Array.from(encoder.encode(value))
+}
+
+export function proofHttpRequest(message: ProveMessage): ProofHttpRequest {
+  const origin = new URL(message.config.origin)
+  if (isV4Message(message)) {
+    const body =
+      message.config.request.method === 'POST'
+        ? message.captured.body
+        : undefined
+    if (
+      (message.config.request.method === 'POST' &&
+        (!body ||
+          message.captured.content_type !== 'application/json' ||
+          message.config.request.content_type !== 'application/json')) ||
+      (message.config.request.method === 'GET' &&
+        (message.captured.body !== undefined ||
+          message.captured.content_type !== undefined))
+    )
+      throw new Error('captured request did not match the signed provider')
+    const encodedBody = body ? header(body) : undefined
+    return {
+      uri: message.captured.path,
+      method: message.config.request.method,
+      headers: new Map([
+        ['host', header(origin.host)],
+        ['connection', header('close')],
+        ...(encodedBody
+          ? [
+              ['content-type', header('application/json')] as [
+                string,
+                number[],
+              ],
+              ['content-length', header(String(encodedBody.length))] as [
+                string,
+                number[],
+              ],
+            ]
+          : []),
+      ]),
+      body: encodedBody,
+    }
+  }
+
+  const path = isV1Message(message)
+    ? requestTarget(message.config, message.identity)
+    : message.captured.path
+  const secrets = isV1Message(message)
+    ? { cookie: message.cookie }
+    : message.captured.secrets
+  const body =
+    !isV1Message(message) && message.config.request.method === 'POST'
+      ? message.captured.body
+      : undefined
+  if (message.config.request.method === 'POST' && !body)
+    throw new Error('captured POST body was missing')
+  return {
+    uri: path,
+    method: message.config.request.method,
+    headers: new Map([
+      ['host', header(origin.hostname)],
+      ['accept-encoding', header('identity')],
+      ['connection', header('close')],
+      ...(!isV1Message(message) && message.config.request.method === 'POST'
+        ? [
+            ['content-type', header(message.captured.content_type!)] as [
+              string,
+              number[],
+            ],
+          ]
+        : []),
+      ...Object.entries(message.config.request.headers).map(
+        ([key, value]) => [key, header(value)] as [string, number[]],
+      ),
+      ...Object.entries(secrets).map(
+        ([key, value]) => [key, header(value)] as [string, number[]],
+      ),
+    ]),
+    body: body ? header(body) : undefined,
   }
 }
 
@@ -299,6 +399,10 @@ export function revealConfig(
   sent: Uint8Array,
   received: Uint8Array,
 ): { sent: RevealRange[]; recv: RevealRange[] } {
+  if (isV4Message(message)) {
+    v4RequestDisclosureRanges(sent, message.config, message.captured)
+    throw new Error('JSON connectors are unsupported by this runtime')
+  }
   if (
     message.config.response_format === 'json' &&
     message.config.extraction.kind !== 'regex'
@@ -448,8 +552,21 @@ function assertCapturedRequest(message: CapturedProveMessage): void {
     throw new Error('captured secret headers were invalid')
 }
 
+function assertV4CapturedRequest(message: V4ProveMessage): void {
+  if (
+    Object.keys(message.captured.secrets).length !== 0 ||
+    !message.config.request.matcher.resource_types.includes(
+      message.captured.resource_type!,
+    ) ||
+    (message.config.request.method === 'POST') !==
+      (message.captured.method === 'POST')
+  )
+    throw new Error('captured request did not match the signed provider')
+}
+
 async function prove(message: ProveMessage): Promise<void> {
   if (
+    !isV4Message(message) &&
     message.config.response_format === 'json' &&
     message.config.extraction.kind !== 'regex'
   )
@@ -459,7 +576,9 @@ async function prove(message: ProveMessage): Promise<void> {
   await wasm.initialize(null, 1)
   const origin = new URL(message.config.origin)
   assertAvailable(message)
-  if (!isV1Message(message)) assertCapturedRequest(message)
+  if (isV4Message(message)) assertV4CapturedRequest(message)
+  else if (!isV1Message(message)) assertCapturedRequest(message)
+  const request = proofHttpRequest(message)
   const registration = await registerSession(message)
   const prover = new wasm.Prover({
     server_name: origin.hostname,
@@ -477,46 +596,14 @@ async function prove(message: ProveMessage): Promise<void> {
   try {
     await prover.setup(await websocketIo(registration.verifierUrl))
     assertAvailable(message)
-    const path = isV1Message(message)
-      ? requestTarget(message.config, message.identity)
-      : message.captured.path
     const secrets = isV1Message(message)
       ? { cookie: message.cookie }
       : message.captured.secrets
-    const method = message.config.request.method
-    const body =
-      !isV1Message(message) && method === 'POST'
-        ? message.captured.body
-        : undefined
-    if (method === 'POST' && !body)
-      throw new Error('captured POST body was missing')
     try {
-      await prover.send_request(await websocketIo(registration.proxyUrl), {
-        uri: path,
-        method,
-        headers: new Map<string, number[]>([
-          ['host', Array.from(encoder.encode(origin.hostname))],
-          ['accept-encoding', Array.from(encoder.encode('identity'))],
-          ['connection', Array.from(encoder.encode('close'))],
-          ...(!isV1Message(message) && method === 'POST'
-            ? [
-                [
-                  'content-type',
-                  Array.from(encoder.encode(message.captured.content_type!)),
-                ] as [string, number[]],
-              ]
-            : []),
-          ...Object.entries(message.config.request.headers).map(
-            ([key, value]) =>
-              [key, Array.from(encoder.encode(value))] as [string, number[]],
-          ),
-          ...Object.entries(secrets).map(
-            ([key, value]) =>
-              [key, Array.from(encoder.encode(value))] as [string, number[]],
-          ),
-        ]),
-        body: body ? Array.from(encoder.encode(body)) : undefined,
-      })
+      await prover.send_request(
+        await websocketIo(registration.proxyUrl),
+        request,
+      )
     } finally {
       clearSecrets(secrets)
     }
