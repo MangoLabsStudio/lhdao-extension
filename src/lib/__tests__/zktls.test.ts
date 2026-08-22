@@ -877,6 +877,7 @@ describe('zkTLS strict boundaries', () => {
   })
 
   test.each([
+    'https://app.example.com:443',
     'https://app.example.com:8443',
     'https://api.example.com:9443',
   ])('rejects the non-default V4 HTTPS port %s', (origin) => {

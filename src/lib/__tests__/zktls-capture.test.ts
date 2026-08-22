@@ -1083,6 +1083,7 @@ describe('zkTLS v4 capture', () => {
   })
 
   test.each([
+    ['https://app.example.com:443', 'https://api.example.com'],
     ['https://app.example.com:8443', 'https://api.example.com'],
     ['https://app.example.com', 'https://api.example.com:8443'],
   ])('rejects a direct V4 capture binding with non-default origins %s / %s', (pageOrigin, targetOrigin) => {

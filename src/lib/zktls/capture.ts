@@ -435,6 +435,8 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
     if (
       !pageOrigin.startsWith('https://') ||
       !targetOrigin.startsWith('https://') ||
+      input.pageOrigin !== pageOrigin ||
+      input.targetOrigin !== targetOrigin ||
       pageUrl.port ||
       targetUrl.port ||
       !exactV4RequestTemplate(input.template) ||
