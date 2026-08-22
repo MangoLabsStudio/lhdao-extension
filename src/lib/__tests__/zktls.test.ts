@@ -177,12 +177,7 @@ function v4Connector(): Record<string, unknown> {
         operation: 'volume',
         input: {
           account: { $var: 'accountId' },
-          options: {
-            $object: {
-              mode: 'ALLOW_EXTRA',
-              fields: { day: { $var: 'periodKey' } },
-            },
-          },
+          options: { day: { $var: 'periodKey' } },
         },
       },
       content_type: 'application/json',
@@ -802,6 +797,31 @@ describe('zkTLS strict boundaries', () => {
     await expect(configDigest(config)).resolves.toMatch(/^[a-f0-9]{64}$/)
   })
 
+  test('rejects ALLOW_EXTRA anywhere in a signed V4 request template', () => {
+    const body = cloneV4()
+    body.request.body = {
+      operation: 'volume',
+      input: {
+        $object: {
+          mode: 'ALLOW_EXTRA',
+          fields: { account: { $var: 'accountId' } },
+        },
+      },
+    }
+    expect(() => validateConnector(body)).toThrow()
+
+    const query = cloneV4()
+    query.request.matcher.query.required = {
+      filter: {
+        $object: {
+          mode: 'ALLOW_EXTRA',
+          fields: { day: { $var: 'periodKey' } },
+        },
+      },
+    }
+    expect(() => validateConnector(query)).toThrow()
+  })
+
   test('parses signed account-binding metadata only for binding connectors', () => {
     const binding = cloneV4()
     binding.purpose = 'ACCOUNT_BINDING'
@@ -846,14 +866,25 @@ describe('zkTLS strict boundaries', () => {
     expect(() => validateConnector(binding)).toThrow()
   })
 
-  test('accepts V4 DNS origins with punycode and explicit ports', () => {
+  test('accepts V4 DNS origins with punycode on the default HTTPS port', () => {
     const value = cloneV4()
-    value.page_origin = 'https://xn--bcher-kva.example:8443'
-    value.origin = 'https://api.example.com:9443'
+    value.page_origin = 'https://xn--bcher-kva.example'
+    value.origin = 'https://api.example.com'
     expect(validateConnector(value)).toMatchObject({
       page_origin: value.page_origin,
       origin: value.origin,
     })
+  })
+
+  test.each([
+    'https://app.example.com:8443',
+    'https://api.example.com:9443',
+  ])('rejects the non-default V4 HTTPS port %s', (origin) => {
+    for (const field of ['page_origin', 'origin'] as const) {
+      const value = cloneV4()
+      value[field] = origin
+      expect(() => validateConnector(value)).toThrow()
+    }
   })
 
   test.each([
@@ -1852,17 +1883,25 @@ describe('zkTLS V4 page and target permissions', () => {
   })
 
   test.each([
-    ['https://api.example.com:8443', 'https://api.example.com:8443/*'],
-    [
-      'https://xn--bcher-kva.example:9443',
-      'https://xn--bcher-kva.example:9443/*',
-    ],
+    ['https://api.example.com', 'https://api.example.com/*'],
+    ['https://xn--bcher-kva.example', 'https://xn--bcher-kva.example/*'],
   ])('preserves a Chrome-exact DNS origin %s', async (origin, pattern) => {
     const contains = vi
       .spyOn(chrome.permissions, 'contains')
       .mockImplementation((async () => true) as never)
     await ensurePermissions([origin], 'product-volume')
     expect(contains).toHaveBeenCalledWith({ origins: [pattern] })
+  })
+
+  test.each([
+    'https://api.example.com:8443',
+    'https://xn--bcher-kva.example:9443',
+  ])('rejects a non-default permission origin %s', async (origin) => {
+    const contains = vi.spyOn(chrome.permissions, 'contains')
+    await expect(ensurePermissions([origin], 'product-volume')).rejects.toThrow(
+      'exact HTTPS origins',
+    )
+    expect(contains).not.toHaveBeenCalled()
   })
 
   test.each([
@@ -1925,28 +1964,16 @@ describe('zkTLS V4 page and target permissions', () => {
     })
   })
 
-  test('does not reuse a same-host page tab on the wrong signed port', async () => {
-    const query = vi
-      .spyOn(chrome.tabs, 'query')
-      .mockResolvedValueOnce([
-        { id: 3, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: 5,
-          url: 'https://app.example.com:9443/dashboard',
-        } as chrome.tabs.Tab,
-        {
-          id: 7,
-          url: 'https://app.example.com:8443/dashboard',
-        } as chrome.tabs.Tab,
-      ])
+  test('rejects a non-default port before an exact-origin tab query', async () => {
+    const query = vi.spyOn(chrome.tabs, 'query')
 
-    await expect(
-      connectorTab('https://app.example.com:8443'),
-    ).resolves.toMatchObject({ id: 7 })
-    expect(query).toHaveBeenNthCalledWith(2, {
-      url: 'https://app.example.com:8443/*',
+    await expect(connectorTab('https://app.example.com:8443')).rejects.toThrow(
+      'exact HTTPS origins',
+    )
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(query).toHaveBeenCalledWith({
+      active: true,
+      lastFocusedWindow: true,
     })
   })
 
@@ -1985,7 +2012,7 @@ describe('zkTLS V4 page and target permissions', () => {
     registerZkTlsRuntime()
 
     const pending = ensurePermissions(
-      ['https://app.example.com', 'https://api.example.com:8443'],
+      ['https://app.example.com', 'https://api.example.com'],
       'product-volume',
     )
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
@@ -2077,7 +2104,7 @@ describe('zkTLS V4 page and target permissions', () => {
         sender,
       ),
     ).toEqual({
-      origins: ['https://api.example.com:8443', 'https://app.example.com'],
+      origins: ['https://api.example.com', 'https://app.example.com'],
       connectorId: 'product-volume',
     })
     await messageListener?.(

@@ -117,6 +117,7 @@ function permissionOrigins(
       url.protocol !== 'https:' ||
       url.username ||
       url.password ||
+      url.port ||
       url.origin !== origin ||
       url.pathname !== '/' ||
       url.search ||

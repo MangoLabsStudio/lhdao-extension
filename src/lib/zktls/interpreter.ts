@@ -1135,6 +1135,7 @@ function v4Origin(value: unknown, name: string): string {
     url.protocol !== 'https:' ||
     url.username ||
     url.password ||
+    url.port ||
     url.pathname !== '/' ||
     url.search ||
     url.hash ||
@@ -1276,16 +1277,7 @@ function v4Template(
     return
   }
   if (Object.hasOwn(input, '$object')) {
-    v4Exact(input, ['$object'], 'request template wrapper')
-    const wrapper = v4Exact(
-      input.$object,
-      ['mode', 'fields'],
-      'request template wrapper',
-    )
-    if (wrapper.mode !== 'ALLOW_EXTRA')
-      fail('request template wrapper is invalid.')
-    v4TemplateObject(wrapper.fields, variables, references, depth)
-    return
+    fail('request template must match every request field exactly.')
   }
   v4TemplateObject(input, variables, references, depth)
 }

@@ -414,10 +414,14 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
       input.targetOrigin,
       'capture target origin',
     )
+    const pageUrl = new URL(pageOrigin)
+    const targetUrl = new URL(targetOrigin)
     const matcher = input.matcher
     if (
       !pageOrigin.startsWith('https://') ||
       !targetOrigin.startsWith('https://') ||
+      pageUrl.port ||
+      targetUrl.port ||
       matcher.path.kind !== 'exact' ||
       input.maxSentData !== MAX_V4_SENT_DATA ||
       validateRequestMatcher({

@@ -26,10 +26,7 @@ describe('zkTLS permission page', () => {
       .mockImplementation((async (message: { type?: string }) =>
         message.type === 'zktls-permission-preview'
           ? {
-              origins: [
-                'https://api.example.com:8443',
-                'https://app.example.com',
-              ],
+              origins: ['https://api.example.com', 'https://app.example.com'],
               connectorId: 'product-volume',
             }
           : null) as never)
@@ -45,7 +42,7 @@ describe('zkTLS permission page', () => {
     )
 
     expect(document.querySelector('#origin')?.textContent).toBe(
-      'Origins: api.example.com:8443, app.example.com',
+      'Origins: api.example.com, app.example.com',
     )
     expect(document.querySelector('#origin')?.textContent).not.toContain(
       'https://',
@@ -53,7 +50,7 @@ describe('zkTLS permission page', () => {
     document.querySelector<HTMLButtonElement>('#allow')?.click()
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
     expect(request).toHaveBeenCalledWith({
-      origins: ['https://api.example.com:8443/*', 'https://app.example.com/*'],
+      origins: ['https://api.example.com/*', 'https://app.example.com/*'],
     })
     expect(send).toHaveBeenLastCalledWith({
       type: 'zktls-permission-result',
@@ -86,6 +83,7 @@ describe('zkTLS permission page', () => {
     'https://*',
     'https://*.example.com',
     'https://%2A.example.com',
+    'https://api.example.com:8443',
     'https://8.8.8.8:8443',
     'https://10.0.0.1',
     'https://[2606:4700:4700::1111]:8443',

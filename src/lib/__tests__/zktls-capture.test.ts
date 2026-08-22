@@ -751,7 +751,7 @@ describe('zkTLS v4 capture', () => {
     throw new Error(`cannot create ${size} JSON bytes`)
   }
 
-  function sizedV4Session(): CaptureSession {
+  function sizedV4Session(body: string): CaptureSession {
     return new CaptureSession(
       createCaptureBinding({
         interpreterVersion: 4,
@@ -769,9 +769,7 @@ describe('zkTLS v4 capture', () => {
           query: { required: {}, optional: {}, capture: {} },
           resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
         },
-        template: {
-          $object: { mode: 'ALLOW_EXTRA', fields: {} },
-        },
+        template: JSON.parse(body),
         contentType: 'application/json',
         variables: [],
         resolvedVariables: {},
@@ -805,7 +803,7 @@ describe('zkTLS v4 capture', () => {
     const body = jsonBodyOfSize(8184)
     expect(new TextEncoder().encode(body)).toHaveLength(8184)
 
-    expect(() => observeSized(sizedV4Session(), body)).toThrow('sent limit')
+    expect(() => observeSized(sizedV4Session(body), body)).toThrow('sent limit')
   })
 
   test('accepts the largest body whose complete replay is exactly 8 KiB', () => {
@@ -825,7 +823,7 @@ describe('zkTLS v4 capture', () => {
       }
     }
     const body = jsonBodyOfSize(bodySize)
-    const capture = sizedV4Session()
+    const capture = sizedV4Session(body)
 
     observeSized(capture, body)
 
@@ -1056,6 +1054,33 @@ describe('zkTLS v4 capture', () => {
       requestHeaders: [],
     })
     expect(capture.take()).toMatchObject({ path: '/v1/get' })
+  })
+
+  test.each([
+    ['https://app.example.com:8443', 'https://api.example.com'],
+    ['https://app.example.com', 'https://api.example.com:8443'],
+  ])('rejects a direct V4 capture binding with non-default origins %s / %s', (pageOrigin, targetOrigin) => {
+    expect(() =>
+      createCaptureBinding({
+        interpreterVersion: 4,
+        maxSentData: 8192,
+        tabId: 7,
+        frameId: 0,
+        sessionId: 'non-default-port',
+        providerId: 'non-default-port',
+        revision: 1,
+        pageOrigin,
+        targetOrigin,
+        method: 'GET',
+        matcher: {
+          path: { kind: 'exact', value: '/v1/get' },
+          query: { required: {}, optional: {}, capture: {} },
+          resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
+        },
+        variables: [],
+        resolvedVariables: {},
+      }),
+    ).toThrow('capture matcher is invalid')
   })
 
   test.each([
