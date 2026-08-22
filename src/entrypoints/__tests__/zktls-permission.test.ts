@@ -86,7 +86,11 @@ describe('zkTLS permission page', () => {
     'https://*',
     'https://*.example.com',
     'https://%2A.example.com',
-  ])('rejects the wildcard preview origin %s', async (origin) => {
+    'https://8.8.8.8:8443',
+    'https://10.0.0.1',
+    'https://[2606:4700:4700::1111]:8443',
+    'https://[fd00::1]',
+  ])('rejects the non-DNS preview origin %s', async (origin) => {
     vi.spyOn(chrome.runtime, 'sendMessage').mockResolvedValue({
       origins: [origin],
       connectorId: 'product-volume',

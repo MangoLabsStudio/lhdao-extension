@@ -13,6 +13,7 @@ import {
   type CapturedConnector,
   type Connector,
   extractIdentity,
+  publicDnsHost,
   type V1Connector,
   type V4Connector,
 } from './interpreter'
@@ -120,7 +121,8 @@ function permissionOrigins(
       url.pathname !== '/' ||
       url.search ||
       url.hash ||
-      url.hostname.includes('*')
+      url.hostname.includes('*') ||
+      !publicDnsHost(url.hostname)
     )
       throw new Error('permission requires one or two exact HTTPS origins')
   }

@@ -1,4 +1,4 @@
-export {}
+import { publicDnsHost } from '@/lib/zktls/interpreter'
 
 const originElement = document.querySelector<HTMLParagraphElement>('#origin')!
 const connector = document.querySelector<HTMLParagraphElement>('#connector')!
@@ -44,7 +44,8 @@ function parsePreview(value: unknown): Preview | null {
         url.pathname !== '/' ||
         url.search ||
         url.hash ||
-        url.hostname.includes('*')
+        url.hostname.includes('*') ||
+        !publicDnsHost(url.hostname)
       )
         return null
     } catch {

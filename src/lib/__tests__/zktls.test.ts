@@ -846,17 +846,18 @@ describe('zkTLS strict boundaries', () => {
     expect(() => validateConnector(binding)).toThrow()
   })
 
-  test.each([
-    ['public IPv4 and explicit port', 'https://8.8.8.8:8443'],
-    ['public IPv6 and explicit port', 'https://[2606:4700:4700::1111]:8443'],
-  ])('accepts backend-valid V4 %s', (_name, origin) => {
+  test('accepts V4 DNS origins with punycode and explicit ports', () => {
     const value = cloneV4()
-    value.page_origin = 'https://localhost:8443'
-    value.origin = origin
-    expect(validateConnector(value)).toMatchObject({ origin })
+    value.page_origin = 'https://xn--bcher-kva.example:8443'
+    value.origin = 'https://api.example.com:9443'
+    expect(validateConnector(value)).toMatchObject({
+      page_origin: value.page_origin,
+      origin: value.origin,
+    })
   })
 
   test.each([
+    'https://8.8.8.8:8443',
     'https://10.0.0.1:8443',
     'https://100.64.0.1',
     'https://127.0.0.1',
@@ -866,13 +867,16 @@ describe('zkTLS strict boundaries', () => {
     'https://192.0.2.1',
     'https://198.51.100.1',
     'https://203.0.113.1',
+    'https://[2606:4700:4700::1111]:8443',
     'https://[2001:db8::1]',
     'https://[2002::1]',
     'https://api.internal',
-  ])('rejects backend-invalid V4 target origin %s', (origin) => {
-    const value = cloneV4()
-    value.origin = origin
-    expect(() => validateConnector(value)).toThrow()
+  ])('rejects V4 IP or internal origin %s for page and target', (origin) => {
+    for (const field of ['page_origin', 'origin'] as const) {
+      const value = cloneV4()
+      value[field] = origin
+      expect(() => validateConnector(value)).toThrow()
+    }
   })
 
   test('parses V4 GET without POST-only fields', () => {
@@ -1849,13 +1853,29 @@ describe('zkTLS V4 page and target permissions', () => {
 
   test.each([
     ['https://api.example.com:8443', 'https://api.example.com:8443/*'],
-    ['https://[2606:4700:4700::1111]', 'https://[2606:4700:4700::1111]/*'],
-  ])('preserves a Chrome-exact port or IPv6 signed origin %s', async (origin, pattern) => {
+    [
+      'https://xn--bcher-kva.example:9443',
+      'https://xn--bcher-kva.example:9443/*',
+    ],
+  ])('preserves a Chrome-exact DNS origin %s', async (origin, pattern) => {
     const contains = vi
       .spyOn(chrome.permissions, 'contains')
       .mockImplementation((async () => true) as never)
     await ensurePermissions([origin], 'product-volume')
     expect(contains).toHaveBeenCalledWith({ origins: [pattern] })
+  })
+
+  test.each([
+    'https://8.8.8.8:8443',
+    'https://10.0.0.1',
+    'https://[2606:4700:4700::1111]:8443',
+    'https://[fd00::1]',
+  ])('rejects the IP-literal permission origin %s', async (origin) => {
+    const contains = vi.spyOn(chrome.permissions, 'contains')
+    await expect(ensurePermissions([origin], 'product-volume')).rejects.toThrow(
+      'exact HTTPS origins',
+    )
+    expect(contains).not.toHaveBeenCalled()
   })
 
   test.each([

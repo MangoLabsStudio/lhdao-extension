@@ -321,7 +321,7 @@ function positiveInteger(
     fail(`${name} is outside its allowed range.`)
 }
 
-function publicDnsHost(hostname: string): boolean {
+export function publicDnsHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
   const labels = host.split('.')
   const numeric =
@@ -1123,11 +1123,7 @@ function v4PublicHostname(hostname: string): boolean {
   )
 }
 
-function v4Origin(
-  value: unknown,
-  name: string,
-  requirePublic: boolean,
-): string {
+function v4Origin(value: unknown, name: string): string {
   const result = v4String(value, name, 2048, false)
   let url: URL
   try {
@@ -1144,7 +1140,8 @@ function v4Origin(
     url.hash ||
     url.origin !== result ||
     url.hostname.includes('*') ||
-    (requirePublic && !v4PublicHostname(url.hostname))
+    !publicDnsHost(url.hostname) ||
+    !v4PublicHostname(url.hostname)
   )
     fail(`${name} must be an exact HTTPS origin.`)
   return result
@@ -1971,8 +1968,8 @@ function validateV4Connector(value: unknown): V4Connector {
     new Date(input.expires_at as string).toISOString() !== input.expires_at
   )
     fail('expires_at is invalid.')
-  v4Origin(input.page_origin, 'page_origin', false)
-  v4Origin(input.origin, 'origin', true)
+  v4Origin(input.page_origin, 'page_origin')
+  v4Origin(input.origin, 'origin')
   v4Token(input.verifier_profile_id, 'verifier_profile_id')
 
   const variables = v4Variables(input.variables, purpose)
