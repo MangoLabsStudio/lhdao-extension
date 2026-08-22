@@ -1914,6 +1914,46 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     ])
   })
 
+  it('lets a new rule proceed without repolling an exhausted submitted rule', async () => {
+    harness.startZkTls
+      .mockResolvedValueOnce({
+        sessionId: 'exhausted-session',
+        connectorId: 'exhausted-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'next-session',
+        connectorId: 'next-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.advanceTimersByTimeAsync(30_000)
+    await flushAsync()
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-b'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+    expect(harness.startZkTls).toHaveBeenNthCalledWith(2, {
+      campaignId: 'campaign-product-001',
+      ruleId: 'rule-b',
+      ticketKind: 'PARTICIPANT',
+    })
+    expect(harness.proveZkTls).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: 'next-session',
+        connectorId: 'next-connector',
+      }),
+    )
+  })
+
   it('resumes submitted session IDs after restart but replaces interrupted proving sessions', async () => {
     const session = await harness.storage.getSession()
     if (!session) throw new Error('missing session')
