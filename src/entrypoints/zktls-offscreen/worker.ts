@@ -74,12 +74,12 @@ type SocketIo = {
 }
 
 type Range = { start: number; end: number }
-type RevealRange = Range & {
-  handler: {
-    type: 'SENT' | 'RECV'
-    part: 'START_LINE' | 'BODY'
-    action: { kind: 'REVEAL' }
-  }
+type TranscriptRanges = { sent: Range[]; recv: Range[] }
+type TranscriptRevealer = {
+  reveal(
+    config: TranscriptRanges & { server_identity: true },
+    metadata: null,
+  ): Promise<unknown>
 }
 
 type ProofHttpRequest = {
@@ -415,29 +415,15 @@ function responseBody(received: Uint8Array): {
   throw new Error('bad response body')
 }
 
-export function revealConfig(
+export function transcriptRevealRanges(
   message: ProveMessage,
   sent: Uint8Array,
   received: Uint8Array,
-): { sent: RevealRange[]; recv: RevealRange[] } {
+): TranscriptRanges {
   if (isV4Message(message)) {
-    const complete = (type: 'SENT' | 'RECV', range: Range): RevealRange => ({
-      ...range,
-      handler: {
-        type,
-        part: 'START_LINE',
-        action: { kind: 'REVEAL' },
-      },
-    })
     return {
-      sent: v4RequestDisclosureRanges(
-        sent,
-        message.config,
-        message.captured,
-      ).map((range) => complete('SENT', range)),
-      recv: v4ResponseDisclosureRanges(received, message.config).map((range) =>
-        complete('RECV', range),
-      ),
+      sent: v4RequestDisclosureRanges(sent, message.config, message.captured),
+      recv: v4ResponseDisclosureRanges(received, message.config),
     }
   }
   if (
@@ -487,42 +473,37 @@ export function revealConfig(
         : htmlBetweenDisclosureRanges(message.config, response)
   }
   return {
-    sent: [
-      {
-        ...requestStartLineRange(sent, message.config.request.method, path),
-        handler: {
-          type: 'SENT',
-          part: 'START_LINE',
-          action: { kind: 'REVEAL' },
-        },
-      },
-    ],
+    sent: [requestStartLineRange(sent, message.config.request.method, path)],
     recv: [
-      {
-        ...responseStatusLineRange(received),
-        handler: {
-          type: 'RECV',
-          part: 'START_LINE',
-          action: { kind: 'REVEAL' },
-        },
-      },
+      responseStatusLineRange(received),
       {
         start: body.offset + disclosure.prefix.start,
         end: body.offset + disclosure.prefix.end,
-        handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
       {
         start: body.offset + disclosure.suffix.start,
         end: body.offset + disclosure.suffix.end,
-        handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
       {
         start: body.offset + disclosure.value.start,
         end: body.offset + disclosure.value.end,
-        handler: { type: 'RECV', part: 'BODY', action: { kind: 'REVEAL' } },
       },
     ],
   }
+}
+
+export async function revealTranscript(
+  prover: TranscriptRevealer,
+  ranges: TranscriptRanges,
+): Promise<void> {
+  await prover.reveal(
+    {
+      sent: ranges.sent,
+      recv: ranges.recv,
+      server_identity: true,
+    },
+    null,
+  )
 }
 
 function assertAvailable(message: ProveMessage): void {
@@ -640,22 +621,12 @@ async function prove(message: ProveMessage): Promise<void> {
     const received = new Uint8Array(transcript.recv)
     if (received.length > message.config.request.max_recv_data)
       throw new Error('response exceeded the signed receive limit')
-    const config = revealConfig(
+    const ranges = transcriptRevealRanges(
       message,
       new Uint8Array(transcript.sent),
       received,
     )
-    registration.socket.send(
-      JSON.stringify({ type: 'reveal_config', ...config }),
-    )
-    await prover.reveal(
-      {
-        sent: config.sent.map(({ start, end }) => ({ start, end })),
-        recv: config.recv.map(({ start, end }) => ({ start, end })),
-        server_identity: true,
-      },
-      null,
-    )
+    await revealTranscript(prover, ranges)
     await registration.completion
   } finally {
     registration.socket.close()

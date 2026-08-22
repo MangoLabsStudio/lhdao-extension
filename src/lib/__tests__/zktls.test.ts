@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
   proofHttpRequest,
-  revealConfig,
+  revealTranscript,
   sendProofHttpRequest,
   sessionRegistrationPayload,
+  transcriptRevealRanges,
   verifierUrls,
 } from '@/entrypoints/zktls-offscreen/worker'
 import { CaptureSession } from '@/lib/zktls/capture'
@@ -1437,7 +1438,7 @@ describe('zkTLS strict boundaries', () => {
     const received = new TextEncoder().encode(
       'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<span data-user="octocat"></span>',
     )
-    const config = revealConfig(message, sent, received)
+    const config = transcriptRevealRanges(message, sent, received)
     expect(config.sent).toMatchObject([
       { start: 0, end: 'GET /profile/octocat HTTP/1.1\r\n'.length },
     ])
@@ -1447,7 +1448,7 @@ describe('zkTLS strict boundaries', () => {
     })
     expect(config.recv).toHaveLength(4)
     expect(() =>
-      revealConfig({ ...message, config: connector }, sent, received),
+      transcriptRevealRanges({ ...message, config: connector }, sent, received),
     ).toThrow('JSON connectors are unsupported')
   })
 
@@ -1586,7 +1587,7 @@ describe('zkTLS strict boundaries', () => {
     expect([...request.headers.keys()]).toEqual(['host', 'connection'])
   })
 
-  test('routes V4 through complete half-open request and response ranges', () => {
+  test('passes only complete half-open V4 ranges to the prover', async () => {
     const config = validateConnector(v4Connector())
     if (config.interpreter_version !== 4) throw new Error('wrong connector')
     const captured = {
@@ -1626,12 +1627,22 @@ describe('zkTLS strict boundaries', () => {
         responseBody,
     )
 
-    const reveal = revealConfig(message, sent, received)
+    const reveal = transcriptRevealRanges(message, sent, received)
 
-    expect(reveal.sent).toMatchObject([{ start: 0, end: sent.length }])
-    expect(reveal.recv).toMatchObject([{ start: 0, end: received.length }])
-    expect(reveal.sent).toHaveLength(1)
-    expect(reveal.recv).toHaveLength(1)
+    expect(reveal).toEqual({
+      sent: [{ start: 0, end: sent.length }],
+      recv: [{ start: 0, end: received.length }],
+    })
+    const prover = { reveal: vi.fn().mockResolvedValue(undefined) }
+    await revealTranscript(prover, reveal)
+    expect(prover.reveal).toHaveBeenCalledWith(
+      {
+        sent: [{ start: 0, end: sent.length }],
+        recv: [{ start: 0, end: received.length }],
+        server_identity: true,
+      },
+      null,
+    )
   })
 
   test('reveals a unique JSON regex scalar but keeps JSONPath disabled', async () => {
@@ -1702,7 +1713,7 @@ describe('zkTLS strict boundaries', () => {
     const received = new TextEncoder().encode(
       'HTTP/1.1 200 OK\r\nX-Private: "volume":9999\r\nContent-Type: application/json\r\n\r\n{"volume":7200}',
     )
-    const reveal = revealConfig(message, sent, received)
+    const reveal = transcriptRevealRanges(message, sent, received)
     const bodyStart = new TextDecoder().decode(received).indexOf('{')
     expect(
       reveal.recv.slice(1).every((range) => range.start >= bodyStart),
@@ -1724,7 +1735,7 @@ describe('zkTLS strict boundaries', () => {
     }
     const body = new TextEncoder().encode('{"volume":7200}')
     expect(() =>
-      revealConfig(
+      transcriptRevealRanges(
         message,
         sent,
         encodedResponse(
@@ -1734,35 +1745,35 @@ describe('zkTLS strict boundaries', () => {
       ),
     ).not.toThrow()
     expect(() =>
-      revealConfig(
+      transcriptRevealRanges(
         message,
         sent,
         encodedResponse(`Content-Length: ${body.length + 1}`, body),
       ),
     ).toThrow('content length')
     expect(() =>
-      revealConfig(
+      transcriptRevealRanges(
         message,
         sent,
         encodedResponse('Transfer-Encoding: chunked', body),
       ),
     ).toThrow('transfer encoding')
     expect(() =>
-      revealConfig(
+      transcriptRevealRanges(
         message,
         sent,
         encodedResponse('Content-Encoding: gzip', body),
       ),
     ).toThrow('content encoding')
     expect(() =>
-      revealConfig(
+      transcriptRevealRanges(
         message,
         sent,
         encodedResponse('', new Uint8Array([0xef, 0xbb, 0xbf, ...body])),
       ),
     ).toThrow('BOM')
     expect(() =>
-      revealConfig(
+      transcriptRevealRanges(
         message,
         sent,
         encodedResponse('', new Uint8Array([0xff, ...body])),
@@ -1779,7 +1790,7 @@ describe('zkTLS strict boundaries', () => {
       },
     }
     expect(() =>
-      revealConfig({ ...message, config: jsonPath }, sent, received),
+      transcriptRevealRanges({ ...message, config: jsonPath }, sent, received),
     ).toThrow('JSON connectors are unsupported')
   })
 })
