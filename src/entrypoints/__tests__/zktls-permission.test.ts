@@ -81,4 +81,25 @@ describe('zkTLS permission page', () => {
       true,
     )
   })
+
+  test.each([
+    'https://*',
+    'https://*.example.com',
+    'https://%2A.example.com',
+  ])('rejects the wildcard preview origin %s', async (origin) => {
+    vi.spyOn(chrome.runtime, 'sendMessage').mockResolvedValue({
+      origins: [origin],
+      connectorId: 'product-volume',
+    })
+    const request = vi.spyOn(chrome.permissions, 'request')
+
+    await import('@/entrypoints/zktls-permission/main')
+    await vi.waitFor(() =>
+      expect(document.querySelector('#status')?.textContent).toBe(
+        'Permission request has expired.',
+      ),
+    )
+    expect(document.querySelector('#origin')?.textContent).toBe('')
+    expect(request).not.toHaveBeenCalled()
+  })
 })

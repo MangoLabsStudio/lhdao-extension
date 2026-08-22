@@ -69,6 +69,7 @@ type Permission = {
   requestId: string
   origins: readonly [string] | readonly [string, string]
   connectorId: string
+  settled: boolean
   resolve: (ok: boolean) => void
   timer: ReturnType<typeof setTimeout>
 }
@@ -118,7 +119,8 @@ function permissionOrigins(
       url.origin !== origin ||
       url.pathname !== '/' ||
       url.search ||
-      url.hash
+      url.hash ||
+      url.hostname.includes('*')
     )
       throw new Error('permission requires one or two exact HTTPS origins')
   }
@@ -247,9 +249,12 @@ export async function ensurePermissions(
       requestId,
       origins: normalized,
       connectorId,
+      settled: false,
       resolve: (ok) => {
+        if (pending.settled) return
+        pending.settled = true
         clearTimeout(pending.timer)
-        permission = null
+        if (permission === pending) permission = null
         ok ? resolve() : reject(new ZkTlsPermissionDeniedError())
       },
       timer: setTimeout(() => pending.resolve(false), 30_000),
@@ -837,10 +842,16 @@ export function registerZkTlsRuntime(): void {
       const granted = raw.granted
       return chrome.permissions
         .contains({ origins: permissionPatterns(pending.origins) })
-        .then((contained) => {
-          pending.resolve(granted && contained)
-          return null
-        })
+        .then(
+          (contained) => {
+            pending.resolve(granted && contained)
+            return null
+          },
+          () => {
+            pending.resolve(false)
+            return null
+          },
+        )
     }
   })
 }

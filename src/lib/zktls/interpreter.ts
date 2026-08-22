@@ -1143,6 +1143,7 @@ function v4Origin(
     url.search ||
     url.hash ||
     url.origin !== result ||
+    url.hostname.includes('*') ||
     (requirePublic && !v4PublicHostname(url.hostname))
   )
     fail(`${name} must be an exact HTTPS origin.`)

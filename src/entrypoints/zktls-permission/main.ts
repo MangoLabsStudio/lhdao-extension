@@ -43,7 +43,8 @@ function parsePreview(value: unknown): Preview | null {
         url.origin !== origin ||
         url.pathname !== '/' ||
         url.search ||
-        url.hash
+        url.hash ||
+        url.hostname.includes('*')
       )
         return null
     } catch {

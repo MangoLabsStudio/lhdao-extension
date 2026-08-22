@@ -1662,6 +1662,33 @@ describe('zkTLS V4 page and target permissions', () => {
     expect(contains).toHaveBeenCalledWith({ origins: [pattern] })
   })
 
+  test.each([
+    'https://*',
+    'https://*.example.com',
+    'https://%2A.example.com',
+  ])('rejects the wildcard permission origin %s', async (origin) => {
+    const contains = vi.spyOn(chrome.permissions, 'contains')
+    await expect(ensurePermissions([origin], 'product-volume')).rejects.toThrow(
+      'exact HTTPS origins',
+    )
+    expect(contains).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    'page_origin',
+    'origin',
+  ] as const)('rejects wildcard V4 %s values before runtime', (field) => {
+    for (const origin of [
+      'https://*',
+      'https://*.example.com',
+      'https://%2A.example.com',
+    ]) {
+      const config = cloneV4()
+      config[field] = origin
+      expect(() => validateConnector(config)).toThrow('exact HTTPS origin')
+    }
+  })
+
   test('selects only a tab at the signed page origin', async () => {
     const query = vi
       .spyOn(chrome.tabs, 'query')
@@ -1842,6 +1869,162 @@ describe('zkTLS V4 page and target permissions', () => {
       sender,
     )
     await expect(pending).rejects.toThrow()
+  })
+
+  test('old permission callbacks cannot settle or clear a newer request', async () => {
+    vi.useFakeTimers()
+    try {
+      Object.defineProperty(chrome.runtime, 'id', {
+        value: 'extension',
+        configurable: true,
+      })
+      let permissionCheck = 0
+      const deferred = new Map<number, (allowed: boolean) => void>()
+      vi.spyOn(chrome.permissions, 'contains').mockImplementation((async () => {
+        permissionCheck += 1
+        if ([1, 3, 6].includes(permissionCheck)) return false
+        if (permissionCheck === 7) return true
+        if (permissionCheck === 4)
+          throw new Error('permission state unavailable')
+        return await new Promise<boolean>((resolve) => {
+          deferred.set(permissionCheck, resolve)
+        })
+      }) as never)
+      const create = vi
+        .spyOn(chrome.tabs, 'create')
+        .mockImplementation((async () => ({ id: 9 })) as never)
+      let messageListener:
+        | ((message: unknown, sender: chrome.runtime.MessageSender) => unknown)
+        | undefined
+      vi.spyOn(chrome.runtime.onMessage, 'addListener').mockImplementation(
+        (listener) => {
+          messageListener = listener as typeof messageListener
+        },
+      )
+      vi.spyOn(chrome.tabs.onUpdated, 'addListener').mockImplementation(
+        (() => undefined) as never,
+      )
+      for (const event of [
+        chrome.webRequest.onBeforeRequest,
+        chrome.webRequest.onBeforeSendHeaders,
+        chrome.webRequest.onBeforeRedirect,
+        chrome.webRequest.onErrorOccurred,
+        chrome.webRequest.onCompleted,
+      ])
+        vi.spyOn(event, 'addListener').mockImplementation(
+          (() => undefined) as never,
+        )
+      registerZkTlsRuntime()
+      const flush = async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      }
+      const pageSender = (call: number) => {
+        const page = new URL(
+          (create.mock.calls[call]?.[0] as { url: string }).url,
+        )
+        return {
+          requestId: page.searchParams.get('request_id')!,
+          sender: { id: 'extension', url: page.href },
+        }
+      }
+
+      const first = ensurePermissions(
+        ['https://app.example.com'],
+        'product-volume',
+      )
+      const firstOutcome = first.then(
+        () => 'resolved',
+        () => 'rejected',
+      )
+      await flush()
+      expect(create).toHaveBeenCalledTimes(1)
+      const p1 = pageSender(0)
+      const lateFirstResult = messageListener?.(
+        {
+          type: 'zktls-permission-result',
+          requestId: p1.requestId,
+          granted: true,
+        },
+        p1.sender,
+      ) as Promise<unknown>
+      await flush()
+      expect(deferred.has(2)).toBe(true)
+      await vi.advanceTimersByTimeAsync(30_000)
+      await expect(firstOutcome).resolves.toBe('rejected')
+
+      const second = ensurePermissions(
+        ['https://app.example.com'],
+        'product-volume',
+      )
+      const secondOutcome = second.then(
+        () => 'resolved',
+        () => 'rejected',
+      )
+      await flush()
+      expect(create).toHaveBeenCalledTimes(2)
+      const p2 = pageSender(1)
+      deferred.get(2)?.(true)
+      await lateFirstResult
+      expect(
+        messageListener?.(
+          { type: 'zktls-permission-preview', requestId: p2.requestId },
+          p2.sender,
+        ),
+      ).toMatchObject({ connectorId: 'product-volume' })
+
+      const firstDuplicate = messageListener?.(
+        {
+          type: 'zktls-permission-result',
+          requestId: p2.requestId,
+          granted: false,
+        },
+        p2.sender,
+      ) as Promise<unknown>
+      const secondDuplicate = messageListener?.(
+        {
+          type: 'zktls-permission-result',
+          requestId: p2.requestId,
+          granted: false,
+        },
+        p2.sender,
+      ) as Promise<unknown>
+      await flush()
+      await firstDuplicate
+      await expect(secondOutcome).resolves.toBe('rejected')
+
+      const third = ensurePermissions(
+        ['https://app.example.com'],
+        'product-volume',
+      )
+      const thirdOutcome = third.then(
+        () => 'resolved',
+        () => 'rejected',
+      )
+      await flush()
+      expect(create).toHaveBeenCalledTimes(3)
+      const p3 = pageSender(2)
+      deferred.get(5)?.(true)
+      await secondDuplicate
+      expect(
+        messageListener?.(
+          { type: 'zktls-permission-preview', requestId: p3.requestId },
+          p3.sender,
+        ),
+      ).toMatchObject({ connectorId: 'product-volume' })
+
+      await messageListener?.(
+        {
+          type: 'zktls-permission-result',
+          requestId: p3.requestId,
+          granted: false,
+        },
+        p3.sender,
+      )
+      await expect(thirdOutcome).resolves.toBe('rejected')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test('requests both V4 origins and opens only the page origin when login is needed', async () => {
