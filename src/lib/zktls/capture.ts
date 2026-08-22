@@ -3,6 +3,7 @@ import type {
   V4TemplateValue,
   V4VariableDeclaration,
 } from './interpreter'
+import { v4PublicRequestDetails } from './v4-disclosure'
 import { matchV4Body, matchV4Value } from './v4-template'
 
 export const SECRET_HEADERS = [
@@ -32,6 +33,7 @@ export const BODY_CONTENT_TYPES = [
 ] as const
 export type BodyContentType = (typeof BODY_CONTENT_TYPES)[number]
 const MAX_CAPTURED_BODY_BYTES = 8192
+const MAX_V4_SENT_DATA = 8192
 const MAX_REDIRECTED_REQUESTS = 64
 const V4_PUBLIC_HEADER_NAMES = new Set([
   'content-type',
@@ -118,6 +120,7 @@ export type LegacyCaptureBinding = {
 
 export type V4CaptureBinding = {
   interpreterVersion: 4
+  maxSentData: 8192
   tabId: number
   frameId: number
   sessionId: string
@@ -416,6 +419,7 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
       !pageOrigin.startsWith('https://') ||
       !targetOrigin.startsWith('https://') ||
       matcher.path.kind !== 'exact' ||
+      input.maxSentData !== MAX_V4_SENT_DATA ||
       validateRequestMatcher({
         path: matcher.path,
         query: { required: {}, optional: {}, capture: {} },
@@ -871,10 +875,22 @@ export class CaptureSession {
       if (Object.keys(matched.capturedVariables ?? {}).length !== expected)
         fail('captured request variables were incomplete')
     }
-    this.#captured = {
+    const complete = {
       ...matched,
       secrets,
     }
+    if (
+      v4 &&
+      v4PublicRequestDetails({
+        origin: binding.targetOrigin,
+        method: binding.method,
+        path: complete.path,
+        body: complete.body,
+        contentType: complete.content_type,
+      }).sentByteLength > binding.maxSentData
+    )
+      fail('captured request exceeds the signed sent limit')
+    this.#captured = complete
   }
 
   observeBody(details: RequestBodyDetails): void {

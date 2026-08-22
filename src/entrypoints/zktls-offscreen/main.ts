@@ -97,6 +97,13 @@ chrome.runtime.onMessage.addListener((message) => {
   )
     return
   const proofMessage = message as Record<string, unknown>
+  if (pending.size > 0) {
+    clearProofMessage(proofMessage)
+    return Promise.resolve<Result>({
+      status: 'error',
+      code: 'PROVER_BUSY',
+    })
+  }
   const id = crypto.randomUUID()
   return new Promise<Result>((resolve) => {
     let generation: Generation

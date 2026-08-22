@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest'
 import type { CapturedRequest } from '../zktls/capture'
 import type { V4Connector } from '../zktls/interpreter'
-import { v4RequestDisclosureRanges } from '../zktls/v4-disclosure'
+import {
+  v4PublicRequestDetails,
+  v4RequestDisclosureRanges,
+} from '../zktls/v4-disclosure'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -107,6 +110,48 @@ function disclosed(
 }
 
 describe('complete V4 public request disclosure', () => {
+  test.each([
+    {
+      origin: 'https://api.example.com:8443',
+      method: 'GET' as const,
+      path: '/v1/%E8%B7%AF%E5%BE%84?account=%E8%B4%A6%E6%88%B7',
+    },
+    {
+      origin: 'https://[2001:4860:4860::8888]:8443',
+      method: 'POST' as const,
+      path: '/v1/query?note=%F0%9F%9A%80',
+      body: '{"note":"火箭🚀"}',
+      contentType: 'application/json' as const,
+    },
+  ])('measures the exact replay bytes for $origin $method', ({
+    origin,
+    method,
+    path,
+    body,
+    contentType,
+  }) => {
+    const details = v4PublicRequestDetails({
+      origin,
+      method,
+      path,
+      ...(body ? { body, contentType } : {}),
+    })
+    const bodyBytes = body ? encoder.encode(body) : new Uint8Array()
+    const expected = encoder.encode(
+      `${method} ${path} HTTP/1.1\r\n` +
+        `host: ${new URL(origin).host}\r\n` +
+        'connection: close\r\n' +
+        (method === 'POST'
+          ? `content-type: application/json\r\ncontent-length: ${bodyBytes.length}\r\n`
+          : '') +
+        '\r\n',
+    ).length
+
+    expect(details.sentByteLength).toBe(expected + bodyBytes.length)
+    expect(details.host).toBe(new URL(origin).host)
+    expect(details.body).toEqual(bodyBytes.length ? bodyBytes : undefined)
+  })
+
   test('reveals the complete immutable POST capture in one range', () => {
     const sent = request()
     const ranges = v4RequestDisclosureRanges(sent, connector(), capture())

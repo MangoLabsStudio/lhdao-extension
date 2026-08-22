@@ -8,6 +8,20 @@ const DECIMAL = /^(?:0|[1-9][0-9]*)$/
 const decoder = new TextDecoder('utf-8', { fatal: true })
 const encoder = new TextEncoder()
 
+type V4PublicRequestInput = Readonly<{
+  origin: string
+  method: 'GET' | 'POST'
+  path: string
+  body?: string
+  contentType?: string
+}>
+
+export type V4PublicRequestDetails = Readonly<{
+  host: string
+  body: Uint8Array | undefined
+  sentByteLength: number
+}>
+
 function fail(): never {
   throw new Error('request did not match the signed V4 connector')
 }
@@ -44,11 +58,45 @@ function expectedAuthorities(origin: string): ReadonlySet<string> {
     : new Set([`${hostname}:${url.port}`])
 }
 
+export function v4PublicRequestDetails(
+  input: V4PublicRequestInput,
+): V4PublicRequestDetails {
+  if (
+    (input.method === 'POST' &&
+      (input.body === undefined || input.contentType !== 'application/json')) ||
+    (input.method === 'GET' &&
+      (input.body !== undefined || input.contentType !== undefined))
+  )
+    return fail()
+  const host = new URL(input.origin).host
+  const body = input.method === 'POST' ? encoder.encode(input.body!) : undefined
+  const head =
+    `${input.method} ${input.path} HTTP/1.1\r\n` +
+    `host: ${host}\r\n` +
+    'connection: close\r\n' +
+    (body
+      ? `content-type: application/json\r\ncontent-length: ${body.length}\r\n`
+      : '') +
+    '\r\n'
+  return {
+    host,
+    body,
+    sentByteLength: encoder.encode(head).length + (body?.length ?? 0),
+  }
+}
+
 export function v4RequestDisclosureRanges(
   sent: Uint8Array,
   connector: V4Connector,
   captured: CapturedRequest,
 ): DisclosureRange[] {
+  const replay = v4PublicRequestDetails({
+    origin: connector.origin,
+    method: connector.request.method,
+    path: captured.path,
+    body: captured.body,
+    contentType: captured.content_type,
+  })
   if (
     !(sent instanceof Uint8Array) ||
     sent.length === 0 ||
@@ -100,7 +148,8 @@ export function v4RequestDisclosureRanges(
     headers.get('connection') !== 'close' ||
     !expectedAuthorities(connector.origin).has(
       headers.get('host')!.toLowerCase(),
-    )
+    ) ||
+    replay.sentByteLength > connector.request.max_sent_data
   )
     return fail()
 
@@ -119,7 +168,7 @@ export function v4RequestDisclosureRanges(
     const length = headers.get('content-length')!
     if (!DECIMAL.test(length) || Number(length) !== actualBody.length)
       return fail()
-    if (!equal(actualBody, encoder.encode(captured.body))) return fail()
+    if (!equal(actualBody, replay.body!)) return fail()
   }
 
   // Decoding the whole transcript above ensures there are no opaque bytes.

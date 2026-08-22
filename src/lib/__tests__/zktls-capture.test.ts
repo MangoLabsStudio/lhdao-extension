@@ -12,6 +12,7 @@ import {
   validateConnector,
 } from '@/lib/zktls/interpreter'
 import { activateCaptureTab } from '@/lib/zktls/runtime'
+import { v4PublicRequestDetails } from '@/lib/zktls/v4-disclosure'
 
 const provider = {
   interpreter_version: 2,
@@ -234,6 +235,7 @@ function v4Session(): CaptureSession {
   return new CaptureSession(
     createCaptureBinding({
       interpreterVersion: 4,
+      maxSentData: 8192,
       tabId: 7,
       frameId: 0,
       sessionId: 'session-v4',
@@ -731,6 +733,114 @@ describe('zkTLS v4 capture', () => {
     })
   }
 
+  function jsonBodyOfSize(size: number): string {
+    const encoder = new TextEncoder()
+    for (let count = 1; count <= 16; count += 1) {
+      const values = Array.from({ length: count }, () => '')
+      const empty = JSON.stringify({ padding: values })
+      let remaining = size - encoder.encode(empty).length
+      if (remaining < 0 || remaining > count * 1024) continue
+      for (let index = 0; index < values.length; index += 1) {
+        const length = Math.min(remaining, 1024)
+        values[index] = 'x'.repeat(length)
+        remaining -= length
+      }
+      const result = JSON.stringify({ padding: values })
+      if (encoder.encode(result).length === size) return result
+    }
+    throw new Error(`cannot create ${size} JSON bytes`)
+  }
+
+  function sizedV4Session(): CaptureSession {
+    return new CaptureSession(
+      createCaptureBinding({
+        interpreterVersion: 4,
+        maxSentData: 8192,
+        tabId: 7,
+        frameId: 0,
+        sessionId: 'sized-v4',
+        providerId: 'sized-v4',
+        revision: 1,
+        pageOrigin: 'https://app.example.com',
+        targetOrigin: 'https://api.example.com',
+        method: 'POST',
+        matcher: {
+          path: { kind: 'exact', value: '/v1/size' },
+          query: { required: {}, optional: {}, capture: {} },
+          resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
+        },
+        template: {
+          $object: { mode: 'ALLOW_EXTRA', fields: {} },
+        },
+        contentType: 'application/json',
+        variables: [],
+        resolvedVariables: {},
+      }),
+    )
+  }
+
+  function observeSized(capture: CaptureSession, body: string): void {
+    const details = {
+      requestId: 'sized',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://api.example.com/v1/size',
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+    }
+    capture.observeBody({
+      ...details,
+      requestBody: {
+        raw: [{ bytes: new TextEncoder().encode(body).buffer }],
+      },
+    })
+    capture.observe({
+      ...details,
+      requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+    })
+  }
+
+  test('rejects an 8,184-byte body whose complete replay exceeds 8 KiB', () => {
+    const body = jsonBodyOfSize(8184)
+    expect(new TextEncoder().encode(body)).toHaveLength(8184)
+
+    expect(() => observeSized(sizedV4Session(), body)).toThrow('sent limit')
+  })
+
+  test('accepts the largest body whose complete replay is exactly 8 KiB', () => {
+    let bodySize = 0
+    for (let size = 1; size <= 8192; size += 1) {
+      if (
+        v4PublicRequestDetails({
+          origin: 'https://api.example.com',
+          method: 'POST',
+          path: '/v1/size',
+          body: 'x'.repeat(size),
+          contentType: 'application/json',
+        }).sentByteLength === 8192
+      ) {
+        bodySize = size
+        break
+      }
+    }
+    const body = jsonBodyOfSize(bodySize)
+    const capture = sizedV4Session()
+
+    observeSized(capture, body)
+
+    expect(
+      v4PublicRequestDetails({
+        origin: 'https://api.example.com',
+        method: 'POST',
+        path: '/v1/size',
+        body,
+        contentType: 'application/json',
+      }).sentByteLength,
+    ).toBe(8192)
+    expect(capture.take()).toMatchObject({ body })
+  })
+
   function redirectDetails(requestId: string) {
     return {
       requestId,
@@ -917,6 +1027,7 @@ describe('zkTLS v4 capture', () => {
   test('allows a same-origin V4 page and public target', () => {
     const binding = createCaptureBinding({
       interpreterVersion: 4,
+      maxSentData: 8192,
       tabId: 7,
       frameId: 0,
       sessionId: 'same-origin',
@@ -953,6 +1064,7 @@ describe('zkTLS v4 capture', () => {
   ])('rejects a V4 GET when requestHeaders is %s', (requestHeaders) => {
     const binding = createCaptureBinding({
       interpreterVersion: 4,
+      maxSentData: 8192,
       tabId: 7,
       frameId: 0,
       sessionId: 'missing-get-headers',
@@ -1205,6 +1317,7 @@ describe('zkTLS v4 capture', () => {
     expect(() =>
       createCaptureBinding({
         interpreterVersion: 4,
+        maxSentData: 8192,
         tabId: 7,
         frameId: 0,
         sessionId: 'form-rejected',
@@ -1364,6 +1477,7 @@ describe('zkTLS v4 capture', () => {
     const get = new CaptureSession(
       createCaptureBinding({
         interpreterVersion: 4,
+        maxSentData: 8192,
         tabId: 7,
         frameId: 0,
         sessionId: 'get-v4',
@@ -1413,6 +1527,7 @@ describe('zkTLS v4 capture', () => {
     const capture = new CaptureSession(
       createCaptureBinding({
         interpreterVersion: 4,
+        maxSentData: 8192,
         tabId: 7,
         frameId: 0,
         sessionId: 'get-query-v4',
@@ -1470,6 +1585,7 @@ describe('zkTLS v4 capture', () => {
     const capture = new CaptureSession(
       createCaptureBinding({
         interpreterVersion: 4,
+        maxSentData: 8192,
         tabId: 7,
         frameId: 0,
         sessionId: `query-${name}`,

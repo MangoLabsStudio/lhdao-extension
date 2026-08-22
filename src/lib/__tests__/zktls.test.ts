@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
   proofHttpRequest,
   revealConfig,
+  sendProofHttpRequest,
   sessionRegistrationPayload,
   verifierUrls,
 } from '@/entrypoints/zktls-offscreen/worker'
@@ -1475,6 +1476,39 @@ describe('zkTLS strict boundaries', () => {
     expect(payload).not.toContain('"captured"')
   })
 
+  test('zeroes V1 secret header bytes after a hanging send rejects', async () => {
+    const message = {
+      id: 'secret-job',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: 'github-login',
+      config: htmlConnector,
+      ticket,
+      configEnvelope,
+      ticketEnvelope,
+      identity: 'octocat',
+      cookie: 'session=secret',
+    }
+    let rejectSend: ((error: Error) => void) | undefined
+    let secretBytes: number[] | undefined
+    const sending = sendProofHttpRequest(message, async (request) => {
+      secretBytes = request.headers.get('cookie')
+      await new Promise<void>((_resolve, reject) => {
+        rejectSend = reject
+      })
+    })
+
+    await vi.waitFor(() => expect(secretBytes).toBeDefined())
+    expect(new TextDecoder().decode(new Uint8Array(secretBytes!))).toBe(
+      'session=secret',
+    )
+    expect(message.cookie).toBe('')
+
+    rejectSend?.(new Error('send failed'))
+    await expect(sending).rejects.toThrow('send failed')
+    expect(secretBytes).toEqual(new Array(secretBytes!.length).fill(0))
+  })
+
   test('replays an immutable V4 capture with only complete public headers', () => {
     const config = validateConnector(v4Connector())
     if (config.interpreter_version !== 4) throw new Error('wrong connector')
@@ -1552,7 +1586,7 @@ describe('zkTLS strict boundaries', () => {
     expect([...request.headers.keys()]).toEqual(['host', 'connection'])
   })
 
-  test('reveals a unique JSON regex scalar but keeps JSONPath disabled', () => {
+  test('reveals a unique JSON regex scalar but keeps JSONPath disabled', async () => {
     const config = validateConnector({
       interpreter_version: 3,
       connector_id: 'product-volume',
@@ -1611,6 +1645,12 @@ describe('zkTLS strict boundaries', () => {
       'accept',
       'cookie',
     ])
+    let secretBytes: number[] | undefined
+    await sendProofHttpRequest(message, async (request) => {
+      secretBytes = request.headers.get('cookie')
+    })
+    expect(message.captured.secrets.cookie).toBe('')
+    expect(secretBytes).toEqual(new Array(secretBytes!.length).fill(0))
     const received = new TextEncoder().encode(
       'HTTP/1.1 200 OK\r\nX-Private: "volume":9999\r\nContent-Type: application/json\r\n\r\n{"volume":7200}',
     )

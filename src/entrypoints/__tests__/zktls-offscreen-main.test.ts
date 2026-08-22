@@ -124,6 +124,40 @@ describe('zkTLS offscreen worker lifecycle', () => {
     expect(newWorker.terminate).not.toHaveBeenCalled()
   })
 
+  test('rejects a concurrent proof before posting and clears its secrets', async () => {
+    const first = runtimeListener(proofMessage())
+    const worker = FakeWorker.instances[0]!
+    const busyMessage = proofMessage()
+    const busyCapture = busyMessage.captured as {
+      path: string
+      body: string
+      secrets: Record<string, string>
+    }
+
+    await expect(runtimeListener(busyMessage)).resolves.toEqual({
+      status: 'error',
+      code: 'PROVER_BUSY',
+    })
+    expect(worker.posts).toHaveLength(1)
+    expect(busyMessage.cookie).toBe('')
+    expect(busyMessage.captured).toBeUndefined()
+    expect(busyCapture).toMatchObject({ path: '', body: '', secrets: {} })
+
+    worker.emit('message', {
+      id: worker.posts[0]!.id,
+      result: { status: 'submitted' },
+    })
+    await first
+
+    const next = runtimeListener(proofMessage())
+    expect(worker.posts).toHaveLength(2)
+    worker.emit('message', {
+      id: worker.posts[1]!.id,
+      result: { status: 'submitted' },
+    })
+    await expect(next).resolves.toEqual({ status: 'submitted' })
+  })
+
   test('ignores a late old-generation result even when request IDs repeat', async () => {
     const repeatedId = '00000000-0000-4000-8000-000000000000'
     const uuid = vi.spyOn(crypto, 'randomUUID').mockReturnValue(repeatedId)

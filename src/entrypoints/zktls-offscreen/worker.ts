@@ -24,7 +24,10 @@ import {
   type Ticket,
   type TicketEnvelope,
 } from '@/lib/zktls/signed-config'
-import { v4RequestDisclosureRanges } from '@/lib/zktls/v4-disclosure'
+import {
+  v4PublicRequestDetails,
+  v4RequestDisclosureRanges,
+} from '@/lib/zktls/v4-disclosure'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -89,29 +92,27 @@ function header(value: string): number[] {
   return Array.from(encoder.encode(value))
 }
 
-export function proofHttpRequest(message: ProveMessage): ProofHttpRequest {
+export function proofHttpRequest(
+  message: ProveMessage,
+  secretBuffers: number[][] = [],
+): ProofHttpRequest {
   const origin = new URL(message.config.origin)
   if (isV4Message(message)) {
-    const body =
-      message.config.request.method === 'POST'
-        ? message.captured.body
-        : undefined
-    if (
-      (message.config.request.method === 'POST' &&
-        (!body ||
-          message.captured.content_type !== 'application/json' ||
-          message.config.request.content_type !== 'application/json')) ||
-      (message.config.request.method === 'GET' &&
-        (message.captured.body !== undefined ||
-          message.captured.content_type !== undefined))
-    )
+    const replay = v4PublicRequestDetails({
+      origin: message.config.origin,
+      method: message.config.request.method,
+      path: message.captured.path,
+      body: message.captured.body,
+      contentType: message.captured.content_type,
+    })
+    if (replay.sentByteLength > message.config.request.max_sent_data)
       throw new Error('captured request did not match the signed provider')
-    const encodedBody = body ? header(body) : undefined
+    const encodedBody = replay.body ? Array.from(replay.body) : undefined
     return {
       uri: message.captured.path,
       method: message.config.request.method,
       headers: new Map([
-        ['host', header(origin.host)],
+        ['host', header(replay.host)],
         ['connection', header('close')],
         ...(encodedBody
           ? [
@@ -160,11 +161,30 @@ export function proofHttpRequest(message: ProveMessage): ProofHttpRequest {
       ...Object.entries(message.config.request.headers).map(
         ([key, value]) => [key, header(value)] as [string, number[]],
       ),
-      ...Object.entries(secrets).map(
-        ([key, value]) => [key, header(value)] as [string, number[]],
-      ),
+      ...Object.entries(secrets).map(([key, value]) => {
+        const bytes = header(value)
+        secretBuffers.push(bytes)
+        return [key, bytes] as [string, number[]]
+      }),
     ]),
     body: body ? header(body) : undefined,
+  }
+}
+
+export async function sendProofHttpRequest<T>(
+  message: ProveMessage,
+  send: (request: ProofHttpRequest) => Promise<T>,
+): Promise<T> {
+  const secretBuffers: number[][] = []
+  try {
+    const request = proofHttpRequest(message, secretBuffers)
+    if (isV1Message(message)) message.cookie = ''
+    else clearSecrets(message.captured.secrets)
+    return await send(request)
+  } finally {
+    if (isV1Message(message)) message.cookie = ''
+    else clearSecrets(message.captured.secrets)
+    for (const bytes of secretBuffers) bytes.fill(0)
   }
 }
 
@@ -578,7 +598,6 @@ async function prove(message: ProveMessage): Promise<void> {
   assertAvailable(message)
   if (isV4Message(message)) assertV4CapturedRequest(message)
   else if (!isV1Message(message)) assertCapturedRequest(message)
-  const request = proofHttpRequest(message)
   const registration = await registerSession(message)
   const prover = new wasm.Prover({
     server_name: origin.hostname,
@@ -596,17 +615,10 @@ async function prove(message: ProveMessage): Promise<void> {
   try {
     await prover.setup(await websocketIo(registration.verifierUrl))
     assertAvailable(message)
-    const secrets = isV1Message(message)
-      ? { cookie: message.cookie }
-      : message.captured.secrets
-    try {
-      await prover.send_request(
-        await websocketIo(registration.proxyUrl),
-        request,
-      )
-    } finally {
-      clearSecrets(secrets)
-    }
+    const proxyIo = await websocketIo(registration.proxyUrl)
+    await sendProofHttpRequest(message, (request) =>
+      prover.send_request(proxyIo, request),
+    )
     const transcript = prover.transcript()
     const received = new Uint8Array(transcript.recv)
     if (received.length >= message.config.request.max_recv_data)

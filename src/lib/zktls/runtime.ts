@@ -411,6 +411,7 @@ async function proveCapturedRequest(
       config.interpreter_version === 4
         ? createCaptureBinding({
             interpreterVersion: 4,
+            maxSentData: config.request.max_sent_data,
             tabId: tab.id,
             frameId: 0,
             sessionId: request.sessionId,
