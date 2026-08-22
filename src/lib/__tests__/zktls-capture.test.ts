@@ -874,6 +874,32 @@ describe('zkTLS v4 capture', () => {
     ).toThrow('initiator')
   })
 
+  test('rejects ALLOW_EXTRA in a direct V4 capture binding', () => {
+    expect(() =>
+      createCaptureBinding({
+        interpreterVersion: 4,
+        maxSentData: 8192,
+        tabId: 7,
+        frameId: 0,
+        sessionId: 'allow-extra',
+        providerId: 'allow-extra',
+        revision: 1,
+        pageOrigin: 'https://app.example.com',
+        targetOrigin: 'https://api.example.com',
+        method: 'POST',
+        matcher: {
+          path: { kind: 'exact', value: '/v1/query' },
+          query: { required: {}, optional: {}, capture: {} },
+          resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
+        },
+        template: { $object: { mode: 'ALLOW_EXTRA', fields: {} } },
+        contentType: 'application/json',
+        variables: [],
+        resolvedVariables: {},
+      }),
+    ).toThrow('capture matcher is invalid')
+  })
+
   test('rejects a main-frame target without the exact page initiator', () => {
     const capture = v4Session()
     expect(() =>

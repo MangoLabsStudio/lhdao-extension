@@ -377,6 +377,21 @@ function isV4Binding(binding: CaptureBinding): binding is V4CaptureBinding {
   return 'interpreterVersion' in binding && binding.interpreterVersion === 4
 }
 
+function exactV4RequestTemplate(value: unknown): boolean {
+  const pending = [value]
+  const seen = new Set<object>()
+  while (pending.length) {
+    const current = pending.pop()
+    if (!current || typeof current !== 'object') continue
+    if (seen.has(current)) return false
+    seen.add(current)
+    if (!Array.isArray(current) && Object.hasOwn(current, '$object'))
+      return false
+    pending.push(...Object.values(current))
+  }
+  return true
+}
+
 function v4PublicHeader(name: string): boolean {
   return V4_PUBLIC_HEADER_NAMES.has(name.toLowerCase())
 }
@@ -422,6 +437,10 @@ export function createCaptureBinding(input: CaptureBinding): CaptureBinding {
       !targetOrigin.startsWith('https://') ||
       pageUrl.port ||
       targetUrl.port ||
+      !exactV4RequestTemplate(input.template) ||
+      Object.values(matcher.query.required).some(
+        (value) => !exactV4RequestTemplate(value),
+      ) ||
       matcher.path.kind !== 'exact' ||
       input.maxSentData !== MAX_V4_SENT_DATA ||
       validateRequestMatcher({
