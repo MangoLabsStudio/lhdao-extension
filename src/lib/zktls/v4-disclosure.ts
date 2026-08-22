@@ -5,6 +5,13 @@ export type DisclosureRange = Readonly<{ start: number; end: number }>
 
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/
 const DECIMAL = /^(?:0|[1-9][0-9]*)$/
+const MAX_HEADER_LINE = 8192
+const MAX_HEADERS = 100
+const MAX_JSON_DEPTH = 12
+const MAX_JSON_NODES = 4096
+const MAX_JSON_ELEMENTS = 200
+const MAX_V4_RESPONSE_BYTES = 65_536
+const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 const decoder = new TextDecoder('utf-8', { fatal: true })
 const encoder = new TextEncoder()
 
@@ -35,6 +42,291 @@ function equal(left: Uint8Array, right: Uint8Array): boolean {
     left.length === right.length &&
     left.every((byte, index) => byte === right[index])
   )
+}
+
+function decode(bytes: Uint8Array): string {
+  try {
+    return decoder.decode(bytes)
+  } catch {
+    return fail()
+  }
+}
+
+function responseBody(received: Uint8Array): Uint8Array {
+  const lines: Uint8Array[] = []
+  let offset = 0
+  let bodyOffset = -1
+  while (offset <= received.length) {
+    let end = -1
+    for (let at = offset; at < received.length - 1; at += 1) {
+      if (received[at] === 13 && received[at + 1] === 10) {
+        end = at
+        break
+      }
+    }
+    if (end < 0 || end - offset > MAX_HEADER_LINE) return fail()
+    const line = received.subarray(offset, end)
+    if (line.includes(10) || line.includes(13)) return fail()
+    offset = end + 2
+    if (line.length === 0) {
+      bodyOffset = offset
+      break
+    }
+    lines.push(line)
+    if (lines.length > MAX_HEADERS + 1) return fail()
+  }
+  if (bodyOffset < 0 || lines.length === 0) return fail()
+  if (!/^HTTP\/1\.[01] 200(?: [\x20-\x7e]*)?$/.test(decode(lines[0]!)))
+    return fail()
+
+  const headers = new Map<string, string>()
+  for (const line of lines.slice(1)) {
+    if (line[0] === 0x20 || line[0] === 0x09) return fail()
+    const colon = line.indexOf(0x3a)
+    if (colon <= 0) return fail()
+    const name = decode(line.subarray(0, colon))
+    if (!HEADER_NAME.test(name)) return fail()
+    const lowerName = name.toLowerCase()
+    if (headers.has(lowerName)) return fail()
+    const value = trimOws(decode(line.subarray(colon + 1)))
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index)
+      if ((code < 0x20 && code !== 0x09) || code === 0x7f) return fail()
+    }
+    headers.set(lowerName, value)
+  }
+  if (
+    headers.has('transfer-encoding') ||
+    headers.has('content-encoding') ||
+    headers.get('content-type') !== 'application/json'
+  )
+    return fail()
+  const length = headers.get('content-length')
+  const body = received.subarray(bodyOffset)
+  if (
+    length === undefined ||
+    !DECIMAL.test(length) ||
+    !Number.isSafeInteger(Number(length)) ||
+    Number(length) !== body.length
+  )
+    return fail()
+  return body
+}
+
+class StrictResponseJsonParser {
+  private offset = 0
+  private nodes = 0
+
+  constructor(private readonly bytes: Uint8Array) {}
+
+  parse(): void {
+    if (
+      this.bytes[0] === 0xef &&
+      this.bytes[1] === 0xbb &&
+      this.bytes[2] === 0xbf
+    )
+      fail()
+    this.space()
+    this.value(1)
+    this.space()
+    if (this.offset !== this.bytes.length) fail()
+  }
+
+  private node(depth: number): void {
+    this.nodes += 1
+    if (depth > MAX_JSON_DEPTH || this.nodes > MAX_JSON_NODES) fail()
+  }
+
+  private space(): void {
+    while (
+      this.bytes[this.offset] === 0x20 ||
+      this.bytes[this.offset] === 0x09 ||
+      this.bytes[this.offset] === 0x0a ||
+      this.bytes[this.offset] === 0x0d
+    )
+      this.offset += 1
+  }
+
+  private expect(byte: number): void {
+    if (this.bytes[this.offset] !== byte) fail()
+    this.offset += 1
+  }
+
+  private value(depth: number): void {
+    this.node(depth)
+    const byte = this.bytes[this.offset]
+    if (byte === 0x7b) {
+      this.object(depth)
+      return
+    }
+    if (byte === 0x5b) {
+      this.array(depth)
+      return
+    }
+    if (byte === 0x22) {
+      this.string()
+      return
+    }
+    if (byte === 0x74) {
+      this.literal('true')
+      return
+    }
+    if (byte === 0x66) {
+      this.literal('false')
+      return
+    }
+    if (byte === 0x6e) {
+      this.literal('null')
+      return
+    }
+    this.number()
+  }
+
+  private object(depth: number): void {
+    this.expect(0x7b)
+    const keys = new Set<string>()
+    this.space()
+    if (this.bytes[this.offset] === 0x7d) {
+      this.offset += 1
+      return
+    }
+    while (true) {
+      if (this.bytes[this.offset] !== 0x22) fail()
+      const key = this.string()
+      if (keys.has(key) || PROTOTYPE_KEYS.has(key)) fail()
+      keys.add(key)
+      this.space()
+      this.expect(0x3a)
+      this.space()
+      this.value(depth + 1)
+      this.space()
+      if (this.bytes[this.offset] === 0x7d) {
+        this.offset += 1
+        return
+      }
+      this.expect(0x2c)
+      this.space()
+    }
+  }
+
+  private array(depth: number): void {
+    this.expect(0x5b)
+    let elements = 0
+    this.space()
+    if (this.bytes[this.offset] === 0x5d) {
+      this.offset += 1
+      return
+    }
+    while (true) {
+      if (elements >= MAX_JSON_ELEMENTS) fail()
+      elements += 1
+      this.value(depth + 1)
+      this.space()
+      if (this.bytes[this.offset] === 0x5d) {
+        this.offset += 1
+        return
+      }
+      this.expect(0x2c)
+      this.space()
+    }
+  }
+
+  private string(): string {
+    this.expect(0x22)
+    let chunkStart = this.offset
+    let value = ''
+    while (this.offset < this.bytes.length) {
+      const byte = this.bytes[this.offset]
+      if (byte === 0x22) {
+        value += decode(this.bytes.subarray(chunkStart, this.offset))
+        this.offset += 1
+        return value
+      }
+      if (byte === 0x5c) {
+        value += decode(this.bytes.subarray(chunkStart, this.offset))
+        this.offset += 1
+        const escaped = this.bytes[this.offset]
+        if (escaped === 0x75) {
+          const first = this.unicodeEscape()
+          if (first >= 0xd800 && first <= 0xdbff) {
+            if (
+              this.bytes[this.offset] !== 0x5c ||
+              this.bytes[this.offset + 1] !== 0x75
+            )
+              return fail()
+            this.offset += 1
+            const second = this.unicodeEscape()
+            if (second < 0xdc00 || second > 0xdfff) return fail()
+            value += String.fromCodePoint(
+              0x10000 + ((first - 0xd800) << 10) + second - 0xdc00,
+            )
+          } else if (first >= 0xdc00 && first <= 0xdfff) return fail()
+          else value += String.fromCharCode(first)
+        } else {
+          const mapped = new Map<number, string>([
+            [0x22, '"'],
+            [0x5c, '\\'],
+            [0x2f, '/'],
+            [0x62, '\b'],
+            [0x66, '\f'],
+            [0x6e, '\n'],
+            [0x72, '\r'],
+            [0x74, '\t'],
+          ]).get(escaped!)
+          if (mapped === undefined) return fail()
+          value += mapped
+          this.offset += 1
+        }
+        chunkStart = this.offset
+        continue
+      }
+      if (byte === undefined || byte < 0x20) return fail()
+      this.offset += 1
+    }
+    return fail()
+  }
+
+  private unicodeEscape(): number {
+    this.offset += 1
+    const end = this.offset + 4
+    if (end > this.bytes.length) return fail()
+    const value = decode(this.bytes.subarray(this.offset, end))
+    if (!/^[0-9A-Fa-f]{4}$/.test(value)) return fail()
+    this.offset = end
+    return Number.parseInt(value, 16)
+  }
+
+  private literal(value: string): void {
+    const expected = encoder.encode(value)
+    if (
+      !equal(
+        this.bytes.subarray(this.offset, this.offset + expected.length),
+        expected,
+      )
+    )
+      fail()
+    this.offset += expected.length
+  }
+
+  private number(): void {
+    const start = this.offset
+    while (this.offset < this.bytes.length) {
+      const byte = this.bytes[this.offset]!
+      if (
+        (byte >= 0x30 && byte <= 0x39) ||
+        byte === 0x2d ||
+        byte === 0x2b ||
+        byte === 0x2e ||
+        byte === 0x45 ||
+        byte === 0x65
+      )
+        this.offset += 1
+      else break
+    }
+    const value = decode(this.bytes.subarray(start, this.offset))
+    if (!/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/.test(value))
+      fail()
+  }
 }
 
 function requestBodyOffset(sent: Uint8Array): number {
@@ -174,4 +466,22 @@ export function v4RequestDisclosureRanges(
   // Decoding the whole transcript above ensures there are no opaque bytes.
   if (encoder.encode(text).length !== sent.length) return fail()
   return [{ start: 0, end: sent.length }]
+}
+
+export function v4ResponseDisclosureRanges(
+  received: Uint8Array,
+  connector: V4Connector,
+): DisclosureRange[] {
+  if (
+    !(received instanceof Uint8Array) ||
+    received.length === 0 ||
+    received.length > connector.request.max_recv_data ||
+    received.length > MAX_V4_RESPONSE_BYTES ||
+    received.includes(0)
+  )
+    return fail()
+  const text = decode(received)
+  if (encoder.encode(text).length !== received.length) return fail()
+  new StrictResponseJsonParser(responseBody(received)).parse()
+  return [{ start: 0, end: received.length }]
 }

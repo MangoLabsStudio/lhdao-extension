@@ -4,6 +4,7 @@ import type { V4Connector } from '../zktls/interpreter'
 import {
   v4PublicRequestDetails,
   v4RequestDisclosureRanges,
+  v4ResponseDisclosureRanges,
 } from '../zktls/v4-disclosure'
 
 const encoder = new TextEncoder()
@@ -410,5 +411,212 @@ describe('complete V4 public request disclosure', () => {
         v4RequestDisclosureRanges(sent, connector(), capture()),
       ).toThrow()
     }
+  })
+})
+
+function response(
+  body: string | Uint8Array,
+  options: { startLine?: string; headers?: readonly string[] } = {},
+): Uint8Array {
+  const bytes = typeof body === 'string' ? encoder.encode(body) : body
+  const head = encoder.encode(
+    `${options.startLine ?? 'HTTP/1.1 200 OK'}\r\n${(
+      options.headers ?? [
+        'Content-Type: application/json',
+        `Content-Length: ${bytes.length}`,
+        'Date: Fri, 22 Aug 2026 00:00:00 GMT',
+        'Server: example',
+      ]
+    ).join('\r\n')}\r\n\r\n`,
+  )
+  const result = new Uint8Array(head.length + bytes.length)
+  result.set(head)
+  result.set(bytes, head.length)
+  return result
+}
+
+describe('complete V4 JSON response disclosure', () => {
+  test('reveals the complete HTTP and JSON transcript in one range', () => {
+    const received = response(
+      '{"scalar":1.25e2,"object":{"ok":true},"array":[null,"rocket 🚀"]}',
+    )
+
+    expect(v4ResponseDisclosureRanges(received, connector())).toEqual([
+      { start: 0, end: received.length },
+    ])
+  })
+
+  test.each([
+    'HTTP/1.0 200',
+    'HTTP/1.0 200 Public JSON',
+    'HTTP/1.1 200',
+    'HTTP/1.1 200 OK',
+  ])('accepts the backend status-line form %s', (startLine) => {
+    const received = response('{"ok":true}', { startLine })
+    expect(v4ResponseDisclosureRanges(received, connector())).toEqual([
+      { start: 0, end: received.length },
+    ])
+  })
+
+  test.each([
+    ['wrong status', 'HTTP/1.1 201 Created'],
+    ['wrong version', 'HTTP/2 200 OK'],
+    ['tab reason separator', 'HTTP/1.1 200\tOK'],
+    ['non-ASCII reason', 'HTTP/1.1 200 成功'],
+  ])('rejects a %s', (_, startLine) => {
+    expect(() =>
+      v4ResponseDisclosureRanges(
+        response('{"ok":true}', { startLine }),
+        connector(),
+      ),
+    ).toThrow()
+  })
+
+  test.each([
+    ['missing content type', ['Content-Length: 2', 'Connection: close']],
+    [
+      'wrong content type',
+      ['Content-Type: application/json; charset=utf-8', 'Content-Length: 2'],
+    ],
+    ['missing content length', ['Content-Type: application/json']],
+    [
+      'noncanonical content length',
+      ['Content-Type: application/json', 'Content-Length: 02'],
+    ],
+    [
+      'wrong content length',
+      ['Content-Type: application/json', 'Content-Length: 3'],
+    ],
+    [
+      'duplicate header',
+      [
+        'Content-Type: application/json',
+        'content-type: application/json',
+        'Content-Length: 2',
+      ],
+    ],
+    [
+      'transfer encoding',
+      [
+        'Content-Type: application/json',
+        'Content-Length: 2',
+        'Transfer-Encoding: chunked',
+      ],
+    ],
+    [
+      'content encoding',
+      [
+        'Content-Type: application/json',
+        'Content-Length: 2',
+        'Content-Encoding: identity',
+      ],
+    ],
+    [
+      'folded header',
+      ['Content-Type: application/json', 'Content-Length: 2', '\tcontinued'],
+    ],
+    [
+      'invalid header token',
+      [
+        'Content-Type: application/json',
+        'Content-Length: 2',
+        'Bad Header: value',
+      ],
+    ],
+  ])('rejects %s', (_, headers) => {
+    expect(() =>
+      v4ResponseDisclosureRanges(response('{}', { headers }), connector()),
+    ).toThrow()
+  })
+
+  test('rejects control bytes and overlong response headers', () => {
+    const control = response('{}', {
+      headers: [
+        'Content-Type: application/json',
+        'Content-Length: 2',
+        'X-Control: bad\u0001value',
+      ],
+    })
+    const long = response('{}', {
+      headers: [
+        'Content-Type: application/json',
+        'Content-Length: 2',
+        `X-Long: ${'x'.repeat(8193)}`,
+      ],
+    })
+    const many = response('{}', {
+      headers: [
+        'Content-Type: application/json',
+        'Content-Length: 2',
+        ...Array.from({ length: 99 }, (_, index) => `X-${index}: ok`),
+      ],
+    })
+
+    for (const received of [control, long, many]) {
+      expect(() => v4ResponseDisclosureRanges(received, connector())).toThrow()
+    }
+  })
+
+  test.each([
+    ['duplicate key', '{"ok":true,"ok":false}'],
+    ['duplicate decoded key', '{"ok":true,"\\u006f\\u006b":false}'],
+    ['prototype key', '{"__proto__":true}'],
+    ['leading zero', '{"value":01}'],
+    ['leading plus', '{"value":+1}'],
+    ['missing fraction', '{"value":1.}'],
+    ['missing exponent', '{"value":1e}'],
+    ['lone high surrogate', String.raw`{"value":"\uD800"}`],
+    ['lone low surrogate', String.raw`{"value":"\uDC00"}`],
+    ['invalid surrogate pair', String.raw`{"value":"\uD800\u0041"}`],
+    ['raw string control', '{"value":"bad\u0001value"}'],
+    ['trailing data', '{"ok":true}x'],
+  ])('rejects JSON with %s', (_, body) => {
+    expect(() =>
+      v4ResponseDisclosureRanges(response(body), connector()),
+    ).toThrow()
+  })
+
+  test('rejects BOM, invalid UTF-8, NUL, and empty evidence', () => {
+    const bom = response(
+      new Uint8Array([0xef, 0xbb, 0xbf, ...encoder.encode('{}')]),
+    )
+    const invalidUtf8 = response(
+      new Uint8Array([
+        0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xc3, 0x28, 0x22, 0x7d,
+      ]),
+    )
+    const nul = response('{"ok":true}')
+    nul[nul.length - 2] = 0
+
+    for (const received of [bom, invalidUtf8, nul, new Uint8Array()]) {
+      expect(() => v4ResponseDisclosureRanges(received, connector())).toThrow()
+    }
+  })
+
+  test('rejects JSON beyond the array, depth, and node limits', () => {
+    const array = JSON.stringify(Array.from({ length: 201 }, () => 0))
+    let nested = '0'
+    for (let depth = 0; depth < 13; depth += 1) nested = `[${nested}]`
+    const nodes = `{${Array.from(
+      { length: 4096 },
+      (_, index) => `"k${index}":0`,
+    ).join(',')}}`
+
+    for (const body of [array, nested, nodes]) {
+      const received = response(body)
+      expect(received.length).toBeLessThanOrEqual(65_536)
+      expect(() => v4ResponseDisclosureRanges(received, connector())).toThrow()
+    }
+  })
+
+  test('enforces the signed dynamic receive bound and the V4 hard cap', () => {
+    const received = response('{"ok":true}')
+    const limited = connector()
+    limited.request.max_recv_data = received.length - 1
+
+    expect(() => v4ResponseDisclosureRanges(received, limited)).toThrow()
+    expect(() =>
+      v4ResponseDisclosureRanges(new Uint8Array(65_537).fill(1), connector()),
+    ).toThrow()
   })
 })

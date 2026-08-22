@@ -27,6 +27,7 @@ import {
 import {
   v4PublicRequestDetails,
   v4RequestDisclosureRanges,
+  v4ResponseDisclosureRanges,
 } from '@/lib/zktls/v4-disclosure'
 
 const encoder = new TextEncoder()
@@ -420,8 +421,24 @@ export function revealConfig(
   received: Uint8Array,
 ): { sent: RevealRange[]; recv: RevealRange[] } {
   if (isV4Message(message)) {
-    v4RequestDisclosureRanges(sent, message.config, message.captured)
-    throw new Error('JSON connectors are unsupported by this runtime')
+    const complete = (type: 'SENT' | 'RECV', range: Range): RevealRange => ({
+      ...range,
+      handler: {
+        type,
+        part: 'START_LINE',
+        action: { kind: 'REVEAL' },
+      },
+    })
+    return {
+      sent: v4RequestDisclosureRanges(
+        sent,
+        message.config,
+        message.captured,
+      ).map((range) => complete('SENT', range)),
+      recv: v4ResponseDisclosureRanges(received, message.config).map((range) =>
+        complete('RECV', range),
+      ),
+    }
   }
   if (
     message.config.response_format === 'json' &&
@@ -621,7 +638,7 @@ async function prove(message: ProveMessage): Promise<void> {
     )
     const transcript = prover.transcript()
     const received = new Uint8Array(transcript.recv)
-    if (received.length >= message.config.request.max_recv_data)
+    if (received.length > message.config.request.max_recv_data)
       throw new Error('response exceeded the signed receive limit')
     const config = revealConfig(
       message,

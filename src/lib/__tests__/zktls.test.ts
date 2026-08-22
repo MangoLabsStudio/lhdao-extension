@@ -1586,6 +1586,54 @@ describe('zkTLS strict boundaries', () => {
     expect([...request.headers.keys()]).toEqual(['host', 'connection'])
   })
 
+  test('routes V4 through complete half-open request and response ranges', () => {
+    const config = validateConnector(v4Connector())
+    if (config.interpreter_version !== 4) throw new Error('wrong connector')
+    const captured = {
+      path: '/v1/volume?day=2026-08-20',
+      method: 'POST' as const,
+      body: '{"operation":"volume","input":{"account":"acct-1","options":{"day":"2026-08-20"}}}',
+      content_type: 'application/json' as const,
+      secrets: {},
+      resource_type: 'fetch' as const,
+      capturedVariables: {},
+    }
+    const message = {
+      id: 'v4-reveal-job',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: config.connector_id,
+      config,
+      ticket: { ...ticket, interpreter_version: 4 as const },
+      configEnvelope: { ...configEnvelope, config },
+      ticketEnvelope,
+      captured,
+    }
+    const bodyBytes = new TextEncoder().encode(captured.body)
+    const sent = new TextEncoder().encode(
+      `POST ${captured.path} HTTP/1.1\r\n` +
+        'Host: api.example.com\r\n' +
+        'Connection: close\r\n' +
+        'Content-Type: application/json\r\n' +
+        `Content-Length: ${bodyBytes.length}\r\n\r\n${captured.body}`,
+    )
+    const responseBody = '{"data":{"balance":100}}'
+    const received = new TextEncoder().encode(
+      'HTTP/1.1 200 OK\r\n' +
+        'Content-Type: application/json\r\n' +
+        `Content-Length: ${new TextEncoder().encode(responseBody).length}\r\n` +
+        'Connection: close\r\n\r\n' +
+        responseBody,
+    )
+
+    const reveal = revealConfig(message, sent, received)
+
+    expect(reveal.sent).toMatchObject([{ start: 0, end: sent.length }])
+    expect(reveal.recv).toMatchObject([{ start: 0, end: received.length }])
+    expect(reveal.sent).toHaveLength(1)
+    expect(reveal.recv).toHaveLength(1)
+  })
+
   test('reveals a unique JSON regex scalar but keeps JSONPath disabled', async () => {
     const config = validateConnector({
       interpreter_version: 3,
