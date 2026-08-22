@@ -287,6 +287,8 @@ export class ProductExperienceController {
   private submitInFlight: ProductExperienceSubmitFlight | null = null
   private zkTlsFlight: Promise<void> | null = null
   private zkTlsDrainRequested = false
+  private exhaustedZkTlsPoll: { sessionId: string; ruleId: string } | null =
+    null
   private zkTlsMutationQueue: Promise<void> = Promise.resolve()
   private evidenceQueue: Promise<void> = Promise.resolve()
   private generation = 0
@@ -788,16 +790,34 @@ export class ProductExperienceController {
 
     if (isZkTlsSession(session)) {
       let added = false
+      let rearmed = false
       const queued = await this.mutateZkTlsSession(
         session.sessionId,
         (current) => {
-          const known = new Set([
-            ...current.verifiedRuleIds,
-            ...current.zkTlsQueue.map((item) => item.ruleId),
-          ])
+          const verified = new Set(current.verifiedRuleIds)
           for (const evidence of sanitized) {
-            if (known.has(evidence.ruleId)) continue
-            known.add(evidence.ruleId)
+            if (verified.has(evidence.ruleId)) continue
+            const existing = current.zkTlsQueue.find(
+              (item) => item.ruleId === evidence.ruleId,
+            )
+            if (existing) {
+              const exhausted = this.exhaustedZkTlsPoll
+              const exhaustedSubmission =
+                existing.status === 'submitted' &&
+                exhausted?.sessionId === current.sessionId &&
+                exhausted.ruleId === evidence.ruleId
+              if (exhaustedSubmission || existing.status === 'queued') {
+                if (exhaustedSubmission) {
+                  existing.status = 'queued'
+                  existing.sessionId = null
+                  existing.connectorId = null
+                  existing.expiresAt = null
+                }
+                added = true
+                rearmed = true
+              }
+              continue
+            }
             added = true
             current.zkTlsQueue.push({
               ruleId: evidence.ruleId,
@@ -814,6 +834,7 @@ export class ProductExperienceController {
       )
       if (!queued) return this.getStateWithoutRetry()
       if (!added) return this.stateFromSession(queued)
+      if (rearmed) this.exhaustedZkTlsPoll = null
       await this.notify()
       void this.drainZkTlsQueue(true)
       return this.stateFromSession(queued)
@@ -1128,6 +1149,7 @@ export class ProductExperienceController {
     sessionId: string,
     activeRuleId: string,
   ): Promise<boolean> {
+    this.exhaustedZkTlsPoll = null
     for (const delayMs of [1_000, 2_000, 4_000, 8_000, 15_000]) {
       await wait(delayMs)
       const beforePoll = await this.dependencies.storage.getSession()
@@ -1222,6 +1244,7 @@ export class ProductExperienceController {
       }
       if (updated.verifiedRuleIds.includes(activeRuleId)) return true
     }
+    this.exhaustedZkTlsPoll = { sessionId, ruleId: activeRuleId }
     return false
   }
 

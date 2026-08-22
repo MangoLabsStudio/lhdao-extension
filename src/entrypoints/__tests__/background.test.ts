@@ -501,6 +501,9 @@ describe('Product zkTLS jobs', () => {
       correlationId: 'product-waits-for-page',
       status: 'submitted',
     })
+    expect(internal).not.toHaveProperty('captured')
+    expect(internal).not.toHaveProperty('resolved_variables')
+    expect(internal).not.toHaveProperty('request_body')
     expect(signed).toHaveBeenCalledTimes(3)
     expect(signed).toHaveBeenNthCalledWith(
       3,

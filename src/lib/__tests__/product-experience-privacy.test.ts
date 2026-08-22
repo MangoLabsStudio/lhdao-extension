@@ -130,6 +130,9 @@ describe('product experience evaluator privacy', () => {
       url: `${CLIENT_ORIGIN}/app?secret=query#fragment`,
       ticket: 'private-ticket',
       macKey: 'private-mac-key',
+      exactBody: '{"account":"private-account"}',
+      requestBody: 'private-request-body',
+      resolvedVariables: 'private-resolved-variables',
     } as ProductRuleMatch & Record<string, string>
 
     const message = createProductExperienceEvidenceMessage('session-1', [
@@ -171,6 +174,9 @@ describe('product experience evaluator privacy', () => {
       'fragment',
       'private-ticket',
       'private-mac-key',
+      'private-account',
+      'private-request-body',
+      'private-resolved-variables',
     ]) {
       expect(serialized).not.toContain(forbiddenValue)
     }
@@ -194,6 +200,14 @@ describe('product experience evaluator privacy', () => {
       'responseBody',
       'claimPayload',
       'proofPayload',
+      'exactBody',
+      'semanticDigest',
+      'resolvedVariables',
+      'resolved_variables',
+      'requestBody',
+      'request_body',
+      'rawBody',
+      'raw_body',
     ]) {
       expect(durableShape).not.toContain(forbiddenField)
     }
