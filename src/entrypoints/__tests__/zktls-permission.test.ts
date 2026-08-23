@@ -1,0 +1,107 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+
+function permissionPage(): void {
+  document.body.innerHTML = `
+    <p id="origin"></p>
+    <p id="connector"></p>
+    <button type="button" id="allow" disabled>Allow</button>
+    <p id="status">Loading</p>
+  `
+  history.replaceState({}, '', '/zktls-permission.html?request_id=req-1')
+}
+
+describe('zkTLS permission page', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    permissionPage()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  test('shows only safe hostnames and requests the exact signed patterns', async () => {
+    const send = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockImplementation((async (message: { type?: string }) =>
+        message.type === 'zktls-permission-preview'
+          ? {
+              origins: ['https://api.example.com', 'https://app.example.com'],
+              connectorId: 'product-volume',
+            }
+          : null) as never)
+    const request = vi
+      .spyOn(chrome.permissions, 'request')
+      .mockImplementation((async () => true) as never)
+
+    await import('@/entrypoints/zktls-permission/main')
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector<HTMLButtonElement>('#allow')?.disabled,
+      ).toBe(false),
+    )
+
+    expect(document.querySelector('#origin')?.textContent).toBe(
+      'Origins: api.example.com, app.example.com',
+    )
+    expect(document.querySelector('#origin')?.textContent).not.toContain(
+      'https://',
+    )
+    document.querySelector<HTMLButtonElement>('#allow')?.click()
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+    expect(request).toHaveBeenCalledWith({
+      origins: ['https://api.example.com/*', 'https://app.example.com/*'],
+    })
+    expect(send).toHaveBeenLastCalledWith({
+      type: 'zktls-permission-result',
+      requestId: 'req-1',
+      granted: true,
+    })
+  })
+
+  test('rejects a preview with extra fields before requesting permission', async () => {
+    vi.spyOn(chrome.runtime, 'sendMessage').mockResolvedValue({
+      origins: ['https://app.example.com'],
+      connectorId: 'product-volume',
+      injected: 'https://evil.example.com',
+    })
+    const request = vi.spyOn(chrome.permissions, 'request')
+
+    await import('@/entrypoints/zktls-permission/main')
+    await vi.waitFor(() =>
+      expect(document.querySelector('#status')?.textContent).toBe(
+        'Permission request has expired.',
+      ),
+    )
+    expect(request).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLButtonElement>('#allow')?.disabled).toBe(
+      true,
+    )
+  })
+
+  test.each([
+    'https://*',
+    'https://*.example.com',
+    'https://%2A.example.com',
+    'https://api.example.com:8443',
+    'https://8.8.8.8:8443',
+    'https://10.0.0.1',
+    'https://[2606:4700:4700::1111]:8443',
+    'https://[fd00::1]',
+  ])('rejects the non-DNS preview origin %s', async (origin) => {
+    vi.spyOn(chrome.runtime, 'sendMessage').mockResolvedValue({
+      origins: [origin],
+      connectorId: 'product-volume',
+    })
+    const request = vi.spyOn(chrome.permissions, 'request')
+
+    await import('@/entrypoints/zktls-permission/main')
+    await vi.waitFor(() =>
+      expect(document.querySelector('#status')?.textContent).toBe(
+        'Permission request has expired.',
+      ),
+    )
+    expect(document.querySelector('#origin')?.textContent).toBe('')
+    expect(request).not.toHaveBeenCalled()
+  })
+})

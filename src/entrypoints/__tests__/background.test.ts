@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AvailableEngagement } from '@/lib/queries'
+import { CaptureSession } from '@/lib/zktls/capture'
 import { validateConnector } from '@/lib/zktls/interpreter'
 import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
 import {
@@ -9,6 +10,17 @@ import {
 } from '@/lib/zktls/runtime'
 import * as signedConfig from '@/lib/zktls/signed-config'
 import { buildActiveCampaignSummaries, flattenTasks } from '../background'
+
+beforeEach(() => {
+  const removed = chrome.permissions.onRemoved as unknown as {
+    addListener(listener: (value: chrome.permissions.Permissions) => void): void
+    removeListener(
+      listener: (value: chrome.permissions.Permissions) => void,
+    ): void
+  }
+  vi.spyOn(removed, 'addListener').mockImplementation(() => undefined)
+  vi.spyOn(removed, 'removeListener').mockImplementation(() => undefined)
+})
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -233,7 +245,7 @@ describe('Product zkTLS jobs', () => {
       },
       {
         id: 'extension',
-        url: chrome.runtime.getURL('zktls-permission.html'),
+        url: permissionUrl.href,
       },
     )
 
@@ -355,6 +367,7 @@ describe('Product zkTLS jobs', () => {
     }) as never)
 
     let observe: ((details: unknown) => void) | undefined
+    let redirect: ((details: unknown) => void) | undefined
     let complete: ((details: unknown) => void) | undefined
     vi.spyOn(
       chrome.webRequest.onBeforeSendHeaders,
@@ -367,9 +380,14 @@ describe('Product zkTLS jobs', () => {
     ) => {
       complete = listener
     }) as never)
+    vi.spyOn(
+      chrome.webRequest.onBeforeRedirect,
+      'addListener',
+    ).mockImplementation(((listener: (details: unknown) => void) => {
+      redirect = listener
+    }) as never)
     for (const event of [
       chrome.webRequest.onBeforeRequest,
-      chrome.webRequest.onBeforeRedirect,
       chrome.webRequest.onErrorOccurred,
       chrome.runtime.onMessage,
     ]) {
@@ -389,6 +407,37 @@ describe('Product zkTLS jobs', () => {
       frameId: 0,
       url: 'https://app.lhdao.top/verify/session1',
     } as chrome.runtime.MessageSender
+
+    const redirectedProof = proveZkTlsSession({
+      ...request,
+      correlationId: 'redirect-before-target',
+    })
+    await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(1))
+    const redirectedDetails = {
+      requestId: 'redirected',
+      tabId: 7,
+      frameId: 0,
+      method: 'GET',
+      url: 'https://github.com/viewer',
+      redirectUrl: 'https://github.com/login',
+      type: 'xmlhttprequest',
+      initiator: 'https://github.com',
+      requestHeaders: [{ name: 'Cookie', value: 'private' }],
+    }
+    observe?.(redirectedDetails)
+    const redirectSpy = vi.spyOn(CaptureSession.prototype, 'redirect')
+    redirect?.(redirectedDetails)
+    expect(redirectSpy).toHaveBeenCalledWith(
+      redirectedDetails,
+      'captured request redirected',
+    )
+    complete?.({ requestId: 'redirected' })
+    await expect(redirectedProof).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'redirect-before-target',
+      status: 'error',
+      code: 'ZKTLS_CAPTURE_FAILED',
+    })
 
     const run = async (
       result: Promise<unknown>,
@@ -414,7 +463,7 @@ describe('Product zkTLS jobs', () => {
       { type: 'zktls-prove', ...request },
       sender,
     )
-    await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(2))
     const productProof = proveZkTlsSession({
       ...request,
       correlationId: 'product-waits-for-page',
@@ -432,7 +481,7 @@ describe('Product zkTLS jobs', () => {
       status: 'error',
       code: 'ZKTLS_BUSY',
     })
-    expect(signed).toHaveBeenCalledTimes(1)
+    expect(signed).toHaveBeenCalledTimes(2)
     observe?.({
       requestId: 'page',
       tabId: 7,
@@ -444,7 +493,7 @@ describe('Product zkTLS jobs', () => {
     })
     complete?.({ requestId: 'page' })
     const page = await pageProof
-    const internal = await run(productProof, 'internal', 2)
+    const internal = await run(productProof, 'internal', 3)
 
     expect(page).toMatchObject({ status: 'submitted' })
     expect(internal).toEqual({
@@ -452,17 +501,20 @@ describe('Product zkTLS jobs', () => {
       correlationId: 'product-waits-for-page',
       status: 'submitted',
     })
-    expect(signed).toHaveBeenCalledTimes(2)
+    expect(internal).not.toHaveProperty('captured')
+    expect(internal).not.toHaveProperty('resolved_variables')
+    expect(internal).not.toHaveProperty('request_body')
+    expect(signed).toHaveBeenCalledTimes(3)
     expect(signed).toHaveBeenNthCalledWith(
-      2,
+      3,
       'https://service.lhdao.top/zktls/config?session_id=session1&connector_id=connector1',
       expect.objectContaining({ local: false }),
     )
-    expect(permissions).toHaveBeenCalledTimes(2)
+    expect(permissions).toHaveBeenCalledTimes(3)
     expect(permissions).toHaveBeenCalledWith({
       origins: ['https://github.com/*'],
     })
-    expect(activate).toHaveBeenCalledTimes(2)
+    expect(activate).toHaveBeenCalledTimes(3)
     expect(contexts).toHaveBeenCalledTimes(2)
     expect(offscreen).toHaveBeenCalledTimes(2)
     expect(submitted).toHaveLength(2)

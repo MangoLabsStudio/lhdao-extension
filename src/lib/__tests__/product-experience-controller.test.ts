@@ -1196,6 +1196,61 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     })
   })
 
+  it('uses a later trigger to ask the backend for the next connector', async () => {
+    harness.startZkTls
+      .mockResolvedValueOnce({
+        sessionId: 'binding-session',
+        connectorId: 'account-binding',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'metric-session',
+        connectorId: 'daily-volume-metric',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.advanceTimersByTimeAsync(30_000)
+    await flushAsync()
+
+    expect(harness.startZkTls).toHaveBeenNthCalledWith(1, {
+      campaignId: 'campaign-product-001',
+      ruleId: 'rule-a',
+      ticketKind: 'PARTICIPANT',
+    })
+    expect(harness.proveZkTls).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionId: 'binding-session',
+        connectorId: 'account-binding',
+      }),
+    )
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+
+    expect(harness.startZkTls).toHaveBeenNthCalledWith(2, {
+      campaignId: 'campaign-product-001',
+      ruleId: 'rule-a',
+      ticketKind: 'PARTICIPANT',
+    })
+    expect(harness.proveZkTls).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: 'metric-session',
+        connectorId: 'daily-volume-metric',
+      }),
+    )
+    expect(harness.storage.session?.zkTlsQueue).toEqual([
+      expect.objectContaining({ ruleId: 'rule-a' }),
+    ])
+  })
+
   it('does not start another polling budget for duplicate DOM evidence', async () => {
     await harness.controller.handleEvidence(sender(), 'session-12345678', [
       match('rule-a'),
@@ -1241,6 +1296,65 @@ describe('ProductExperienceController zkTLS authority queue', () => {
 
     expect(harness.startZkTls).toHaveBeenCalledTimes(1)
     expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries cleared failed work only after a later trigger', async () => {
+    harness.startZkTls
+      .mockResolvedValueOnce({
+        sessionId: 'failed-session',
+        connectorId: 'failed-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'retry-session',
+        connectorId: 'retry-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+    harness.proveZkTls
+      .mockImplementationOnce(async (input) => ({
+        type: 'zktls-prove-result',
+        correlationId: input.correlationId,
+        status: 'error',
+        code: 'REQUEST_NOT_CAPTURED',
+      }))
+      .mockImplementationOnce(async (input) => ({
+        type: 'zktls-prove-result',
+        correlationId: input.correlationId,
+        status: 'submitted',
+      }))
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]).toEqual({
+        ruleId: 'rule-a',
+        status: 'queued',
+        sessionId: null,
+        connectorId: null,
+        expiresAt: null,
+      }),
+    )
+    await flushAsync()
+
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+
+    expect(harness.startZkTls).toHaveBeenNthCalledWith(2, {
+      campaignId: 'campaign-product-001',
+      ruleId: 'rule-a',
+      ticketKind: 'PARTICIPANT',
+    })
+    expect(harness.proveZkTls).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: 'retry-session',
+        connectorId: 'retry-connector',
+      }),
+    )
   })
 
   it.each([
@@ -1798,6 +1912,46 @@ describe('ProductExperienceController zkTLS authority queue', () => {
         expiresAt: null,
       },
     ])
+  })
+
+  it('lets a new rule proceed without repolling an exhausted submitted rule', async () => {
+    harness.startZkTls
+      .mockResolvedValueOnce({
+        sessionId: 'exhausted-session',
+        connectorId: 'exhausted-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'next-session',
+        connectorId: 'next-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      })
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.advanceTimersByTimeAsync(30_000)
+    await flushAsync()
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-b'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+    expect(harness.startZkTls).toHaveBeenNthCalledWith(2, {
+      campaignId: 'campaign-product-001',
+      ruleId: 'rule-b',
+      ticketKind: 'PARTICIPANT',
+    })
+    expect(harness.proveZkTls).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: 'next-session',
+        connectorId: 'next-connector',
+      }),
+    )
   })
 
   it('resumes submitted session IDs after restart but replaces interrupted proving sessions', async () => {

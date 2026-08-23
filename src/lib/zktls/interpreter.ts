@@ -122,8 +122,150 @@ export type V3Connector = {
   verifier_profile_id: string
 }
 
+export type V4ScalarType =
+  | 'STRING'
+  | 'DECIMAL'
+  | 'INTEGER'
+  | 'BOOLEAN'
+  | 'UTC_TIMESTAMP'
+
+export type V4TemplateValue =
+  | null
+  | boolean
+  | string
+  | number
+  | V4TemplateValue[]
+  | { [key: string]: V4TemplateValue }
+  | { $var: string }
+  | {
+      $object: {
+        mode: 'ALLOW_EXTRA'
+        fields: Record<string, V4TemplateValue>
+      }
+    }
+
+export type V4VariableDeclaration = {
+  name: string
+  scalarType: V4ScalarType
+  source:
+    | { kind: 'SESSION'; field: 'periodStart' | 'periodEnd' | 'periodKey' }
+    | { kind: 'BOUND_ACCOUNT'; bindingKey: string }
+    | {
+        kind: 'CAPTURED_REQUEST'
+        location: 'QUERY' | 'BODY_JSON' | 'BODY_FORM'
+        selector: string
+      }
+  constraints?: {
+    minLength?: number
+    maxLength?: number
+    pattern?: 'ACCOUNT_ID' | 'EVM_ADDRESS' | 'ISO_DATE' | 'DECIMAL'
+  }
+}
+
+export type V4ResolvedVariable = {
+  type: V4ScalarType
+  value: string | boolean
+}
+
+export type V4Predicate =
+  | { op: 'ALL' | 'ANY'; predicates: V4Predicate[] }
+  | { op: 'EXISTS'; path: string }
+  | {
+      op: 'EQ' | 'NE' | 'GT' | 'GTE' | 'LT' | 'LTE' | 'IN'
+      path: string
+      value:
+        | null
+        | boolean
+        | string
+        | number
+        | { $var: string }
+        | (null | boolean | string | number | { $var: string })[]
+    }
+
+export type V4ScalarPredicate = {
+  op: 'EQ' | 'NE' | 'GT' | 'GTE' | 'LT' | 'LTE'
+  value: null | boolean | string | number | { $var: string }
+  unit?: string
+}
+
+export type V4Pipeline = {
+  output: string
+  sourcePath: string
+  filter?: V4Predicate
+  orderBy?: { path: string; direction: 'ASC' | 'DESC' }
+  groupBy?: { path: string; interval: 'UTC_DAY' }
+  valuePath?: string
+  cast: V4ScalarType
+  reduce?:
+    | 'SUM'
+    | 'COUNT'
+    | 'DISTINCT_COUNT'
+    | 'MIN'
+    | 'MAX'
+    | 'AVG'
+    | 'FIRST'
+    | 'LAST'
+    | 'LAST_MINUS_FIRST'
+  postFilter?: V4ScalarPredicate
+  finalReduce?: 'COUNT' | 'SUM' | 'MIN' | 'MAX' | 'AVG'
+  valueUnit?: string
+  outputUnit?: string
+}
+
+export type V4Connector = {
+  interpreter_version: 4
+  connector_id: string
+  revision: 1
+  disabled: false
+  expires_at: string
+  page_origin: string
+  origin: string
+  request: {
+    method: 'GET' | 'POST'
+    matcher: {
+      path: { kind: 'exact'; value: string }
+      query: {
+        required: Record<string, V4TemplateValue>
+        optional: Record<string, never>
+        capture: Record<string, never>
+      }
+      resource_types: ['main_frame', 'xmlhttprequest', 'fetch']
+    }
+    body?: V4TemplateValue
+    content_type?: 'application/json'
+    replay: 'EXACT_CAPTURE'
+    semantics: 'READ_ONLY_QUERY'
+    secret_headers: []
+    max_sent_data: 8192
+    max_recv_data: number
+  }
+  variables: V4VariableDeclaration[]
+  resolved_variables: Record<string, V4ResolvedVariable>
+  response_format: 'json'
+  response_status: 200
+  disclosure: {
+    key_paths: string[]
+    scalar_paths: string[]
+    collection_paths: string[]
+    max_elements: 200
+  }
+  pipelines: V4Pipeline[]
+  verifier_profile_id: string
+} & (
+  | {
+      purpose: 'ACCOUNT_BINDING'
+      account_binding: {
+        providerKey: string
+        accountVariable: string
+        walletOutput: string
+        addressType: 'EVM'
+      }
+    }
+  | { purpose: 'METRIC'; account_binding?: never }
+)
+
 export type CapturedConnector = V2Connector | V3Connector
-export type Connector = V1Connector | CapturedConnector
+export type Connector = V1Connector | CapturedConnector | V4Connector
 
 function fail(message: string): never {
   throw new Error(message)
@@ -179,7 +321,7 @@ function positiveInteger(
     fail(`${name} is outside its allowed range.`)
 }
 
-function publicDnsHost(hostname: string): boolean {
+export function publicDnsHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
   const labels = host.split('.')
   const numeric =
@@ -721,11 +863,1285 @@ function validateV3Connector(value: unknown): V3Connector {
   return value as V3Connector
 }
 
+const V4_IDENTIFIER = /^[A-Za-z][A-Za-z0-9_-]{0,127}$/
+const V4_SECRET_KEY =
+  /^(?:authorization|cookie|set-cookie|password|passwd|secret|token|access[_-]?token|api[_-]?key)$/i
+const V4_SCALAR_TYPES = new Set<V4ScalarType>([
+  'STRING',
+  'DECIMAL',
+  'INTEGER',
+  'BOOLEAN',
+  'UTC_TIMESTAMP',
+])
+const V4_COUNT_UNITS = new Set(['count', 'days', 'items'])
+const V4_DECIMAL_SCALE = 100_000_000n
+const V4_DECIMAL_MAX_SCALED = 99_999_999_999_999_999_999n
+
+type V4Record = Record<string, unknown>
+type V4PathSegment =
+  | { kind: 'FIELD'; key: string }
+  | { kind: 'INDEX'; index: number }
+  | { kind: 'COLLECTION' }
+
+function v4PlainData(
+  value: unknown,
+  budget = { nodes: 0, bytes: 0 },
+  seen = new Set<object>(),
+  depth = 0,
+): void {
+  if (depth > 12) fail('V4 connector is invalid.')
+  budget.nodes += 1
+  budget.bytes += 1
+  if (budget.nodes > 4096 || budget.bytes > 65_536)
+    fail('V4 connector is invalid.')
+  if (value === null) {
+    budget.bytes += 3
+    return
+  }
+  if (typeof value === 'string') {
+    budget.bytes += bytes(value)
+    if (budget.bytes > 65_536) fail('V4 connector is invalid.')
+    return
+  }
+  if (typeof value === 'boolean' || typeof value === 'number') {
+    budget.bytes += 8
+    if (budget.bytes > 65_536) fail('V4 connector is invalid.')
+    return
+  }
+  if (typeof value !== 'object' || seen.has(value))
+    fail('V4 connector is invalid.')
+  const array = Array.isArray(value)
+  const prototype = Object.getPrototypeOf(value)
+  if (
+    (array && prototype !== Array.prototype) ||
+    (!array && prototype !== Object.prototype && prototype !== null)
+  )
+    fail('V4 connector is invalid.')
+  seen.add(value)
+  const input = value as Record<string, unknown>
+  for (const key in input)
+    if (!Object.hasOwn(input, key)) fail('V4 connector is invalid.')
+  const ownKeys = Reflect.ownKeys(value)
+  const expected = Object.keys(input)
+  if (ownKeys.length !== expected.length + (array ? 1 : 0))
+    fail('V4 connector is invalid.')
+  if (array && expected.length !== value.length)
+    fail('V4 connector is invalid.')
+  for (const key of expected) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor?.enumerable || !('value' in descriptor))
+      fail('V4 connector is invalid.')
+    budget.bytes += bytes(key)
+    v4PlainData(descriptor.value, budget, seen, depth + 1)
+  }
+}
+
+function v4Record(value: unknown, name: string): V4Record {
+  object(value, name)
+  return value
+}
+
+function v4Fields(
+  value: unknown,
+  allowed: readonly string[],
+  requiredFields: readonly string[],
+  name: string,
+): V4Record {
+  const input = v4Record(value, name)
+  const allowedSet = new Set(allowed)
+  if (
+    Object.keys(input).some((key) => !allowedSet.has(key)) ||
+    requiredFields.some((key) => !Object.hasOwn(input, key))
+  )
+    fail(`${name} is invalid.`)
+  return input
+}
+
+function v4Exact(
+  value: unknown,
+  fields: readonly string[],
+  name: string,
+): V4Record {
+  const input = v4Fields(value, fields, fields, name)
+  if (Object.keys(input).length !== fields.length) fail(`${name} is invalid.`)
+  return input
+}
+
+function v4UnsafeString(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (
+      code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x061c ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069)
+    )
+      return true
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (next < 0xdc00 || next > 0xdfff) return true
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) return true
+  }
+  return false
+}
+
+function v4String(
+  value: unknown,
+  name: string,
+  max = 1024,
+  allowEmpty = true,
+): string {
+  if (
+    typeof value !== 'string' ||
+    (!allowEmpty && value.length === 0) ||
+    bytes(value) > max ||
+    v4UnsafeString(value)
+  )
+    fail(`${name} is invalid.`)
+  return value
+}
+
+function v4Identifier(value: unknown, name: string): string {
+  const result = v4String(value, name, 128, false)
+  if (!V4_IDENTIFIER.test(result)) fail(`${name} is invalid.`)
+  return result
+}
+
+function v4Token(value: unknown, name: string): string {
+  const result = v4String(value, name, 128, false)
+  if (!/^[A-Za-z0-9_-]+$/.test(result)) fail(`${name} is invalid.`)
+  return result
+}
+
+function v4Ipv4(value: string): number | null {
+  const parts = value.split('.')
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)
+  )
+    return null
+  return parts.reduce((result, part) => result * 256 + Number(part), 0)
+}
+
+function v4Ipv4InCidr(value: number, base: string, prefix: number): boolean {
+  const baseValue = v4Ipv4(base)
+  if (baseValue === null) return false
+  const size = 2 ** (32 - prefix)
+  return Math.floor(value / size) === Math.floor(baseValue / size)
+}
+
+function v4Ipv6(value: string): bigint | null {
+  const halves = value.toLowerCase().split('::')
+  if (halves.length > 2) return null
+  const parseHalf = (half: string): number[] | null => {
+    if (!half) return []
+    const parts = half.split(':')
+    const result: number[] = []
+    for (const part of parts) {
+      if (!/^[0-9a-f]{1,4}$/.test(part)) return null
+      result.push(Number.parseInt(part, 16))
+    }
+    return result
+  }
+  const left = parseHalf(halves[0] ?? '')
+  const right = parseHalf(halves[1] ?? '')
+  if (!left || !right) return null
+  const missing = 8 - left.length - right.length
+  if ((halves.length === 1 && missing !== 0) || missing < 0) return null
+  const groups = [
+    ...left,
+    ...Array.from({ length: missing }, () => 0),
+    ...right,
+  ]
+  if (groups.length !== 8) return null
+  return groups.reduce((result, group) => (result << 16n) | BigInt(group), 0n)
+}
+
+function v4Ipv6InCidr(value: bigint, base: string, prefix: number): boolean {
+  const baseValue = v4Ipv6(base)
+  if (baseValue === null) return false
+  const shift = BigInt(128 - prefix)
+  return value >> shift === baseValue >> shift
+}
+
+function v4PublicHostname(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  const ipv4 = v4Ipv4(normalized)
+  if (ipv4 !== null) {
+    return ![
+      ['0.0.0.0', 8],
+      ['10.0.0.0', 8],
+      ['100.64.0.0', 10],
+      ['127.0.0.0', 8],
+      ['169.254.0.0', 16],
+      ['172.16.0.0', 12],
+      ['192.0.0.0', 24],
+      ['192.0.2.0', 24],
+      ['192.88.99.0', 24],
+      ['192.168.0.0', 16],
+      ['198.18.0.0', 15],
+      ['198.51.100.0', 24],
+      ['203.0.113.0', 24],
+      ['224.0.0.0', 4],
+      ['240.0.0.0', 4],
+    ].some(([base, prefix]) =>
+      v4Ipv4InCidr(ipv4, base as string, prefix as number),
+    )
+  }
+  const ipv6 = v4Ipv6(normalized)
+  if (ipv6 !== null) {
+    return (
+      v4Ipv6InCidr(ipv6, '2000::', 3) &&
+      ![
+        ['2001::', 23],
+        ['2001:db8::', 32],
+        ['2002::', 16],
+        ['3fff::', 20],
+      ].some(([base, prefix]) =>
+        v4Ipv6InCidr(ipv6, base as string, prefix as number),
+      )
+    )
+  }
+  const dns = normalized.replace(/\.$/, '')
+  return (
+    dns.includes('.') &&
+    ![
+      'home',
+      'home.arpa',
+      'internal',
+      'invalid',
+      'lan',
+      'local',
+      'localdomain',
+      'localhost',
+      'test',
+    ].some((suffix) => dns === suffix || dns.endsWith(`.${suffix}`))
+  )
+}
+
+function v4Origin(value: unknown, name: string): string {
+  const result = v4String(value, name, 2048, false)
+  let url: URL
+  try {
+    url = new URL(result)
+  } catch {
+    fail(`${name} must be a public HTTPS origin.`)
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash ||
+    url.origin !== result ||
+    url.hostname.includes('*') ||
+    !publicDnsHost(url.hostname) ||
+    !v4PublicHostname(url.hostname)
+  )
+    fail(`${name} must be an exact HTTPS origin.`)
+  return result
+}
+
+function v4Path(value: unknown): string {
+  const result = v4String(value, 'request.matcher.path.value', 512, false)
+  if (
+    !result.startsWith('/') ||
+    result.startsWith('//') ||
+    result.includes('\\') ||
+    result.includes('?') ||
+    result.includes('#') ||
+    /\s/.test(result) ||
+    /%(?:2e|2f|5c|3f|23|25|0[0-9a-f]|1[0-9a-f]|7f)/i.test(result)
+  )
+    fail('request.matcher.path.value is invalid.')
+  try {
+    const parsed = new URL(result, 'https://target.invalid')
+    if (
+      parsed.pathname !== result ||
+      parsed.search ||
+      parsed.hash ||
+      encodeURI(decodeURI(result)) !== result
+    )
+      fail('request.matcher.path.value is invalid.')
+  } catch {
+    fail('request.matcher.path.value is invalid.')
+  }
+  return result
+}
+
+function v4JsonPath(value: unknown): V4PathSegment[] {
+  const path = v4String(value, 'JSONPath', 256, false)
+  if (!path.startsWith('$')) fail('JSONPath is invalid.')
+  const segments: V4PathSegment[] = []
+  let offset = 1
+  let collections = 0
+  while (offset < path.length) {
+    if (segments.length >= 24) fail('JSONPath is invalid.')
+    if (path[offset] === '.') {
+      const match = /^[A-Za-z_][A-Za-z0-9_-]*/.exec(path.slice(offset + 1))
+      if (!match) fail('JSONPath is invalid.')
+      if (['__proto__', 'constructor', 'prototype'].includes(match[0]))
+        fail('JSONPath is invalid.')
+      segments.push({ kind: 'FIELD', key: match[0] })
+      offset += match[0].length + 1
+      continue
+    }
+    if (path[offset] !== '[') fail('JSONPath is invalid.')
+    if (path.startsWith('[*]', offset)) {
+      collections += 1
+      if (collections > 1) fail('JSONPath is invalid.')
+      segments.push({ kind: 'COLLECTION' })
+      offset += 3
+      continue
+    }
+    const index = /^\[(0|[1-9]\d*)\]/.exec(path.slice(offset))
+    if (index) {
+      const number = Number(index[1])
+      if (!Number.isSafeInteger(number) || number >= 200)
+        fail('JSONPath is invalid.')
+      segments.push({ kind: 'INDEX', index: number })
+      offset += index[0].length
+      continue
+    }
+    const quote = path[offset + 1]
+    if (quote !== '"' && quote !== "'") fail('JSONPath is invalid.')
+    const close = path.indexOf(`${quote}]`, offset + 2)
+    if (close < 0) fail('JSONPath is invalid.')
+    const key = path.slice(offset + 2, close)
+    if (
+      !key ||
+      bytes(key) > 128 ||
+      key.includes('"') ||
+      key.includes("'") ||
+      key.includes('\\') ||
+      v4UnsafeString(key) ||
+      ['__proto__', 'constructor', 'prototype'].includes(key)
+    )
+      fail('JSONPath is invalid.')
+    segments.push({ kind: 'FIELD', key })
+    offset = close + 2
+  }
+  return segments
+}
+
+function v4CanonicalPath(segments: readonly V4PathSegment[]): string {
+  let path = '$'
+  for (const segment of segments) {
+    if (segment.kind === 'COLLECTION') path += '[*]'
+    else if (segment.kind === 'INDEX') path += `[${segment.index}]`
+    else if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(segment.key))
+      path += `.${segment.key}`
+    else path += `[${JSON.stringify(segment.key)}]`
+  }
+  return path
+}
+
+function v4Scalar(value: unknown, name: string): void {
+  if (value === null || typeof value === 'boolean') return
+  if (typeof value === 'string') {
+    v4String(value, name)
+    return
+  }
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return
+  fail(`${name} is invalid.`)
+}
+
+function v4Template(
+  value: unknown,
+  variables: ReadonlyMap<string, V4VariableDeclaration>,
+  references: Map<string, number>,
+  depth = 1,
+): void {
+  if (depth > 12) fail('request template is invalid.')
+  if (value === null || typeof value !== 'object') {
+    v4Scalar(value, 'request template scalar')
+    return
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 200) fail('request template is invalid.')
+    for (const item of value) v4Template(item, variables, references, depth + 1)
+    return
+  }
+  const input = v4Record(value, 'request template')
+  if (Object.hasOwn(input, '$var')) {
+    v4Exact(input, ['$var'], 'request template variable')
+    const name = v4Identifier(input.$var, 'request template variable')
+    if (!variables.has(name)) fail('request template variable is invalid.')
+    references.set(name, (references.get(name) ?? 0) + 1)
+    return
+  }
+  if (Object.hasOwn(input, '$object')) {
+    fail('request template must match every request field exactly.')
+  }
+  v4TemplateObject(input, variables, references, depth)
+}
+
+function v4TemplateObject(
+  value: unknown,
+  variables: ReadonlyMap<string, V4VariableDeclaration>,
+  references: Map<string, number>,
+  depth: number,
+): void {
+  const input = v4Record(value, 'request template object')
+  const names = Object.keys(input)
+  if (names.length > 200) fail('request template object is invalid.')
+  for (const name of names) {
+    v4String(name, 'request template key', 128, false)
+    if (name === '$var' || name === '$object' || V4_SECRET_KEY.test(name))
+      fail('request template key is invalid.')
+    v4Template(input[name], variables, references, depth + 1)
+  }
+}
+
+function v4Decimal(value: unknown): boolean {
+  const lexeme =
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    !Object.is(value, -0)
+      ? String(value)
+      : typeof value === 'string'
+        ? value
+        : null
+  if (!lexeme || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(lexeme)) return false
+  if (/^-0(?:\.0+)?$/.test(lexeme)) return false
+  const unsigned = lexeme.startsWith('-') ? lexeme.slice(1) : lexeme
+  const [whole, fraction = ''] = unsigned.split('.')
+  if (fraction.length > 8) return false
+  const magnitude =
+    BigInt(whole) * V4_DECIMAL_SCALE + BigInt(fraction.padEnd(8, '0'))
+  const scaled = lexeme.startsWith('-') ? -magnitude : magnitude
+  return scaled >= -V4_DECIMAL_MAX_SCALED && scaled <= V4_DECIMAL_MAX_SCALED
+}
+
+function v4IsoTimestamp(value: string): boolean {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/.exec(
+      value,
+    )
+  if (!match) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  const second = Number(match[6])
+  const offsetHour = match[8] === undefined ? 0 : Number(match[8])
+  const offsetMinute = match[9] === undefined ? 0 : Number(match[9])
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > (days[month - 1] ?? 0) ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  )
+    return false
+  return Number.isFinite(Date.parse(value))
+}
+
+function v4Date(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return (
+    Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+  )
+}
+
+function v4Variables(
+  value: unknown,
+  purpose: unknown,
+): Map<string, V4VariableDeclaration> {
+  if (!Array.isArray(value) || value.length > 32)
+    fail('connector.variables is invalid.')
+  const result = new Map<string, V4VariableDeclaration>()
+  let previous = ''
+  for (const item of value) {
+    const input = v4Fields(
+      item,
+      ['name', 'scalarType', 'source', 'constraints'],
+      ['name', 'scalarType', 'source'],
+      'connector variable',
+    )
+    const name = v4Identifier(input.name, 'connector variable name')
+    if (result.has(name) || (previous && previous >= name))
+      fail('connector.variables is invalid.')
+    previous = name
+    if (!V4_SCALAR_TYPES.has(input.scalarType as V4ScalarType))
+      fail('connector variable type is invalid.')
+    const scalarType = input.scalarType as V4ScalarType
+    const source = v4Record(input.source, 'connector variable source')
+    let typedSource: V4VariableDeclaration['source']
+    if (source.kind === 'SESSION') {
+      v4Exact(source, ['kind', 'field'], 'connector variable source')
+      if (
+        source.field !== 'periodStart' &&
+        source.field !== 'periodEnd' &&
+        source.field !== 'periodKey'
+      )
+        fail('connector variable source is invalid.')
+      if (
+        (source.field === 'periodKey' && scalarType !== 'STRING') ||
+        (source.field !== 'periodKey' && scalarType !== 'UTC_TIMESTAMP')
+      )
+        fail('connector variable type is invalid.')
+      typedSource = {
+        kind: 'SESSION',
+        field: source.field,
+      }
+    } else if (source.kind === 'BOUND_ACCOUNT') {
+      v4Exact(source, ['kind', 'bindingKey'], 'connector variable source')
+      typedSource = {
+        kind: 'BOUND_ACCOUNT',
+        bindingKey: v4Identifier(
+          source.bindingKey,
+          'connector variable bindingKey',
+        ),
+      }
+    } else if (source.kind === 'CAPTURED_REQUEST') {
+      v4Exact(
+        source,
+        ['kind', 'location', 'selector'],
+        'connector variable source',
+      )
+      if (
+        purpose !== 'ACCOUNT_BINDING' ||
+        (source.location !== 'QUERY' &&
+          source.location !== 'BODY_JSON' &&
+          source.location !== 'BODY_FORM')
+      )
+        fail('connector variable source is invalid.')
+      const selector = v4String(
+        source.selector,
+        'connector variable selector',
+        source.location === 'BODY_JSON' ? 256 : 128,
+        false,
+      )
+      if (source.location === 'BODY_JSON') v4JsonPath(selector)
+      typedSource = {
+        kind: 'CAPTURED_REQUEST',
+        location: source.location,
+        selector,
+      }
+    } else fail('connector variable source is invalid.')
+
+    let constraints: V4VariableDeclaration['constraints']
+    if (input.constraints !== undefined) {
+      const candidate = v4Fields(
+        input.constraints,
+        ['minLength', 'maxLength', 'pattern'],
+        [],
+        'connector variable constraints',
+      )
+      for (const key of ['minLength', 'maxLength'] as const) {
+        const number = candidate[key]
+        if (
+          number !== undefined &&
+          (!Number.isInteger(number) ||
+            (number as number) < 0 ||
+            (number as number) > 1024)
+        )
+          fail('connector variable constraints are invalid.')
+      }
+      if (
+        candidate.minLength !== undefined &&
+        candidate.maxLength !== undefined &&
+        (candidate.minLength as number) > (candidate.maxLength as number)
+      )
+        fail('connector variable constraints are invalid.')
+      if (
+        candidate.pattern !== undefined &&
+        candidate.pattern !== 'ACCOUNT_ID' &&
+        candidate.pattern !== 'EVM_ADDRESS' &&
+        candidate.pattern !== 'ISO_DATE' &&
+        candidate.pattern !== 'DECIMAL'
+      )
+        fail('connector variable constraints are invalid.')
+      constraints = candidate as V4VariableDeclaration['constraints']
+    }
+    result.set(name, {
+      name,
+      scalarType,
+      source: typedSource,
+      ...(constraints ? { constraints } : {}),
+    })
+  }
+  return result
+}
+
+function v4ResolvedValue(
+  declaration: V4VariableDeclaration,
+  value: unknown,
+): V4ResolvedVariable {
+  const input = v4Exact(value, ['type', 'value'], 'resolved variable')
+  if (input.type !== declaration.scalarType)
+    fail('resolved variable type is invalid.')
+  if (declaration.scalarType === 'BOOLEAN') {
+    if (typeof input.value !== 'boolean' || declaration.constraints)
+      fail('resolved variable value is invalid.')
+  } else {
+    const result = v4String(input.value, 'resolved variable value')
+    const length = [...result].length
+    const constraints = declaration.constraints
+    if (
+      (constraints?.minLength !== undefined &&
+        length < constraints.minLength) ||
+      (constraints?.maxLength !== undefined && length > constraints.maxLength)
+    )
+      fail('resolved variable value is invalid.')
+    if (
+      (declaration.scalarType === 'DECIMAL' && !v4Decimal(result)) ||
+      (declaration.scalarType === 'INTEGER' &&
+        !/^-?(?:0|[1-9]\d*)$/.test(result)) ||
+      (declaration.scalarType === 'UTC_TIMESTAMP' && !v4IsoTimestamp(result))
+    )
+      fail('resolved variable value is invalid.')
+    if (
+      (constraints?.pattern === 'ACCOUNT_ID' &&
+        !/^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/.test(result)) ||
+      (constraints?.pattern === 'EVM_ADDRESS' &&
+        !/^0x[0-9A-Fa-f]{40}$/.test(result)) ||
+      (constraints?.pattern === 'ISO_DATE' && !v4Date(result)) ||
+      (constraints?.pattern === 'DECIMAL' && !v4Decimal(result))
+    )
+      fail('resolved variable value is invalid.')
+  }
+  return input as V4ResolvedVariable
+}
+
+function v4ResolvedVariables(
+  value: unknown,
+  variables: ReadonlyMap<string, V4VariableDeclaration>,
+): void {
+  const input = v4Record(value, 'connector.resolved_variables')
+  const expected = [...variables.values()].filter(
+    (item) => item.source.kind !== 'CAPTURED_REQUEST',
+  )
+  const expectedNames = expected.map((item) => item.name).sort()
+  const names = Object.keys(input).sort()
+  if (
+    names.length !== expectedNames.length ||
+    names.some((name, index) => name !== expectedNames[index])
+  )
+    fail('connector.resolved_variables is invalid.')
+  const semanticSources = new Map<string, V4ResolvedVariable>()
+  for (const declaration of expected) {
+    const resolved = v4ResolvedValue(declaration, input[declaration.name])
+    const source = declaration.source
+    if (source.kind === 'CAPTURED_REQUEST')
+      fail('connector.resolved_variables is invalid.')
+    const sourceKey =
+      source.kind === 'SESSION'
+        ? `SESSION:${source.field}`
+        : `BOUND_ACCOUNT:${source.bindingKey}`
+    const previous = semanticSources.get(sourceKey)
+    if (
+      previous &&
+      (previous.type !== resolved.type || previous.value !== resolved.value)
+    )
+      fail('connector.resolved_variables is invalid.')
+    semanticSources.set(sourceKey, resolved)
+  }
+}
+
+function v4VariableReference(
+  value: unknown,
+  variables: ReadonlyMap<string, V4VariableDeclaration>,
+  references: Map<string, number>,
+): void {
+  const input = v4Exact(value, ['$var'], 'pipeline variable')
+  const name = v4Identifier(input.$var, 'pipeline variable')
+  const declaration = variables.get(name)
+  if (!declaration || declaration.source.kind === 'CAPTURED_REQUEST')
+    fail('pipeline variable is invalid.')
+  references.set(name, (references.get(name) ?? 0) + 1)
+}
+
+function v4Operand(
+  value: unknown,
+  variables: ReadonlyMap<string, V4VariableDeclaration>,
+  references: Map<string, number>,
+): void {
+  if (value !== null && typeof value === 'object') {
+    v4VariableReference(value, variables, references)
+    return
+  }
+  v4Scalar(value, 'pipeline operand')
+}
+
+function v4OperandType(
+  value: unknown,
+  variables: ReadonlyMap<string, V4VariableDeclaration>,
+  references: Map<string, number>,
+): { type: V4ScalarType; variable: boolean } {
+  if (value !== null && typeof value === 'object') {
+    const input = v4Exact(value, ['$var'], 'pipeline variable')
+    const name = v4Identifier(input.$var, 'pipeline variable')
+    const declaration = variables.get(name)
+    if (!declaration || declaration.source.kind === 'CAPTURED_REQUEST')
+      fail('pipeline variable is invalid.')
+    references.set(name, (references.get(name) ?? 0) + 1)
+    return { type: declaration.scalarType, variable: true }
+  }
+  v4Scalar(value, 'pipeline operand')
+  return {
+    type:
+      typeof value === 'boolean'
+        ? 'BOOLEAN'
+        : typeof value === 'number'
+          ? 'INTEGER'
+          : 'STRING',
+    variable: false,
+  }
+}
+
+function v4Predicate(
+  value: unknown,
+  variables: ReadonlyMap<string, V4VariableDeclaration>,
+  references: Map<string, number>,
+  state: { leaves: number },
+  depth = 1,
+): void {
+  if (depth > 4) fail('pipeline predicate is invalid.')
+  const input = v4Record(value, 'pipeline predicate')
+  if (input.op === 'ALL' || input.op === 'ANY') {
+    v4Exact(input, ['op', 'predicates'], 'pipeline predicate')
+    if (!Array.isArray(input.predicates) || input.predicates.length === 0)
+      fail('pipeline predicate is invalid.')
+    for (const child of input.predicates)
+      v4Predicate(child, variables, references, state, depth + 1)
+    return
+  }
+  state.leaves += 1
+  if (state.leaves > 32) fail('pipeline predicate is invalid.')
+  if (input.op === 'EXISTS') {
+    v4Exact(input, ['op', 'path'], 'pipeline predicate')
+    v4JsonPath(input.path)
+    return
+  }
+  if (
+    !['EQ', 'NE', 'GT', 'GTE', 'LT', 'LTE', 'IN'].includes(input.op as string)
+  )
+    fail('pipeline predicate is invalid.')
+  v4Exact(input, ['op', 'path', 'value'], 'pipeline predicate')
+  v4JsonPath(input.path)
+  if (input.op === 'IN') {
+    if (
+      !Array.isArray(input.value) ||
+      input.value.length < 1 ||
+      input.value.length > 32
+    )
+      fail('pipeline predicate is invalid.')
+    for (const item of input.value) v4Operand(item, variables, references)
+  } else {
+    if (Array.isArray(input.value)) fail('pipeline predicate is invalid.')
+    v4Operand(input.value, variables, references)
+  }
+}
+
+function v4Unit(value: unknown, name: string): string | undefined {
+  return value === undefined ? undefined : v4String(value, name, 32, false)
+}
+
+function v4ReducerType(reducer: string, input: V4ScalarType): V4ScalarType {
+  if (reducer === 'COUNT' || reducer === 'DISTINCT_COUNT') return 'INTEGER'
+  if (reducer === 'AVG') return 'DECIMAL'
+  return input
+}
+
+function v4ReducerSupports(reducer: string, input: V4ScalarType): boolean {
+  if (['COUNT', 'DISTINCT_COUNT', 'FIRST', 'LAST'].includes(reducer))
+    return true
+  if (reducer === 'MIN' || reducer === 'MAX') return input !== 'BOOLEAN'
+  return input === 'DECIMAL' || input === 'INTEGER'
+}
+
+function v4Pipelines(
+  value: unknown,
+  variables: ReadonlyMap<string, V4VariableDeclaration>,
+  references: Map<string, number>,
+): V4Pipeline[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20)
+    fail('connector.pipelines is invalid.')
+  const result = value as V4Pipeline[]
+  let previous = ''
+  for (const item of result) {
+    const input = v4Fields(
+      item,
+      [
+        'output',
+        'sourcePath',
+        'filter',
+        'orderBy',
+        'groupBy',
+        'valuePath',
+        'cast',
+        'reduce',
+        'postFilter',
+        'finalReduce',
+        'valueUnit',
+        'outputUnit',
+      ],
+      ['output', 'sourcePath', 'cast'],
+      'pipeline',
+    )
+    const output = v4Identifier(input.output, 'pipeline.output')
+    if (previous && previous >= output) fail('connector.pipelines is invalid.')
+    previous = output
+    if (!V4_SCALAR_TYPES.has(input.cast as V4ScalarType))
+      fail('pipeline.cast is invalid.')
+    const cast = input.cast as V4ScalarType
+    const source = v4JsonPath(input.sourcePath)
+    const collection = source.some((segment) => segment.kind === 'COLLECTION')
+    const reduce = input.reduce as string | undefined
+    const finalReduce = input.finalReduce as string | undefined
+    if (
+      reduce !== undefined &&
+      ![
+        'SUM',
+        'COUNT',
+        'DISTINCT_COUNT',
+        'MIN',
+        'MAX',
+        'AVG',
+        'FIRST',
+        'LAST',
+        'LAST_MINUS_FIRST',
+      ].includes(reduce)
+    )
+      fail('pipeline.reduce is invalid.')
+    if (
+      finalReduce !== undefined &&
+      !['COUNT', 'SUM', 'MIN', 'MAX', 'AVG'].includes(finalReduce)
+    )
+      fail('pipeline.finalReduce is invalid.')
+    if (
+      ((input.filter !== undefined ||
+        input.orderBy !== undefined ||
+        input.groupBy !== undefined ||
+        reduce !== undefined) &&
+        !collection) ||
+      (collection && reduce === undefined) ||
+      (input.groupBy !== undefined && reduce === undefined) ||
+      (reduce !== undefined &&
+        reduce !== 'COUNT' &&
+        input.valuePath === undefined) ||
+      (['SUM', 'AVG', 'LAST_MINUS_FIRST'].includes(reduce ?? '') &&
+        cast !== 'DECIMAL' &&
+        cast !== 'INTEGER') ||
+      (['FIRST', 'LAST', 'LAST_MINUS_FIRST'].includes(reduce ?? '') &&
+        input.orderBy === undefined)
+    )
+      fail('pipeline stages are invalid.')
+    if (input.filter !== undefined)
+      v4Predicate(input.filter, variables, references, { leaves: 0 })
+    if (input.orderBy !== undefined) {
+      const order = v4Exact(
+        input.orderBy,
+        ['path', 'direction'],
+        'pipeline.orderBy',
+      )
+      v4JsonPath(order.path)
+      if (order.direction !== 'ASC' && order.direction !== 'DESC')
+        fail('pipeline.orderBy is invalid.')
+    }
+    if (input.groupBy !== undefined) {
+      const group = v4Exact(
+        input.groupBy,
+        ['path', 'interval'],
+        'pipeline.groupBy',
+      )
+      v4JsonPath(group.path)
+      if (group.interval !== 'UTC_DAY') fail('pipeline.groupBy is invalid.')
+    }
+    if (input.valuePath !== undefined) v4JsonPath(input.valuePath)
+    const valueUnit = v4Unit(input.valueUnit, 'pipeline.valueUnit')
+    const outputUnit = v4Unit(input.outputUnit, 'pipeline.outputUnit')
+    if (
+      (finalReduce === undefined && valueUnit !== outputUnit) ||
+      (finalReduce !== undefined &&
+        finalReduce !== 'COUNT' &&
+        valueUnit !== outputUnit) ||
+      ((reduce === 'COUNT' || reduce === 'DISTINCT_COUNT') &&
+        !V4_COUNT_UNITS.has(valueUnit ?? '')) ||
+      (finalReduce === 'COUNT' && !V4_COUNT_UNITS.has(outputUnit ?? ''))
+    )
+      fail('pipeline units are invalid.')
+    let stageType = cast
+    let cardinality: 'SCALAR' | 'COLLECTION' = collection
+      ? 'COLLECTION'
+      : 'SCALAR'
+    if (reduce !== undefined) {
+      if (!v4ReducerSupports(reduce, stageType))
+        fail('pipeline.reduce is invalid.')
+      stageType = v4ReducerType(reduce, stageType)
+      cardinality = input.groupBy === undefined ? 'SCALAR' : 'COLLECTION'
+    }
+    if (input.postFilter !== undefined) {
+      if (cardinality !== 'COLLECTION' || input.groupBy === undefined)
+        fail('pipeline.postFilter is invalid.')
+      const predicate = v4Fields(
+        input.postFilter,
+        ['op', 'value', 'unit'],
+        ['op', 'value'],
+        'pipeline.postFilter',
+      )
+      if (
+        !['EQ', 'NE', 'GT', 'GTE', 'LT', 'LTE'].includes(predicate.op as string)
+      )
+        fail('pipeline.postFilter is invalid.')
+      if (
+        (valueUnit === undefined && Object.hasOwn(predicate, 'unit')) ||
+        (valueUnit !== undefined && predicate.unit !== valueUnit)
+      )
+        fail('pipeline.postFilter is invalid.')
+      const operand = v4OperandType(predicate.value, variables, references)
+      let operandType = operand.type
+      if (stageType === 'DECIMAL' && !operand.variable) {
+        if (!v4Decimal(predicate.value)) fail('pipeline.postFilter is invalid.')
+        operandType = 'DECIMAL'
+      } else if (stageType === 'UTC_TIMESTAMP' && !operand.variable) {
+        if (
+          typeof predicate.value !== 'string' ||
+          !v4IsoTimestamp(predicate.value)
+        )
+          fail('pipeline.postFilter is invalid.')
+        operandType = 'UTC_TIMESTAMP'
+      }
+      const numericMatch =
+        !operand.variable &&
+        (stageType === 'DECIMAL' || stageType === 'INTEGER') &&
+        (operandType === 'DECIMAL' || operandType === 'INTEGER')
+      if (
+        (!numericMatch && operandType !== stageType) ||
+        ((stageType === 'BOOLEAN' || stageType === 'STRING') &&
+          predicate.op !== 'EQ' &&
+          predicate.op !== 'NE')
+      )
+        fail('pipeline.postFilter is invalid.')
+    }
+    if (finalReduce !== undefined) {
+      if (
+        cardinality !== 'COLLECTION' ||
+        !v4ReducerSupports(finalReduce, stageType)
+      )
+        fail('pipeline.finalReduce is invalid.')
+      stageType = v4ReducerType(finalReduce, stageType)
+      cardinality = 'SCALAR'
+    }
+    if (cardinality !== 'SCALAR') fail('pipeline stages are invalid.')
+  }
+  return result
+}
+
+function v4DisclosurePlan(pipelines: readonly V4Pipeline[]) {
+  const keys = new Set<string>()
+  const scalars = new Set<string>()
+  const collections = new Set<string>()
+  const structure = (segments: readonly V4PathSegment[]) => {
+    const prefix: V4PathSegment[] = []
+    for (const segment of segments) {
+      if (segment.kind === 'FIELD') {
+        prefix.push(segment)
+        keys.add(v4CanonicalPath(prefix))
+      } else {
+        collections.add(v4CanonicalPath(prefix))
+        prefix.push(segment)
+      }
+    }
+  }
+  const dependency = (
+    source: readonly V4PathSegment[],
+    path: unknown,
+    scalar = true,
+  ) => {
+    const segments = [...source, ...v4JsonPath(path)]
+    structure(segments)
+    if (scalar) scalars.add(v4CanonicalPath(segments))
+  }
+  const predicateDependencies = (
+    source: readonly V4PathSegment[],
+    predicate: V4Predicate,
+  ) => {
+    if ('predicates' in predicate) {
+      for (const child of predicate.predicates)
+        predicateDependencies(source, child)
+    } else dependency(source, predicate.path, predicate.op !== 'EXISTS')
+  }
+  for (const pipeline of pipelines) {
+    const source = v4JsonPath(pipeline.sourcePath)
+    structure(source)
+    if (
+      !source.some((segment) => segment.kind === 'COLLECTION') &&
+      pipeline.valuePath === undefined
+    )
+      scalars.add(v4CanonicalPath(source))
+    if (pipeline.filter) predicateDependencies(source, pipeline.filter)
+    if (pipeline.orderBy) dependency(source, pipeline.orderBy.path)
+    if (pipeline.groupBy) dependency(source, pipeline.groupBy.path)
+    if (pipeline.valuePath) dependency(source, pipeline.valuePath)
+  }
+  return {
+    key_paths: [...keys].sort(),
+    scalar_paths: [...scalars].sort(),
+    collection_paths: [...collections].sort(),
+  }
+}
+
+function v4TemplateAtPath(
+  value: unknown,
+  segments: readonly V4PathSegment[],
+): unknown {
+  let current = value
+  for (const segment of segments) {
+    if (segment.kind === 'COLLECTION') return undefined
+    if (segment.kind === 'INDEX') {
+      if (!Array.isArray(current)) return undefined
+      current = current[segment.index]
+      continue
+    }
+    if (!current || typeof current !== 'object' || Array.isArray(current))
+      return undefined
+    const object = current as V4Record
+    const wrapped = object.$object as V4Record | undefined
+    const fields = wrapped ? (wrapped.fields as V4Record) : object
+    current = fields[segment.key]
+  }
+  return current
+}
+
+function validateV4Connector(value: unknown): V4Connector {
+  v4PlainData(value)
+  const initial = v4Record(value, 'connector')
+  const purpose = initial.purpose
+  const fields = [
+    'interpreter_version',
+    'connector_id',
+    'revision',
+    'disabled',
+    'purpose',
+    ...(purpose === 'ACCOUNT_BINDING' ? ['account_binding'] : []),
+    'expires_at',
+    'page_origin',
+    'origin',
+    'request',
+    'variables',
+    'resolved_variables',
+    'response_format',
+    'response_status',
+    'disclosure',
+    'pipelines',
+    'verifier_profile_id',
+  ]
+  const input = v4Exact(initial, fields, 'connector')
+  if (
+    input.interpreter_version !== 4 ||
+    input.revision !== 1 ||
+    input.disabled !== false ||
+    (purpose !== 'ACCOUNT_BINDING' && purpose !== 'METRIC') ||
+    input.response_format !== 'json' ||
+    input.response_status !== 200
+  )
+    fail('V4 connector constants are invalid.')
+  v4Identifier(input.connector_id, 'connector_id')
+  v4String(input.expires_at, 'expires_at', 64, false)
+  if (
+    !Number.isFinite(Date.parse(input.expires_at as string)) ||
+    new Date(input.expires_at as string).toISOString() !== input.expires_at
+  )
+    fail('expires_at is invalid.')
+  v4Origin(input.page_origin, 'page_origin')
+  v4Origin(input.origin, 'origin')
+  v4Token(input.verifier_profile_id, 'verifier_profile_id')
+
+  const variables = v4Variables(input.variables, purpose)
+  const references = new Map<string, number>()
+  const requestInput = v4Record(input.request, 'request')
+  const method = requestInput.method
+  const requestFields = [
+    'method',
+    'matcher',
+    ...(method === 'POST' ? ['body', 'content_type'] : []),
+    'replay',
+    'semantics',
+    'secret_headers',
+    'max_sent_data',
+    'max_recv_data',
+  ]
+  const request = v4Exact(requestInput, requestFields, 'request')
+  if (method === 'POST' && request.content_type !== 'application/json')
+    fail('request.content_type is invalid.')
+  if (
+    (method !== 'GET' && method !== 'POST') ||
+    request.replay !== 'EXACT_CAPTURE' ||
+    request.semantics !== 'READ_ONLY_QUERY' ||
+    request.max_sent_data !== 8192 ||
+    !Number.isInteger(request.max_recv_data) ||
+    (request.max_recv_data as number) < 1 ||
+    (request.max_recv_data as number) > 65_536 ||
+    !Array.isArray(request.secret_headers) ||
+    request.secret_headers.length !== 0
+  )
+    fail('V4 request is invalid.')
+  const matcher = v4Exact(
+    request.matcher,
+    ['path', 'query', 'resource_types'],
+    'request.matcher',
+  )
+  const path = v4Exact(matcher.path, ['kind', 'value'], 'request.matcher.path')
+  if (path.kind !== 'exact') fail('request.matcher.path is invalid.')
+  v4Path(path.value)
+  const query = v4Exact(
+    matcher.query,
+    ['required', 'optional', 'capture'],
+    'request.matcher.query',
+  )
+  const requiredQuery = v4Record(
+    query.required,
+    'request.matcher.query.required',
+  )
+  if (Object.keys(requiredQuery).length > 32)
+    fail('request.matcher.query.required is invalid.')
+  if (
+    Object.keys(v4Record(query.optional, 'request.matcher.query.optional'))
+      .length ||
+    Object.keys(v4Record(query.capture, 'request.matcher.query.capture'))
+      .length ||
+    !Array.isArray(matcher.resource_types) ||
+    matcher.resource_types.length !== 3 ||
+    matcher.resource_types.some(
+      (item, index) =>
+        item !== ['main_frame', 'xmlhttprequest', 'fetch'][index],
+    )
+  )
+    fail('request.matcher is invalid.')
+  for (const [name, template] of Object.entries(requiredQuery)) {
+    v4String(name, 'request query key', 128, false)
+    if (V4_SECRET_KEY.test(name)) fail('request query key is invalid.')
+    v4Template(template, variables, references)
+  }
+  if (method === 'POST') {
+    v4Template(request.body, variables, references)
+    if (bytes(JSON.stringify(request.body)) > 8192)
+      fail('request body is too large.')
+  }
+
+  const pipelines = v4Pipelines(input.pipelines, variables, references)
+  v4ResolvedVariables(input.resolved_variables, variables)
+  const binding =
+    purpose === 'ACCOUNT_BINDING'
+      ? v4Exact(
+          input.account_binding,
+          ['providerKey', 'accountVariable', 'walletOutput', 'addressType'],
+          'account_binding',
+        )
+      : undefined
+  if (binding) {
+    if (binding.addressType !== 'EVM') fail('account_binding is invalid.')
+    v4Identifier(binding.providerKey, 'account_binding.providerKey')
+    const accountVariable = v4Identifier(
+      binding.accountVariable,
+      'account_binding.accountVariable',
+    )
+    const walletOutput = v4Identifier(
+      binding.walletOutput,
+      'account_binding.walletOutput',
+    )
+    const declaration = variables.get(accountVariable)
+    const walletPipelines = pipelines.filter(
+      (item) => item.output === walletOutput,
+    )
+    const pipeline = walletPipelines[0]
+    let outputType = pipeline?.cast
+    if (pipeline?.reduce)
+      outputType = v4ReducerType(pipeline.reduce, outputType!)
+    if (pipeline?.finalReduce)
+      outputType = v4ReducerType(pipeline.finalReduce, outputType!)
+    if (
+      declaration?.source.kind !== 'CAPTURED_REQUEST' ||
+      walletPipelines.length !== 1 ||
+      outputType !== 'STRING' ||
+      pipeline.outputUnit !== undefined
+    )
+      fail('account_binding is invalid.')
+  } else if (
+    purpose !== 'METRIC' ||
+    ![...variables.values()].some(
+      (item) => item.source.kind === 'BOUND_ACCOUNT',
+    )
+  )
+    fail('account_binding is invalid.')
+
+  for (const declaration of variables.values()) {
+    if ((references.get(declaration.name) ?? 0) === 0)
+      fail('connector variable is unused.')
+    if (declaration.source.kind !== 'CAPTURED_REQUEST') continue
+    if ((references.get(declaration.name) ?? 0) !== 1)
+      fail('captured variable is ambiguous.')
+    let selected: unknown
+    if (declaration.source.location === 'QUERY')
+      selected = requiredQuery[declaration.source.selector]
+    else if (declaration.source.location === 'BODY_FORM')
+      selected = (request.body as V4Record)[declaration.source.selector]
+    else
+      selected = v4TemplateAtPath(
+        request.body,
+        v4JsonPath(declaration.source.selector),
+      )
+    if (
+      !selected ||
+      typeof selected !== 'object' ||
+      Array.isArray(selected) ||
+      (selected as V4Record).$var !== declaration.name ||
+      Object.keys(selected as V4Record).length !== 1
+    )
+      fail('captured variable selector is invalid.')
+    if (
+      (declaration.source.location === 'BODY_JSON' &&
+        request.content_type !== 'application/json') ||
+      (declaration.source.location === 'BODY_FORM' &&
+        request.content_type !== 'application/x-www-form-urlencoded')
+    )
+      fail('captured variable selector is invalid.')
+  }
+
+  const disclosure = v4Exact(
+    input.disclosure,
+    ['key_paths', 'scalar_paths', 'collection_paths', 'max_elements'],
+    'disclosure',
+  )
+  const expected = v4DisclosurePlan(pipelines)
+  const same = (value: unknown, expectedValue: readonly string[]) =>
+    Array.isArray(value) &&
+    value.length === expectedValue.length &&
+    value.every((item, index) => item === expectedValue[index])
+  if (
+    disclosure.max_elements !== 200 ||
+    !same(disclosure.key_paths, expected.key_paths) ||
+    !same(disclosure.scalar_paths, expected.scalar_paths) ||
+    !same(disclosure.collection_paths, expected.collection_paths)
+  )
+    fail('disclosure is invalid.')
+  if (bytes(canonicalJson(value)) > 65_536) fail('V4 connector is too large.')
+  return value as V4Connector
+}
+
 export function validateConnector(value: unknown): Connector {
   object(value, 'connector')
   if (value.interpreter_version === 1) return validateV1Connector(value)
   if (value.interpreter_version === 2) return validateV2Connector(value)
   if (value.interpreter_version === 3) return validateV3Connector(value)
+  if (value.interpreter_version === 4) return validateV4Connector(value)
   fail('interpreter_version is unsupported.')
 }
 
