@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import type { CapturedRequest } from '../zktls/capture'
 import type { V4Connector } from '../zktls/interpreter'
@@ -21,9 +22,15 @@ const GZIP_NUL = fixedBytes('H4sIAAAAAAAAE6tWqlCyUmJQqgUAz5rj0gkAAAA=')
 const GZIP_DUPLICATE_KEY = fixedBytes(
   'H4sIAAAAAAAAE6tWys9WsiopKk3VAbPSEnOKU2sBcCLeSBYAAAA=',
 )
-const GZIP_INTEGRATION = fixedBytes(
-  'H4sIAAAAAAACE6tWSkxOzi/NK1GyArFKdA2VdJSK8suLlayiq5USc6FShgYGegYGSrWxtQBSPd25MQAAAA==',
-)
+const GZIP_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-gzip.json', 'utf8'),
+) as {
+  connector: V4Connector
+  gzipBase64: string
+  requestBase64: string
+  responseBase64: string
+}
+const GZIP_INTEGRATION = fixedBytes(GZIP_INTEGRATION_FIXTURE.gzipBase64)
 
 function connector(method: 'GET' | 'POST' = 'POST'): V4Connector {
   return {
@@ -135,33 +142,8 @@ function disclosed(
 
 describe('complete V4 public request disclosure', () => {
   test('matches the fixed provider-neutral gzip request bytes', () => {
-    const config = gzipConnector('GET')
-    config.connector_id = 'history-metric'
-    config.request.matcher.path.value = '/v1/history'
-    config.request.matcher.query.required = {
-      account: { $var: 'accountId' },
-    }
-    config.variables = [
-      {
-        name: 'accountId',
-        scalarType: 'STRING',
-        source: { kind: 'BOUND_ACCOUNT', bindingKey: 'example' },
-        constraints: {
-          minLength: 1,
-          maxLength: 128,
-          pattern: 'ACCOUNT_ID',
-        },
-      },
-    ]
-    config.resolved_variables = {
-      accountId: { type: 'STRING', value: 'acct-1' },
-    }
-    const sent = encoder.encode(
-      'GET /v1/history?account=acct-1 HTTP/1.1\r\n' +
-        'Host: api.example.com\r\n' +
-        'Connection: close\r\n' +
-        'Accept-Encoding: gzip\r\n\r\n',
-    )
+    const config = structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
+    const sent = fixedBytes(GZIP_INTEGRATION_FIXTURE.requestBase64)
     const captured: CapturedRequest = {
       path: '/v1/history?account=acct-1',
       method: 'GET',
@@ -597,17 +579,11 @@ function response(
 
 describe('complete V4 JSON response disclosure', () => {
   test('accepts the fixed provider-neutral gzip response bytes', async () => {
-    const received = response(GZIP_INTEGRATION, {
-      headers: [
-        'Content-Type: application/json',
-        `Content-Length: ${GZIP_INTEGRATION.length}`,
-        'Content-Encoding: gzip',
-      ],
-    })
+    const received = fixedBytes(GZIP_INTEGRATION_FIXTURE.responseBase64)
 
     expect(GZIP_INTEGRATION).toHaveLength(61)
     await expect(
-      v4ResponseDisclosureRanges(received, gzipConnector('GET')),
+      v4ResponseDisclosureRanges(received, GZIP_INTEGRATION_FIXTURE.connector),
     ).resolves.toEqual([{ start: 0, end: received.length }])
   })
 

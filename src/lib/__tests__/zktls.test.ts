@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
   proofHttpRequest,
@@ -234,75 +235,17 @@ function v4Connector(): Record<string, unknown> {
   }
 }
 
-function gzipIntegrationConnector(): Record<string, unknown> {
-  return {
-    interpreter_version: 4,
-    connector_id: 'history-metric',
-    revision: 1,
-    disabled: false,
-    purpose: 'METRIC',
-    page_origin: 'https://app.example.com',
-    origin: 'https://api.example.com',
-    request: {
-      method: 'GET',
-      matcher: {
-        path: { kind: 'exact', value: '/v1/history' },
-        query: {
-          required: { account: { $var: 'accountId' } },
-          optional: {},
-          capture: {},
-        },
-        resource_types: ['main_frame', 'xmlhttprequest', 'fetch'],
-      },
-      replay: 'EXACT_CAPTURE',
-      semantics: 'READ_ONLY_QUERY',
-      secret_headers: [],
-      max_sent_data: 8192,
-      max_recv_data: 65_536,
-    },
-    variables: [
-      {
-        name: 'accountId',
-        scalarType: 'STRING',
-        source: { kind: 'BOUND_ACCOUNT', bindingKey: 'example' },
-        constraints: {
-          minLength: 1,
-          maxLength: 128,
-          pattern: 'ACCOUNT_ID',
-        },
-      },
-    ],
-    resolved_variables: {
-      accountId: { type: 'STRING', value: 'acct-1' },
-    },
-    response_format: 'json',
-    response_status: 200,
-    response_content_encoding: 'gzip',
-    max_decoded_data: 65_536,
-    disclosure: {
-      key_paths: ['$.rows', '$.rows[*].amount'],
-      scalar_paths: ['$.rows[*].amount'],
-      collection_paths: ['$.rows'],
-      max_elements: 200,
-    },
-    pipelines: [
-      {
-        output: 'amount',
-        sourcePath: '$.rows[*]',
-        valuePath: '$.amount',
-        cast: 'DECIMAL',
-        reduce: 'SUM',
-        valueUnit: 'USDT',
-        outputUnit: 'USDT',
-      },
-    ],
-    expires_at: '2030-01-01T00:00:00.000Z',
-    verifier_profile_id: 'lighthouse-v1',
-  }
+const GZIP_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-gzip.json', 'utf8'),
+) as {
+  connector: Record<string, unknown>
+  configDigest: string
+  identityConfigDigest: string
 }
 
-const GZIP_INTEGRATION_CANONICAL =
-  '{"connector_id":"history-metric","disabled":false,"disclosure":{"collection_paths":["$.rows"],"key_paths":["$.rows","$.rows[*].amount"],"max_elements":200,"scalar_paths":["$.rows[*].amount"]},"expires_at":"2030-01-01T00:00:00.000Z","interpreter_version":4,"max_decoded_data":65536,"origin":"https://api.example.com","page_origin":"https://app.example.com","pipelines":[{"cast":"DECIMAL","output":"amount","outputUnit":"USDT","reduce":"SUM","sourcePath":"$.rows[*]","valuePath":"$.amount","valueUnit":"USDT"}],"purpose":"METRIC","request":{"matcher":{"path":{"kind":"exact","value":"/v1/history"},"query":{"capture":{},"optional":{},"required":{"account":{"$var":"accountId"}}},"resource_types":["main_frame","xmlhttprequest","fetch"]},"max_recv_data":65536,"max_sent_data":8192,"method":"GET","replay":"EXACT_CAPTURE","secret_headers":[],"semantics":"READ_ONLY_QUERY"},"resolved_variables":{"accountId":{"type":"STRING","value":"acct-1"}},"response_content_encoding":"gzip","response_format":"json","response_status":200,"revision":1,"variables":[{"constraints":{"maxLength":128,"minLength":1,"pattern":"ACCOUNT_ID"},"name":"accountId","scalarType":"STRING","source":{"bindingKey":"example","kind":"BOUND_ACCOUNT"}}],"verifier_profile_id":"lighthouse-v1"}'
+function gzipIntegrationConnector(): Record<string, unknown> {
+  return structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
+}
 
 type MutableV4 = Record<string, unknown> & {
   request: Record<string, unknown> & {
@@ -871,17 +814,16 @@ describe('zkTLS strict boundaries', () => {
     const normalized = validateConnector(gzipIntegrationConnector())
     const canonical = canonicalJson(normalized)
 
-    expect(canonical).toBe(GZIP_INTEGRATION_CANONICAL)
     expect(new TextEncoder().encode(canonical)).toHaveLength(1255)
     await expect(configDigest(normalized)).resolves.toBe(
-      '16ac1215f6f0ab7e91688609b3e8ec100b1788132fc758ea66505078806553c0',
+      GZIP_INTEGRATION_FIXTURE.configDigest,
     )
 
     const identity = gzipIntegrationConnector()
     delete identity.response_content_encoding
     delete identity.max_decoded_data
     await expect(configDigest(validateConnector(identity))).resolves.toBe(
-      '0d25a422bd4192b6081eea809de6b9639e56e8a588f352810131aa0f7f49498f',
+      GZIP_INTEGRATION_FIXTURE.identityConfigDigest,
     )
   })
 
