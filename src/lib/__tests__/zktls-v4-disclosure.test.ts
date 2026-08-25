@@ -21,6 +21,9 @@ const GZIP_NUL = fixedBytes('H4sIAAAAAAAAE6tWqlCyUmJQqgUAz5rj0gkAAAA=')
 const GZIP_DUPLICATE_KEY = fixedBytes(
   'H4sIAAAAAAAAE6tWys9WsiopKk3VAbPSEnOKU2sBcCLeSBYAAAA=',
 )
+const GZIP_INTEGRATION = fixedBytes(
+  'H4sIAAAAAAACE6tWSkxOzi/NK1GyArFKdA2VdJSK8suLlayiq5USc6FShgYGegYGSrWxtQBSPd25MQAAAA==',
+)
 
 function connector(method: 'GET' | 'POST' = 'POST'): V4Connector {
   return {
@@ -131,6 +134,48 @@ function disclosed(
 }
 
 describe('complete V4 public request disclosure', () => {
+  test('matches the fixed provider-neutral gzip request bytes', () => {
+    const config = gzipConnector('GET')
+    config.connector_id = 'history-metric'
+    config.request.matcher.path.value = '/v1/history'
+    config.request.matcher.query.required = {
+      account: { $var: 'accountId' },
+    }
+    config.variables = [
+      {
+        name: 'accountId',
+        scalarType: 'STRING',
+        source: { kind: 'BOUND_ACCOUNT', bindingKey: 'example' },
+        constraints: {
+          minLength: 1,
+          maxLength: 128,
+          pattern: 'ACCOUNT_ID',
+        },
+      },
+    ]
+    config.resolved_variables = {
+      accountId: { type: 'STRING', value: 'acct-1' },
+    }
+    const sent = encoder.encode(
+      'GET /v1/history?account=acct-1 HTTP/1.1\r\n' +
+        'Host: api.example.com\r\n' +
+        'Connection: close\r\n' +
+        'Accept-Encoding: gzip\r\n\r\n',
+    )
+    const captured: CapturedRequest = {
+      path: '/v1/history?account=acct-1',
+      method: 'GET',
+      secrets: {},
+      resource_type: 'fetch',
+      capturedVariables: {},
+    }
+
+    expect(sent).toHaveLength(108)
+    expect(v4RequestDisclosureRanges(sent, config, captured)).toEqual([
+      { start: 0, end: sent.length },
+    ])
+  })
+
   test.each([
     {
       origin: 'https://api.example.com:8443',
@@ -551,6 +596,21 @@ function response(
 }
 
 describe('complete V4 JSON response disclosure', () => {
+  test('accepts the fixed provider-neutral gzip response bytes', async () => {
+    const received = response(GZIP_INTEGRATION, {
+      headers: [
+        'Content-Type: application/json',
+        `Content-Length: ${GZIP_INTEGRATION.length}`,
+        'Content-Encoding: gzip',
+      ],
+    })
+
+    expect(GZIP_INTEGRATION).toHaveLength(61)
+    await expect(
+      v4ResponseDisclosureRanges(received, gzipConnector('GET')),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
+  })
+
   test('reveals the complete compressed HTTP transcript after validating decoded JSON', async () => {
     const received = response(GZIP_JSON, {
       headers: [
