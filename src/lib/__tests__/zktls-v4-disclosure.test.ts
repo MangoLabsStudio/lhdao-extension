@@ -58,6 +58,14 @@ function connector(method: 'GET' | 'POST' = 'POST'): V4Connector {
   }
 }
 
+function gzipConnector(method: 'GET' | 'POST' = 'POST'): V4Connector {
+  return {
+    ...connector(method),
+    response_content_encoding: 'gzip',
+    max_decoded_data: 65_536,
+  }
+}
+
 const path = '/v1/query?account=acct-1'
 const body = '{"account":"acct-1","note":"exact bytes"}'
 
@@ -159,6 +167,101 @@ describe('complete V4 public request disclosure', () => {
 
     expect(ranges).toEqual([{ start: 0, end: sent.length }])
     expect(disclosed(sent, ranges)).toEqual([sent])
+  })
+
+  test.each([
+    'GET',
+    'POST',
+  ] as const)('derives and discloses one exact gzip accept header for %s', (method) => {
+    const requestBody = method === 'POST' ? body : ''
+    const headers = [
+      'Host: api.example.com',
+      'Connection: close',
+      'Accept-Encoding: gzip',
+      ...(method === 'POST'
+        ? [
+            'Content-Type: application/json',
+            `Content-Length: ${encoder.encode(requestBody).length}`,
+          ]
+        : []),
+    ]
+    const sent = request(method, { headers })
+    const details = v4PublicRequestDetails({
+      origin: 'https://api.example.com',
+      method,
+      path,
+      contentEncoding: 'gzip',
+      ...(method === 'POST'
+        ? { body: requestBody, contentType: 'application/json' as const }
+        : {}),
+    })
+
+    expect(details.contentEncoding).toBe('gzip')
+    expect(details.sentByteLength).toBe(sent.length)
+    expect(
+      v4RequestDisclosureRanges(sent, gzipConnector(method), capture(method)),
+    ).toEqual([{ start: 0, end: sent.length }])
+  })
+
+  test.each([
+    ['missing', []],
+    ['duplicate', ['Accept-Encoding: gzip', 'accept-encoding: gzip']],
+    ['wrong case', ['Accept-Encoding: GZIP']],
+    ['combined', ['Accept-Encoding: gzip, br']],
+  ])('rejects a %s gzip accept header', (_, acceptHeaders) => {
+    const sent = request('GET', {
+      headers: ['Host: api.example.com', 'Connection: close', ...acceptHeaders],
+    })
+
+    expect(() =>
+      v4RequestDisclosureRanges(sent, gzipConnector('GET'), capture('GET')),
+    ).toThrow()
+  })
+
+  test('keeps identity request bytes unchanged and rejects ambient gzip', () => {
+    const input = {
+      origin: 'https://api.example.com',
+      method: 'GET' as const,
+      path,
+    }
+    const details = v4PublicRequestDetails(input)
+    const exactIdentity = request('GET')
+    const ambientGzip = request('GET', {
+      headers: [
+        'Host: api.example.com',
+        'Connection: close',
+        'Accept-Encoding: gzip',
+      ],
+    })
+
+    expect(details.sentByteLength).toBe(exactIdentity.length)
+    expect(Object.hasOwn(details, 'contentEncoding')).toBe(false)
+    expect(() =>
+      v4RequestDisclosureRanges(ambientGzip, connector('GET'), capture('GET')),
+    ).toThrow()
+  })
+
+  test('counts the derived gzip header against the signed sent limit', () => {
+    const base = v4PublicRequestDetails({
+      origin: 'https://api.example.com',
+      method: 'GET',
+      path: '/',
+    })
+    const cappedPath = `/${'x'.repeat(8192 - base.sentByteLength)}`
+    const identity = v4PublicRequestDetails({
+      origin: 'https://api.example.com',
+      method: 'GET',
+      path: cappedPath,
+    })
+    const gzip = v4PublicRequestDetails({
+      origin: 'https://api.example.com',
+      method: 'GET',
+      path: cappedPath,
+      contentEncoding: 'gzip',
+    })
+
+    expect(identity.sentByteLength).toBe(8192)
+    expect(gzip.sentByteLength).toBeGreaterThan(8192)
   })
 
   test('accepts the exact POST headers in any order', () => {

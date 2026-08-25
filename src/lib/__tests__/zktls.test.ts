@@ -1716,6 +1716,59 @@ describe('zkTLS strict boundaries', () => {
     ).toBe(String(request.body!.length))
   })
 
+  test('derives the exact gzip V4 POST header from the signed config', async () => {
+    const config = validateConnector({
+      ...v4Connector(),
+      response_content_encoding: 'gzip',
+      max_decoded_data: 65_536,
+    })
+    if (config.interpreter_version !== 4) throw new Error('wrong connector')
+    let ambientHeaderReads = 0
+    const captured = {
+      path: '/v1/volume?day=2026-08-20',
+      method: 'POST' as const,
+      body: '{"operation":"volume","input":{"account":"acct-1","options":{"day":"2026-08-20"}}}',
+      content_type: 'application/json' as const,
+      secrets: {},
+      resource_type: 'fetch' as const,
+      capturedVariables: {},
+    }
+    Object.defineProperty(captured, 'accept_encoding', {
+      enumerable: true,
+      get() {
+        ambientHeaderReads += 1
+        return 'br'
+      },
+    })
+    const message = {
+      id: 'v4-gzip-post-job',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: config.connector_id,
+      config,
+      ticket: { ...ticket, interpreter_version: 4 as const },
+      configEnvelope: { ...configEnvelope, config },
+      ticketEnvelope,
+      captured,
+    }
+
+    await sendProofHttpRequest(message, async (request) => {
+      expect([...request.headers.keys()]).toEqual([
+        'host',
+        'connection',
+        'accept-encoding',
+        'content-type',
+        'content-length',
+      ])
+      expect(
+        new TextDecoder().decode(
+          new Uint8Array(request.headers.get('accept-encoding')!),
+        ),
+      ).toBe('gzip')
+    })
+    expect(ambientHeaderReads).toBe(0)
+  })
+
   test('replays a V4 GET without content, custom, or secret headers', () => {
     const raw = v4Connector()
     const requestConfig = testRecord(raw.request)
@@ -1746,6 +1799,51 @@ describe('zkTLS strict boundaries', () => {
 
     expect(request.body).toBeUndefined()
     expect([...request.headers.keys()]).toEqual(['host', 'connection'])
+  })
+
+  test('derives the exact gzip V4 GET header from the signed config', async () => {
+    const raw = Object.assign(v4Connector(), {
+      response_content_encoding: 'gzip',
+      max_decoded_data: 65_536,
+    })
+    const requestConfig = testRecord(raw.request)
+    requestConfig.method = 'GET'
+    delete requestConfig.body
+    delete requestConfig.content_type
+    testRecord(
+      testRecord(testRecord(requestConfig.matcher).query).required,
+    ).account = { $var: 'accountId' }
+    const config = validateConnector(raw)
+    if (config.interpreter_version !== 4) throw new Error('wrong connector')
+    const message = {
+      id: 'v4-gzip-get-job',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: config.connector_id,
+      config,
+      ticket: { ...ticket, interpreter_version: 4 as const },
+      configEnvelope: { ...configEnvelope, config },
+      ticketEnvelope,
+      captured: {
+        path: '/v1/volume?day=2026-08-20&account=acct-1',
+        secrets: {},
+        resource_type: 'fetch' as const,
+        capturedVariables: {},
+      },
+    }
+
+    await sendProofHttpRequest(message, async (request) => {
+      expect([...request.headers.keys()]).toEqual([
+        'host',
+        'connection',
+        'accept-encoding',
+      ])
+      expect(
+        new TextDecoder().decode(
+          new Uint8Array(request.headers.get('accept-encoding')!),
+        ),
+      ).toBe('gzip')
+    })
   })
 
   test('passes only complete half-open V4 ranges to the prover', async () => {

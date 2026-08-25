@@ -21,12 +21,14 @@ type V4PublicRequestInput = Readonly<{
   path: string
   body?: string
   contentType?: string
+  contentEncoding?: 'gzip'
 }>
 
 export type V4PublicRequestDetails = Readonly<{
   host: string
   body: Uint8Array | undefined
   sentByteLength: number
+  contentEncoding?: 'gzip'
 }>
 
 function fail(): never {
@@ -366,6 +368,7 @@ export function v4PublicRequestDetails(
     `${input.method} ${input.path} HTTP/1.1\r\n` +
     `host: ${host}\r\n` +
     'connection: close\r\n' +
+    (input.contentEncoding === 'gzip' ? 'accept-encoding: gzip\r\n' : '') +
     (body
       ? `content-type: application/json\r\ncontent-length: ${body.length}\r\n`
       : '') +
@@ -374,6 +377,9 @@ export function v4PublicRequestDetails(
     host,
     body,
     sentByteLength: encoder.encode(head).length + (body?.length ?? 0),
+    ...(input.contentEncoding === 'gzip'
+      ? { contentEncoding: input.contentEncoding }
+      : {}),
   }
 }
 
@@ -388,6 +394,7 @@ export function v4RequestDisclosureRanges(
     path: captured.path,
     body: captured.body,
     contentType: captured.content_type,
+    contentEncoding: connector.response_content_encoding,
   })
   if (
     !(sent instanceof Uint8Array) ||
@@ -433,11 +440,15 @@ export function v4RequestDisclosureRanges(
     connector.request.method === 'GET'
       ? new Set(['host', 'connection'])
       : new Set(['host', 'connection', 'content-type', 'content-length'])
+  if (connector.response_content_encoding === 'gzip')
+    allowed.add('accept-encoding')
   if (
     headers.size !== allowed.size ||
     [...headers.keys()].some((name) => !allowed.has(name)) ||
     [...allowed].some((name) => !headers.has(name)) ||
     headers.get('connection') !== 'close' ||
+    (connector.response_content_encoding === 'gzip' &&
+      headers.get('accept-encoding') !== 'gzip') ||
     !expectedAuthorities(connector.origin).has(
       headers.get('host')!.toLowerCase(),
     ) ||
