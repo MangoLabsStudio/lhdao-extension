@@ -939,10 +939,10 @@ function v4PlainData(
 }
 
 function v4DeepFreeze<T>(value: T): T {
-  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+  if (value !== null && typeof value === 'object') {
     for (const key of Reflect.ownKeys(value))
       v4DeepFreeze((value as Record<PropertyKey, unknown>)[key])
-    Object.freeze(value)
+    if (!Object.isFrozen(value)) Object.freeze(value)
   }
   return value
 }

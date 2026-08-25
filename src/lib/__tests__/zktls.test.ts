@@ -897,6 +897,30 @@ describe('zkTLS strict boundaries', () => {
     expect(() => validateConnector(new Proxy(config, {}))).toThrow()
   })
 
+  test.each([
+    'root',
+    'request',
+  ] as const)('deep-freezes nested V4 gzip data below a shallow-frozen %s', (frozenNode) => {
+    const config = Object.assign(cloneV4(), {
+      response_content_encoding: 'gzip',
+      max_decoded_data: 64,
+    })
+    Object.freeze(frozenNode === 'root' ? config : config.request)
+
+    const result = validateConnector(config) as MutableV4
+
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(Object.isFrozen(result.request)).toBe(true)
+    expect(Object.isFrozen(result.request.matcher)).toBe(true)
+    expect(Object.isFrozen(result.request.matcher.query)).toBe(true)
+    expect(() => {
+      result.request.matcher.path = {
+        kind: 'exact',
+        value: '/changed',
+      }
+    }).toThrow()
+  })
+
   test('rejects ALLOW_EXTRA anywhere in a signed V4 request template', () => {
     const body = cloneV4()
     body.request.body = {
