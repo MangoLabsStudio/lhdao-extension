@@ -797,6 +797,106 @@ describe('zkTLS strict boundaries', () => {
     await expect(configDigest(config)).resolves.toMatch(/^[a-f0-9]{64}$/)
   })
 
+  test.each([
+    1, 65_536,
+  ])('parses and freezes the signed V4 gzip response contract at %i bytes', async (maxDecodedData) => {
+    const config = {
+      ...v4Connector(),
+      response_content_encoding: 'gzip',
+      max_decoded_data: maxDecodedData,
+    }
+    const payload = await signedV4Envelopes(config)
+    const { publicKeys, signTicket: _signTicket, ...response } = payload
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+
+    try {
+      const result = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        },
+      )
+
+      expect(result.config).toMatchObject({
+        response_content_encoding: 'gzip',
+        max_decoded_data: maxDecodedData,
+      })
+      expect(Object.isFrozen(result.config)).toBe(true)
+      expect(Object.isFrozen(result.config.request)).toBe(true)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('keeps identity V4 connectors free of gzip response fields', () => {
+    const result = validateConnector(v4Connector())
+
+    expect(Object.hasOwn(result, 'response_content_encoding')).toBe(false)
+    expect(Object.hasOwn(result, 'max_decoded_data')).toBe(false)
+  })
+
+  test.each([
+    { response_content_encoding: 'gzip' },
+    { max_decoded_data: 64 },
+    { response_content_encoding: 'br', max_decoded_data: 64 },
+    { response_content_encoding: 'GZIP', max_decoded_data: 64 },
+    { response_content_encoding: 'gzip', max_decoded_data: 0 },
+    { response_content_encoding: 'gzip', max_decoded_data: 65_537 },
+    { response_content_encoding: 'gzip', max_decoded_data: 1.5 },
+    {
+      response_content_encoding: 'gzip',
+      max_decoded_data: 64,
+      response_encoding_options: {},
+    },
+  ])('rejects invalid V4 gzip response contract %#', (fields) => {
+    expect(() => validateConnector({ ...v4Connector(), ...fields })).toThrow()
+  })
+
+  test('rejects accessor-backed and revoked-proxy V4 gzip fields', () => {
+    const accessor = v4Connector()
+    let reads = 0
+    Object.defineProperty(accessor, 'response_content_encoding', {
+      enumerable: true,
+      get() {
+        reads += 1
+        return 'gzip'
+      },
+    })
+    Object.assign(accessor, { max_decoded_data: 64 })
+
+    expect(() => validateConnector(accessor)).toThrow()
+    expect(reads).toBe(0)
+
+    const { proxy, revoke } = Proxy.revocable(
+      {
+        ...v4Connector(),
+        response_content_encoding: 'gzip',
+        max_decoded_data: 64,
+      },
+      {},
+    )
+    revoke()
+    expect(() => validateConnector(proxy)).toThrow()
+  })
+
+  test('returns a deeply frozen V4 gzip result and rejects proxies', () => {
+    const config = {
+      ...v4Connector(),
+      response_content_encoding: 'gzip',
+      max_decoded_data: 64,
+    }
+    const result = validateConnector(config)
+
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(Object.isFrozen(result.request)).toBe(true)
+    expect(Object.isFrozen((result as MutableV4).request.matcher)).toBe(true)
+    expect(() => validateConnector(new Proxy(config, {}))).toThrow()
+  })
+
   test('rejects ALLOW_EXTRA anywhere in a signed V4 request template', () => {
     const body = cloneV4()
     body.request.body = {
@@ -854,6 +954,7 @@ describe('zkTLS strict boundaries', () => {
       collection_paths: [],
       max_elements: 200,
     }
+    const missingAccountBinding = structuredClone(binding)
 
     expect(validateConnector(binding)).toMatchObject({
       purpose: 'ACCOUNT_BINDING',
@@ -862,8 +963,8 @@ describe('zkTLS strict boundaries', () => {
     expect(() =>
       validateConnector({ ...v4Connector(), account_binding: {} }),
     ).toThrow()
-    delete binding.account_binding
-    expect(() => validateConnector(binding)).toThrow()
+    delete missingAccountBinding.account_binding
+    expect(() => validateConnector(missingAccountBinding)).toThrow()
   })
 
   test('accepts V4 DNS origins with punycode on the default HTTPS port', () => {

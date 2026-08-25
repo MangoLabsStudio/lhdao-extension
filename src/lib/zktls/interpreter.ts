@@ -243,6 +243,8 @@ export type V4Connector = {
   resolved_variables: Record<string, V4ResolvedVariable>
   response_format: 'json'
   response_status: 200
+  response_content_encoding?: 'gzip'
+  max_decoded_data?: number
   disclosure: {
     key_paths: string[]
     scalar_paths: string[]
@@ -934,6 +936,15 @@ function v4PlainData(
     budget.bytes += bytes(key)
     v4PlainData(descriptor.value, budget, seen, depth + 1)
   }
+}
+
+function v4DeepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const key of Reflect.ownKeys(value))
+      v4DeepFreeze((value as Record<PropertyKey, unknown>)[key])
+    Object.freeze(value)
+  }
+  return value
 }
 
 function v4Record(value: unknown, name: string): V4Record {
@@ -1922,8 +1933,20 @@ function v4TemplateAtPath(
 
 function validateV4Connector(value: unknown): V4Connector {
   v4PlainData(value)
+  try {
+    structuredClone(value)
+  } catch {
+    fail('V4 connector is invalid.')
+  }
   const initial = v4Record(value, 'connector')
   const purpose = initial.purpose
+  const hasResponseContentEncoding = Object.hasOwn(
+    initial,
+    'response_content_encoding',
+  )
+  const hasMaxDecodedData = Object.hasOwn(initial, 'max_decoded_data')
+  if (hasResponseContentEncoding !== hasMaxDecodedData)
+    fail('V4 response encoding is invalid.')
   const fields = [
     'interpreter_version',
     'connector_id',
@@ -1939,6 +1962,9 @@ function validateV4Connector(value: unknown): V4Connector {
     'resolved_variables',
     'response_format',
     'response_status',
+    ...(hasResponseContentEncoding
+      ? ['response_content_encoding', 'max_decoded_data']
+      : []),
     'disclosure',
     'pipelines',
     'verifier_profile_id',
@@ -1953,6 +1979,14 @@ function validateV4Connector(value: unknown): V4Connector {
     input.response_status !== 200
   )
     fail('V4 connector constants are invalid.')
+  if (
+    hasResponseContentEncoding &&
+    (input.response_content_encoding !== 'gzip' ||
+      !Number.isInteger(input.max_decoded_data) ||
+      (input.max_decoded_data as number) < 1 ||
+      (input.max_decoded_data as number) > 65_536)
+  )
+    fail('V4 response encoding is invalid.')
   v4Identifier(input.connector_id, 'connector_id')
   v4String(input.expires_at, 'expires_at', 64, false)
   if (
@@ -2133,7 +2167,7 @@ function validateV4Connector(value: unknown): V4Connector {
   )
     fail('disclosure is invalid.')
   if (bytes(canonicalJson(value)) > 65_536) fail('V4 connector is too large.')
-  return value as V4Connector
+  return v4DeepFreeze(value as V4Connector)
 }
 
 export function validateConnector(value: unknown): Connector {
