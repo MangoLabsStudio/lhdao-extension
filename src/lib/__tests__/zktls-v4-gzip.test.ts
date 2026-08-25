@@ -11,7 +11,15 @@ const GZIP_JSON_FIXTURE = fixedBytes(
   'H4sIAAAAAAAAE6tWKkvMKU1VslLKz1aqBQCpVgT8DgAAAA==',
 )
 const GZIP_A_FIXTURE = fixedBytes('H4sIAAAAAAAAE3MEAIue2dMBAAAA')
-const GZIP_B_FIXTURE = fixedBytes('H4sIAAAAAAAAE3MCADHP0EoBAAAA')
+const TWO_MEMBER_GZIP_FIXTURE = fixedBytes(
+  'H4sIAAAAAAAAE6tWKk/MyUktUbJSys9WqgUA1Nr5EA8AAAAfiwgAAAAAAAATAwAAAAAAAAAAAA==',
+)
+const OPTIONAL_FHCRC_GZIP_FIXTURE = fixedBytes(
+  'H4sIHgAAAAAAEwMAAQIDcGF5bG9hZC5qc29uAHByb2R1Y3Qtemt0bHMAEnirVipPzMlJLVGyUsrPVqoFANTa+RAPAAAA',
+)
+const DEFLATE_MAGIC_GZIP_FIXTURE = fixedBytes(
+  'H4sIAAAAAAAEEwEKAPX/eyJ4IjoiH4sifQq+TxQKAAAA',
+)
 const GZIP_65_536_AS_FIXTURE = fixedBytes(
   'H4sIAAAAAAAAE+3BgQAAAACAINb9JRapCgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGr/kSDDAAABAA==',
 )
@@ -53,10 +61,24 @@ describe('V4 bounded gzip decoder', () => {
     )
   })
 
-  test('accepts concatenated valid gzip members', async () => {
+  test('rejects two concatenated valid gzip members', async () => {
+    await expect(v4GunzipJson(TWO_MEMBER_GZIP_FIXTURE, 65_536)).rejects.toThrow(
+      INVALID,
+    )
+  })
+
+  test('accepts the backend fixture with every optional gzip header field', async () => {
     await expect(
-      v4GunzipJson(concat(GZIP_A_FIXTURE, GZIP_B_FIXTURE), 2),
-    ).resolves.toEqual(encoder.encode('AB'))
+      v4GunzipJson(OPTIONAL_FHCRC_GZIP_FIXTURE, 65_536),
+    ).resolves.toEqual(encoder.encode('{"wallet":"ok"}'))
+  })
+
+  test('does not mistake gzip magic bytes inside deflate data for a member', async () => {
+    await expect(
+      v4GunzipJson(DEFLATE_MAGIC_GZIP_FIXTURE, 65_536),
+    ).resolves.toEqual(
+      Uint8Array.of(123, 34, 120, 34, 58, 34, 31, 139, 34, 125),
+    )
   })
 
   test.each([
