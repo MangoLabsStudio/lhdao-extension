@@ -1536,7 +1536,7 @@ describe('zkTLS strict boundaries', () => {
     ).toBeNull()
   })
 
-  test('uses the PR #11 verifier registration and complete replay ranges', () => {
+  test('uses the PR #11 verifier registration and complete replay ranges', async () => {
     const message = {
       id: 'job1',
       type: 'zktls-worker-prove' as const,
@@ -1599,7 +1599,7 @@ describe('zkTLS strict boundaries', () => {
     const received = new TextEncoder().encode(
       'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<span data-user="octocat"></span>',
     )
-    const config = transcriptRevealRanges(message, sent, received)
+    const config = await transcriptRevealRanges(message, sent, received)
     expect(config.sent).toMatchObject([
       { start: 0, end: 'GET /profile/octocat HTTP/1.1\r\n'.length },
     ])
@@ -1608,9 +1608,9 @@ describe('zkTLS strict boundaries', () => {
       end: 'HTTP/1.1 200 OK\r\n'.length,
     })
     expect(config.recv).toHaveLength(4)
-    expect(() =>
+    await expect(
       transcriptRevealRanges({ ...message, config: connector }, sent, received),
-    ).toThrow('JSON connectors are unsupported')
+    ).rejects.toThrow('JSON connectors are unsupported')
   })
 
   test('never registers captured request data or secret values', () => {
@@ -1886,7 +1886,7 @@ describe('zkTLS strict boundaries', () => {
         responseBody,
     )
 
-    const reveal = transcriptRevealRanges(message, sent, received)
+    const reveal = await transcriptRevealRanges(message, sent, received)
 
     expect(reveal).toEqual({
       sent: [{ start: 0, end: sent.length }],
@@ -1972,7 +1972,7 @@ describe('zkTLS strict boundaries', () => {
     const received = new TextEncoder().encode(
       'HTTP/1.1 200 OK\r\nX-Private: "volume":9999\r\nContent-Type: application/json\r\n\r\n{"volume":7200}',
     )
-    const reveal = transcriptRevealRanges(message, sent, received)
+    const reveal = await transcriptRevealRanges(message, sent, received)
     const bodyStart = new TextDecoder().decode(received).indexOf('{')
     expect(
       reveal.recv.slice(1).every((range) => range.start >= bodyStart),
@@ -1993,7 +1993,7 @@ describe('zkTLS strict boundaries', () => {
       return result
     }
     const body = new TextEncoder().encode('{"volume":7200}')
-    expect(() =>
+    await expect(
       transcriptRevealRanges(
         message,
         sent,
@@ -2002,42 +2002,42 @@ describe('zkTLS strict boundaries', () => {
           body,
         ),
       ),
-    ).not.toThrow()
-    expect(() =>
+    ).resolves.toBeDefined()
+    await expect(
       transcriptRevealRanges(
         message,
         sent,
         encodedResponse(`Content-Length: ${body.length + 1}`, body),
       ),
-    ).toThrow('content length')
-    expect(() =>
+    ).rejects.toThrow('content length')
+    await expect(
       transcriptRevealRanges(
         message,
         sent,
         encodedResponse('Transfer-Encoding: chunked', body),
       ),
-    ).toThrow('transfer encoding')
-    expect(() =>
+    ).rejects.toThrow('transfer encoding')
+    await expect(
       transcriptRevealRanges(
         message,
         sent,
         encodedResponse('Content-Encoding: gzip', body),
       ),
-    ).toThrow('content encoding')
-    expect(() =>
+    ).rejects.toThrow('content encoding')
+    await expect(
       transcriptRevealRanges(
         message,
         sent,
         encodedResponse('', new Uint8Array([0xef, 0xbb, 0xbf, ...body])),
       ),
-    ).toThrow('BOM')
-    expect(() =>
+    ).rejects.toThrow('BOM')
+    await expect(
       transcriptRevealRanges(
         message,
         sent,
         encodedResponse('', new Uint8Array([0xff, ...body])),
       ),
-    ).toThrow('UTF-8')
+    ).rejects.toThrow('UTF-8')
 
     const jsonPath = {
       ...config,
@@ -2048,9 +2048,9 @@ describe('zkTLS strict boundaries', () => {
         max_bytes: 32,
       },
     }
-    expect(() =>
+    await expect(
       transcriptRevealRanges({ ...message, config: jsonPath }, sent, received),
-    ).toThrow('JSON connectors are unsupported')
+    ).rejects.toThrow('JSON connectors are unsupported')
   })
 })
 

@@ -424,15 +424,15 @@ function responseBody(received: Uint8Array): {
   throw new Error('bad response body')
 }
 
-export function transcriptRevealRanges(
+export async function transcriptRevealRanges(
   message: ProveMessage,
   sent: Uint8Array,
   received: Uint8Array,
-): TranscriptRanges {
+): Promise<TranscriptRanges> {
   if (isV4Message(message)) {
     return {
       sent: v4RequestDisclosureRanges(sent, message.config, message.captured),
-      recv: v4ResponseDisclosureRanges(received, message.config),
+      recv: await v4ResponseDisclosureRanges(received, message.config),
     }
   }
   if (
@@ -630,7 +630,7 @@ async function prove(message: ProveMessage): Promise<void> {
     const received = new Uint8Array(transcript.recv)
     if (received.length > message.config.request.max_recv_data)
       throw new Error('response exceeded the signed receive limit')
-    const ranges = transcriptRevealRanges(
+    const ranges = await transcriptRevealRanges(
       message,
       new Uint8Array(transcript.sent),
       received,

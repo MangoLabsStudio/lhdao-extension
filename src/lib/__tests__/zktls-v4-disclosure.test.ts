@@ -10,6 +10,18 @@ import {
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
+function fixedBytes(base64: string): Uint8Array {
+  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+}
+
+const GZIP_JSON = fixedBytes('H4sIAAAAAAAAE6tWKkvMKU1VslLKz1aqBQCpVgT8DgAAAA==')
+const GZIP_INVALID_UTF8 = fixedBytes('H4sIAAAAAAAAE/sPAAAAAP8BAAAA')
+const GZIP_BOM = fixedBytes('H4sIAAAAAAAAE3u/e391LQAZeqiKBQAAAA==')
+const GZIP_NUL = fixedBytes('H4sIAAAAAAAAE6tWqlCyUmJQqgUAz5rj0gkAAAA=')
+const GZIP_DUPLICATE_KEY = fixedBytes(
+  'H4sIAAAAAAAAE6tWys9WsiopKk3VAbPSEnOKU2sBcCLeSBYAAAA=',
+)
+
 function connector(method: 'GET' | 'POST' = 'POST'): V4Connector {
   return {
     interpreter_version: 4,
@@ -539,14 +551,110 @@ function response(
 }
 
 describe('complete V4 JSON response disclosure', () => {
-  test('reveals the complete HTTP and JSON transcript in one range', () => {
+  test('reveals the complete compressed HTTP transcript after validating decoded JSON', async () => {
+    const received = response(GZIP_JSON, {
+      headers: [
+        'Content-Type: application/json',
+        `Content-Length: ${GZIP_JSON.length}`,
+        'Content-Encoding: gzip',
+      ],
+    })
+
+    await expect(
+      v4ResponseDisclosureRanges(received, gzipConnector()),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
+  })
+
+  test.each([
+    ['missing', []],
+    ['wrong case', ['Content-Encoding: GZIP']],
+    ['combined', ['Content-Encoding: gzip, br']],
+    ['parameterized', ['Content-Encoding: gzip; q=1']],
+    ['duplicate', ['Content-Encoding: gzip', 'content-encoding: gzip']],
+    ['folded', ['Content-Encoding: gzip', '\tcontinued']],
+    [
+      'transfer encoding',
+      ['Content-Encoding: gzip', 'Transfer-Encoding: chunked'],
+    ],
+  ])('rejects gzip response encoding that is %s', async (_, encodingHeaders) => {
+    const received = response(GZIP_JSON, {
+      headers: [
+        'Content-Type: application/json',
+        `Content-Length: ${GZIP_JSON.length}`,
+        ...encodingHeaders,
+      ],
+    })
+
+    await expect(
+      v4ResponseDisclosureRanges(received, gzipConnector()),
+    ).rejects.toThrow()
+  })
+
+  test('matches gzip content-length to compressed wire bytes', async () => {
+    const received = response(GZIP_JSON, {
+      headers: [
+        'Content-Type: application/json',
+        'Content-Length: 14',
+        'Content-Encoding: gzip',
+      ],
+    })
+
+    await expect(
+      v4ResponseDisclosureRanges(received, gzipConnector()),
+    ).rejects.toThrow()
+  })
+
+  test('applies compressed transcript and decoded gzip limits independently', async () => {
+    const received = response(GZIP_JSON, {
+      headers: [
+        'Content-Type: application/json',
+        `Content-Length: ${GZIP_JSON.length}`,
+        'Content-Encoding: gzip',
+      ],
+    })
+    const wireLimited = gzipConnector()
+    wireLimited.request.max_recv_data = received.length - 1
+    const decodedLimited = gzipConnector()
+    decodedLimited.max_decoded_data = 13
+
+    await expect(
+      v4ResponseDisclosureRanges(received, wireLimited),
+    ).rejects.toThrow()
+    await expect(
+      v4ResponseDisclosureRanges(received, decodedLimited),
+    ).rejects.toThrow()
+  })
+
+  test.each([
+    ['corrupt gzip', Uint8Array.of(1, 2, 3)],
+    ['truncated gzip', GZIP_JSON.slice(0, -1)],
+    ['trailing gzip bytes', new Uint8Array([...GZIP_JSON, 0])],
+    ['invalid decoded UTF-8', GZIP_INVALID_UTF8],
+    ['decoded BOM', GZIP_BOM],
+    ['decoded NUL', GZIP_NUL],
+    ['decoded duplicate key', GZIP_DUPLICATE_KEY],
+  ])('rejects %s', async (_, body) => {
+    const received = response(body, {
+      headers: [
+        'Content-Type: application/json',
+        `Content-Length: ${body.length}`,
+        'Content-Encoding: gzip',
+      ],
+    })
+
+    await expect(
+      v4ResponseDisclosureRanges(received, gzipConnector()),
+    ).rejects.toThrow()
+  })
+
+  test('reveals the complete HTTP and JSON transcript in one range', async () => {
     const received = response(
       '{"scalar":1.25e2,"object":{"ok":true},"array":[null,"rocket 🚀"]}',
     )
 
-    expect(v4ResponseDisclosureRanges(received, connector())).toEqual([
-      { start: 0, end: received.length },
-    ])
+    await expect(
+      v4ResponseDisclosureRanges(received, connector()),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
   })
 
   test.each([
@@ -554,11 +662,11 @@ describe('complete V4 JSON response disclosure', () => {
     'HTTP/1.0 200 Public JSON',
     'HTTP/1.1 200',
     'HTTP/1.1 200 OK',
-  ])('accepts the backend status-line form %s', (startLine) => {
+  ])('accepts the backend status-line form %s', async (startLine) => {
     const received = response('{"ok":true}', { startLine })
-    expect(v4ResponseDisclosureRanges(received, connector())).toEqual([
-      { start: 0, end: received.length },
-    ])
+    await expect(
+      v4ResponseDisclosureRanges(received, connector()),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
   })
 
   test.each([
@@ -566,13 +674,13 @@ describe('complete V4 JSON response disclosure', () => {
     ['wrong version', 'HTTP/2 200 OK'],
     ['tab reason separator', 'HTTP/1.1 200\tOK'],
     ['non-ASCII reason', 'HTTP/1.1 200 成功'],
-  ])('rejects a %s', (_, startLine) => {
-    expect(() =>
+  ])('rejects a %s', async (_, startLine) => {
+    await expect(
       v4ResponseDisclosureRanges(
         response('{"ok":true}', { startLine }),
         connector(),
       ),
-    ).toThrow()
+    ).rejects.toThrow()
   })
 
   test.each([
@@ -626,13 +734,13 @@ describe('complete V4 JSON response disclosure', () => {
         'Bad Header: value',
       ],
     ],
-  ])('rejects %s', (_, headers) => {
-    expect(() =>
+  ])('rejects %s', async (_, headers) => {
+    await expect(
       v4ResponseDisclosureRanges(response('{}', { headers }), connector()),
-    ).toThrow()
+    ).rejects.toThrow()
   })
 
-  test('rejects control bytes and overlong response headers', () => {
+  test('rejects control bytes and overlong response headers', async () => {
     const control = response('{}', {
       headers: [
         'Content-Type: application/json',
@@ -656,7 +764,9 @@ describe('complete V4 JSON response disclosure', () => {
     })
 
     for (const received of [control, long, many]) {
-      expect(() => v4ResponseDisclosureRanges(received, connector())).toThrow()
+      await expect(
+        v4ResponseDisclosureRanges(received, connector()),
+      ).rejects.toThrow()
     }
   })
 
@@ -673,13 +783,13 @@ describe('complete V4 JSON response disclosure', () => {
     ['invalid surrogate pair', String.raw`{"value":"\uD800\u0041"}`],
     ['raw string control', '{"value":"bad\u0001value"}'],
     ['trailing data', '{"ok":true}x'],
-  ])('rejects JSON with %s', (_, body) => {
-    expect(() =>
+  ])('rejects JSON with %s', async (_, body) => {
+    await expect(
       v4ResponseDisclosureRanges(response(body), connector()),
-    ).toThrow()
+    ).rejects.toThrow()
   })
 
-  test('rejects BOM, invalid UTF-8, NUL, and empty evidence', () => {
+  test('rejects BOM, invalid UTF-8, NUL, and empty evidence', async () => {
     const bom = response(
       new Uint8Array([0xef, 0xbb, 0xbf, ...encoder.encode('{}')]),
     )
@@ -692,11 +802,13 @@ describe('complete V4 JSON response disclosure', () => {
     nul[nul.length - 2] = 0
 
     for (const received of [bom, invalidUtf8, nul, new Uint8Array()]) {
-      expect(() => v4ResponseDisclosureRanges(received, connector())).toThrow()
+      await expect(
+        v4ResponseDisclosureRanges(received, connector()),
+      ).rejects.toThrow()
     }
   })
 
-  test('rejects JSON beyond the array, depth, and node limits', () => {
+  test('rejects JSON beyond the array, depth, and node limits', async () => {
     const array = JSON.stringify(Array.from({ length: 201 }, () => 0))
     let nested = '0'
     for (let depth = 0; depth < 13; depth += 1) nested = `[${nested}]`
@@ -708,18 +820,22 @@ describe('complete V4 JSON response disclosure', () => {
     for (const body of [array, nested, nodes]) {
       const received = response(body)
       expect(received.length).toBeLessThanOrEqual(65_536)
-      expect(() => v4ResponseDisclosureRanges(received, connector())).toThrow()
+      await expect(
+        v4ResponseDisclosureRanges(received, connector()),
+      ).rejects.toThrow()
     }
   })
 
-  test('enforces the signed dynamic receive bound and the V4 hard cap', () => {
+  test('enforces the signed dynamic receive bound and the V4 hard cap', async () => {
     const received = response('{"ok":true}')
     const limited = connector()
     limited.request.max_recv_data = received.length - 1
 
-    expect(() => v4ResponseDisclosureRanges(received, limited)).toThrow()
-    expect(() =>
+    await expect(
+      v4ResponseDisclosureRanges(received, limited),
+    ).rejects.toThrow()
+    await expect(
       v4ResponseDisclosureRanges(new Uint8Array(65_537).fill(1), connector()),
-    ).toThrow()
+    ).rejects.toThrow()
   })
 })

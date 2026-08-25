@@ -1,5 +1,6 @@
 import type { CapturedRequest } from './capture'
 import type { V4Connector } from './interpreter'
+import { v4GunzipJson } from './v4-gzip'
 
 export type DisclosureRange = Readonly<{ start: number; end: number }>
 
@@ -54,7 +55,10 @@ function decode(bytes: Uint8Array): string {
   }
 }
 
-function responseBody(received: Uint8Array): Uint8Array {
+function responseBody(
+  received: Uint8Array,
+  contentEncoding?: 'gzip',
+): Uint8Array {
   const lines: Uint8Array[] = []
   let offset = 0
   let bodyOffset = -1
@@ -99,8 +103,10 @@ function responseBody(received: Uint8Array): Uint8Array {
   }
   if (
     headers.has('transfer-encoding') ||
-    headers.has('content-encoding') ||
-    headers.get('content-type') !== 'application/json'
+    headers.get('content-type') !== 'application/json' ||
+    (contentEncoding === 'gzip'
+      ? headers.get('content-encoding') !== 'gzip'
+      : headers.has('content-encoding'))
   )
     return fail()
   const length = headers.get('content-length')
@@ -479,20 +485,30 @@ export function v4RequestDisclosureRanges(
   return [{ start: 0, end: sent.length }]
 }
 
-export function v4ResponseDisclosureRanges(
+export async function v4ResponseDisclosureRanges(
   received: Uint8Array,
   connector: V4Connector,
-): DisclosureRange[] {
+): Promise<DisclosureRange[]> {
   if (
     !(received instanceof Uint8Array) ||
     received.length === 0 ||
     received.length > connector.request.max_recv_data ||
-    received.length > MAX_V4_RESPONSE_BYTES ||
-    received.includes(0)
+    received.length > MAX_V4_RESPONSE_BYTES
   )
     return fail()
-  const text = decode(received)
-  if (encoder.encode(text).length !== received.length) return fail()
-  new StrictResponseJsonParser(responseBody(received)).parse()
-  return [{ start: 0, end: received.length }]
+  const compressed = responseBody(received, connector.response_content_encoding)
+  const body =
+    connector.response_content_encoding === 'gzip'
+      ? await v4GunzipJson(compressed, connector.max_decoded_data!)
+      : compressed
+  try {
+    if (connector.response_content_encoding !== 'gzip') {
+      const text = decode(received)
+      if (encoder.encode(text).length !== received.length) return fail()
+    }
+    new StrictResponseJsonParser(body).parse()
+    return [{ start: 0, end: received.length }]
+  } finally {
+    if (connector.response_content_encoding === 'gzip') body.fill(0)
+  }
 }
