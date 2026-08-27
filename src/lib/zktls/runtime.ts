@@ -225,7 +225,7 @@ async function signedConnector(
   endpoint.searchParams.set('connector_id', connectorId)
   const result = await fetchAndVerifySignedConfig(endpoint.href, {
     publicKeys: ZKTLS_PROFILE.publicKeys,
-    now: new Date().toISOString(),
+    now: () => new Date().toISOString(),
     local: ZKTLS_PROFILE.local,
   })
   if (
@@ -810,52 +810,59 @@ export function registerZkTlsRuntime(): void {
     { urls: ['https://*/*'] },
   )
 
-  chrome.runtime.onMessage.addListener((message: unknown, sender) => {
-    if (!message || typeof message !== 'object') return
-    const raw = message as {
-      type?: unknown
-      requestId?: unknown
-      granted?: unknown
-    }
-    if (raw.type === 'zktls-permission-preview') {
-      const pending = permission
-      if (
-        Object.keys(raw).length !== 2 ||
-        !Object.hasOwn(raw, 'type') ||
-        !Object.hasOwn(raw, 'requestId') ||
-        !pending ||
-        !isPermissionSender(sender, pending.requestId, raw.requestId) ||
-        raw.requestId !== pending.requestId
-      )
-        return null
-      return { origins: pending.origins, connectorId: pending.connectorId }
-    }
-    if (raw.type === 'zktls-permission-result') {
-      const pending = permission
-      if (
-        Object.keys(raw).length !== 3 ||
-        !Object.hasOwn(raw, 'type') ||
-        !Object.hasOwn(raw, 'requestId') ||
-        !Object.hasOwn(raw, 'granted') ||
-        !pending ||
-        !isPermissionSender(sender, pending.requestId, raw.requestId) ||
-        raw.requestId !== pending.requestId ||
-        typeof raw.granted !== 'boolean'
-      )
-        return null
-      const granted = raw.granted
-      return chrome.permissions
-        .contains({ origins: permissionPatterns(pending.origins) })
-        .then(
-          (contained) => {
-            pending.resolve(granted && contained)
-            return null
-          },
-          () => {
-            pending.resolve(false)
-            return null
-          },
+  chrome.runtime.onMessage.addListener(
+    (message: unknown, sender, sendResponse) => {
+      if (!message || typeof message !== 'object') return
+      const raw = message as {
+        type?: unknown
+        requestId?: unknown
+        granted?: unknown
+      }
+      if (raw.type === 'zktls-permission-preview') {
+        const pending = permission
+        if (
+          Object.keys(raw).length !== 2 ||
+          !Object.hasOwn(raw, 'type') ||
+          !Object.hasOwn(raw, 'requestId') ||
+          !pending ||
+          !isPermissionSender(sender, pending.requestId, raw.requestId) ||
+          raw.requestId !== pending.requestId
         )
-    }
-  })
+          return null
+        sendResponse?.({
+          origins: pending.origins,
+          connectorId: pending.connectorId,
+        })
+        return true
+      }
+      if (raw.type === 'zktls-permission-result') {
+        const pending = permission
+        if (
+          Object.keys(raw).length !== 3 ||
+          !Object.hasOwn(raw, 'type') ||
+          !Object.hasOwn(raw, 'requestId') ||
+          !Object.hasOwn(raw, 'granted') ||
+          !pending ||
+          !isPermissionSender(sender, pending.requestId, raw.requestId) ||
+          raw.requestId !== pending.requestId ||
+          typeof raw.granted !== 'boolean'
+        )
+          return null
+        const granted = raw.granted
+        void chrome.permissions
+          .contains({ origins: permissionPatterns(pending.origins) })
+          .then(
+            (contained) => {
+              pending.resolve(granted && contained)
+              sendResponse?.(null)
+            },
+            () => {
+              pending.resolve(false)
+              sendResponse?.(null)
+            },
+          )
+        return true
+      }
+    },
+  )
 }

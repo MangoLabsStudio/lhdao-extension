@@ -5,6 +5,7 @@ import {
   revealTranscript,
   sendProofHttpRequest,
   sessionRegistrationPayload,
+  tlsnWasmModuleUrl,
   transcriptRevealRanges,
   verifierUrls,
 } from '@/entrypoints/zktls-offscreen/worker'
@@ -464,6 +465,32 @@ describe('zkTLS strict boundaries', () => {
       expect(() => {
         ;(result.config as MutableV4).origin = 'https://evil.example.com'
       }).toThrow()
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('checks ticket availability after the signed config response arrives', async () => {
+    const payload = await signedV4Envelopes()
+    const { publicKeys, signTicket: _signTicket, ...response } = payload
+    let responseArrived = false
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      responseArrived = true
+      return jsonResponse(response)
+    })
+    const now = vi.fn(() => {
+      expect(responseArrived).toBe(true)
+      return '2026-08-15T00:00:00.000Z'
+    })
+    try {
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys,
+          now,
+          local: true,
+        }),
+      ).resolves.toMatchObject({ ticket: { interpreter_version: 4 } })
+      expect(now).toHaveBeenCalledOnce()
     } finally {
       fetch.mockRestore()
     }
@@ -1643,6 +1670,22 @@ describe('zkTLS strict boundaries', () => {
     ).rejects.toThrow('JSON connectors are unsupported')
   })
 
+  test('loads TLSNotary from the packaged extension module', () => {
+    expect(
+      tlsnWasmModuleUrl(
+        'chrome-extension://extension/assets/worker-content-hash.js',
+      ),
+    ).toBe('chrome-extension://extension/tlsn_wasm.js')
+    expect(
+      tlsnWasmModuleUrl(
+        'moz-extension://extension/assets/worker-content-hash.js?old=1#hash',
+      ),
+    ).toBe('moz-extension://extension/tlsn_wasm.js')
+    expect(() =>
+      tlsnWasmModuleUrl('https://evil.example/assets/worker.js'),
+    ).toThrow('TLSNotary module URL is invalid')
+  })
+
   test('never registers captured request data or secret values', () => {
     const message = {
       id: 'job2',
@@ -2243,7 +2286,11 @@ describe('zkTLS V4 page and target permissions', () => {
       .spyOn(chrome.tabs, 'create')
       .mockImplementation((async () => ({ id: 9 })) as never)
     let messageListener:
-      | ((message: unknown, sender: chrome.runtime.MessageSender) => unknown)
+      | ((
+          message: unknown,
+          sender: chrome.runtime.MessageSender,
+          sendResponse?: (response?: unknown) => void,
+        ) => unknown)
       | undefined
     vi.spyOn(chrome.runtime.onMessage, 'addListener').mockImplementation(
       (listener) => {
@@ -2269,6 +2316,7 @@ describe('zkTLS V4 page and target permissions', () => {
       ['https://app.example.com', 'https://api.example.com'],
       'product-volume',
     )
+    const pendingRejected = expect(pending).rejects.toThrow()
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
     const permissionPage = chrome.runtime.getURL('zktls-permission.html')
     const requestId = new URL(
@@ -2352,20 +2400,28 @@ describe('zkTLS V4 page and target permissions', () => {
         sender,
       ),
     ).toBeNull()
+    const previewResponse = vi.fn()
     expect(
       messageListener?.(
         { type: 'zktls-permission-preview', requestId },
         sender,
+        previewResponse,
       ),
-    ).toEqual({
+    ).toBe(true)
+    expect(previewResponse).toHaveBeenCalledWith({
       origins: ['https://api.example.com', 'https://app.example.com'],
       connectorId: 'product-volume',
     })
-    await messageListener?.(
-      { type: 'zktls-permission-result', requestId, granted: false },
-      sender,
-    )
-    await expect(pending).rejects.toThrow()
+    const resultResponse = vi.fn()
+    expect(
+      messageListener?.(
+        { type: 'zktls-permission-result', requestId, granted: false },
+        sender,
+        resultResponse,
+      ),
+    ).toBe(true)
+    await vi.waitFor(() => expect(resultResponse).toHaveBeenCalledWith(null))
+    await pendingRejected
   })
 
   test('old permission callbacks cannot settle or clear a newer request', async () => {
@@ -2391,7 +2447,11 @@ describe('zkTLS V4 page and target permissions', () => {
         .spyOn(chrome.tabs, 'create')
         .mockImplementation((async () => ({ id: 9 })) as never)
       let messageListener:
-        | ((message: unknown, sender: chrome.runtime.MessageSender) => unknown)
+        | ((
+            message: unknown,
+            sender: chrome.runtime.MessageSender,
+            sendResponse?: (response?: unknown) => void,
+          ) => unknown)
         | undefined
       vi.spyOn(chrome.runtime.onMessage, 'addListener').mockImplementation(
         (listener) => {
@@ -2416,6 +2476,14 @@ describe('zkTLS V4 page and target permissions', () => {
         await Promise.resolve()
         await Promise.resolve()
       }
+      const dispatch = (
+        message: unknown,
+        sender: chrome.runtime.MessageSender,
+      ) =>
+        new Promise<unknown>((resolve) => {
+          const result = messageListener?.(message, sender, resolve)
+          if (result !== true) resolve(result)
+        })
       const pageSender = (call: number) => {
         const page = new URL(
           (create.mock.calls[call]?.[0] as { url: string }).url,
@@ -2437,14 +2505,14 @@ describe('zkTLS V4 page and target permissions', () => {
       await flush()
       expect(create).toHaveBeenCalledTimes(1)
       const p1 = pageSender(0)
-      const lateFirstResult = messageListener?.(
+      const lateFirstResult = dispatch(
         {
           type: 'zktls-permission-result',
           requestId: p1.requestId,
           granted: true,
         },
         p1.sender,
-      ) as Promise<unknown>
+      )
       await flush()
       expect(deferred.has(2)).toBe(true)
       await vi.advanceTimersByTimeAsync(30_000)
@@ -2463,29 +2531,29 @@ describe('zkTLS V4 page and target permissions', () => {
       const p2 = pageSender(1)
       deferred.get(2)?.(true)
       await lateFirstResult
-      expect(
-        messageListener?.(
+      await expect(
+        dispatch(
           { type: 'zktls-permission-preview', requestId: p2.requestId },
           p2.sender,
         ),
-      ).toMatchObject({ connectorId: 'product-volume' })
+      ).resolves.toMatchObject({ connectorId: 'product-volume' })
 
-      const firstDuplicate = messageListener?.(
+      const firstDuplicate = dispatch(
         {
           type: 'zktls-permission-result',
           requestId: p2.requestId,
           granted: false,
         },
         p2.sender,
-      ) as Promise<unknown>
-      const secondDuplicate = messageListener?.(
+      )
+      const secondDuplicate = dispatch(
         {
           type: 'zktls-permission-result',
           requestId: p2.requestId,
           granted: false,
         },
         p2.sender,
-      ) as Promise<unknown>
+      )
       await flush()
       await firstDuplicate
       await expect(secondOutcome).resolves.toBe('rejected')
@@ -2503,14 +2571,14 @@ describe('zkTLS V4 page and target permissions', () => {
       const p3 = pageSender(2)
       deferred.get(5)?.(true)
       await secondDuplicate
-      expect(
-        messageListener?.(
+      await expect(
+        dispatch(
           { type: 'zktls-permission-preview', requestId: p3.requestId },
           p3.sender,
         ),
-      ).toMatchObject({ connectorId: 'product-volume' })
+      ).resolves.toMatchObject({ connectorId: 'product-volume' })
 
-      await messageListener?.(
+      await dispatch(
         {
           type: 'zktls-permission-result',
           requestId: p3.requestId,

@@ -126,7 +126,7 @@ chrome.runtime.onMessage.addListener((message) => {
           if (other.generation === generation)
             settle(other, { status: 'error', code: 'PROVER_FAILED' })
         }
-      }, 60_000),
+      }, 300_000),
     }
     pending.set(id, job)
     try {

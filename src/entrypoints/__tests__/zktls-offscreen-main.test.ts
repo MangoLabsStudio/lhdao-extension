@@ -99,6 +99,12 @@ describe('zkTLS offscreen worker lifecycle', () => {
     expect(firstCapture).toMatchObject({ path: '', body: '', secrets: {} })
 
     await vi.advanceTimersByTimeAsync(60_000)
+    expect(oldWorker.terminate).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(oldWorker.terminate).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(180_000)
     await expect(first).resolves.toEqual({
       status: 'error',
       code: 'PROVER_TIMEOUT',
@@ -163,7 +169,7 @@ describe('zkTLS offscreen worker lifecycle', () => {
     const uuid = vi.spyOn(crypto, 'randomUUID').mockReturnValue(repeatedId)
     const first = runtimeListener(proofMessage())
     const oldWorker = FakeWorker.instances[0]!
-    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(300_000)
     await first
 
     const second = runtimeListener(proofMessage())

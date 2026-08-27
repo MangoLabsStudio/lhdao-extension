@@ -286,7 +286,7 @@ export async function fetchAndVerifySignedConfig(
   endpoint: string,
   options: {
     publicKeys: Record<string, JsonWebKey>
-    now: string
+    now: string | (() => string)
     local: boolean
   },
 ): Promise<{
@@ -318,12 +318,13 @@ export async function fetchAndVerifySignedConfig(
     payload.config_envelope,
     options.publicKeys,
   )
+  const now = typeof options.now === 'function' ? options.now() : options.now
   const ticket = await verifyTicketEnvelope(payload.ticket_envelope, {
     config,
     publicKeys: options.publicKeys,
-    now: options.now,
+    now,
   })
-  assertConnectorAvailable(config, options.now)
+  assertConnectorAvailable(config, now)
   const configEnvelope = deepFreeze(payload.config_envelope as ConfigEnvelope)
   const ticketEnvelope = deepFreeze(payload.ticket_envelope as TicketEnvelope)
   return {

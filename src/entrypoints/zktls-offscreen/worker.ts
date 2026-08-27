@@ -591,6 +591,24 @@ function assertV4CapturedRequest(message: V4ProveMessage): void {
     throw new Error('captured request did not match the signed provider')
 }
 
+export function tlsnWasmModuleUrl(
+  workerUrl = globalThis.location.href,
+): string {
+  const url = new URL(workerUrl)
+  if (url.protocol !== 'chrome-extension:' && url.protocol !== 'moz-extension:')
+    throw new Error('TLSNotary module URL is invalid')
+  url.pathname = '/tlsn_wasm.js'
+  url.search = ''
+  url.hash = ''
+  return url.href
+}
+
+async function loadTlsnWasm(): Promise<typeof import('tlsn-wasm')> {
+  return import(/* @vite-ignore */ tlsnWasmModuleUrl()) as Promise<
+    typeof import('tlsn-wasm')
+  >
+}
+
 async function prove(message: ProveMessage): Promise<void> {
   if (
     !isV4Message(message) &&
@@ -598,7 +616,7 @@ async function prove(message: ProveMessage): Promise<void> {
     message.config.extraction.kind !== 'regex'
   )
     throw new Error('JSON connectors are unsupported by this runtime')
-  const wasm = await import('tlsn-wasm')
+  const wasm = await loadTlsnWasm()
   await wasm.default()
   await wasm.initialize(null, 1)
   const origin = new URL(message.config.origin)

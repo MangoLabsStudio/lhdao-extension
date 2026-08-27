@@ -9,7 +9,11 @@ import {
   registerZkTlsRuntime,
 } from '@/lib/zktls/runtime'
 import * as signedConfig from '@/lib/zktls/signed-config'
-import { buildActiveCampaignSummaries, flattenTasks } from '../background'
+import {
+  buildActiveCampaignSummaries,
+  flattenTasks,
+  productZkTlsStartGqlOptions,
+} from '../background'
 
 beforeEach(() => {
   const removed = chrome.permissions.onRemoved as unknown as {
@@ -75,6 +79,17 @@ describe('X task indexes', () => {
 })
 
 describe('Product zkTLS jobs', () => {
+  it('allows slow zkTLS start mutations to finish without widening other requests', () => {
+    expect(productZkTlsStartGqlOptions('StartProductZkTlsTestProof')).toEqual({
+      operationName: 'StartProductZkTlsTestProof',
+      timeoutMs: 30_000,
+    })
+    expect(productZkTlsStartGqlOptions('StartProductZkTlsProof')).toEqual({
+      operationName: 'StartProductZkTlsProof',
+      timeoutMs: 30_000,
+    })
+  })
+
   it('rejects concurrent direct and page proof jobs without replacing the active job', async () => {
     Object.defineProperty(chrome.runtime, 'id', {
       value: 'extension',

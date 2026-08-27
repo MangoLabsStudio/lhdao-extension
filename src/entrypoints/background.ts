@@ -345,6 +345,14 @@ function productRuntimeSender(
   }
 }
 
+export function productZkTlsStartGqlOptions(
+  operationName:
+    | typeof StartProductZkTlsProofOperationName
+    | typeof StartProductZkTlsTestProofOperationName,
+) {
+  return { operationName, timeoutMs: 30_000 } as const
+}
+
 function createProductExperienceController(): ProductExperienceController {
   return new ProductExperienceController({
     storage: productExperienceStore,
@@ -397,7 +405,7 @@ function createProductExperienceController(): ProductExperienceController {
         const result = await gql<unknown, StartProductZkTlsTestProofVariables>(
           PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
           { campaignId, ruleId },
-          { operationName: StartProductZkTlsTestProofOperationName },
+          productZkTlsStartGqlOptions(StartProductZkTlsTestProofOperationName),
         )
         return parseStartProductZkTlsTestProofResult(result)
           .startProductZkTlsTestProof
@@ -405,7 +413,7 @@ function createProductExperienceController(): ProductExperienceController {
       const result = await gql<unknown, StartProductZkTlsProofVariables>(
         PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
         { campaignId, ruleId },
-        { operationName: StartProductZkTlsProofOperationName },
+        productZkTlsStartGqlOptions(StartProductZkTlsProofOperationName),
       )
       return parseStartProductZkTlsProofResult(result).startProductZkTlsProof
     },
