@@ -21,8 +21,8 @@ importers:
         specifier: ^19.0.0
         version: 19.2.6(react@19.2.6)
       tlsn-wasm:
-        specifier: 0.1.0-alpha.15
-        version: 0.1.0-alpha.15
+        specifier: file:vendor/tlsn-wasm
+        version: file:vendor/tlsn-wasm
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.2.0
@@ -2191,8 +2191,8 @@ packages:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
 
-  tlsn-wasm@0.1.0-alpha.15:
-    resolution: {integrity: sha512-6NwgWlc56UADOOt5+zwbb+XaSVSS8nz01H5lnG2sAvSUjapNM4mTWHedeHQn1eWJHoIQD3iVt1o7lPhk1fXMoA==}
+  tlsn-wasm@file:vendor/tlsn-wasm:
+    resolution: {directory: vendor/tlsn-wasm, type: directory}
 
   tmp@0.2.5:
     resolution: {integrity: sha512-voyz6MApa1rQGUxT3E+BK7/ROe8itEx7vD8/HEvt4xwXucvQ5G5oeEiHkmHZJuBO21RpOf+YYm9MOivj709jow==}
@@ -4395,7 +4395,7 @@ snapshots:
 
   tinyrainbow@3.1.0: {}
 
-  tlsn-wasm@0.1.0-alpha.15: {}
+  tlsn-wasm@file:vendor/tlsn-wasm: {}
 
   tmp@0.2.5: {}
 

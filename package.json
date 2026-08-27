@@ -28,7 +28,7 @@
     "md5": "^2.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tlsn-wasm": "0.1.0-alpha.15"
+    "tlsn-wasm": "file:vendor/tlsn-wasm"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",
