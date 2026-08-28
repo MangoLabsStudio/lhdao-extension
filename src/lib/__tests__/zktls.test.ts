@@ -1399,6 +1399,18 @@ describe('zkTLS strict boundaries', () => {
     ).toThrow('ticket is unavailable')
   })
 
+  test('allows five seconds of issuer clock skew but keeps expiry strict', () => {
+    expect(() =>
+      assertTicketAvailable(ticket, '2026-08-14T23:59:55.000Z'),
+    ).not.toThrow()
+    expect(() =>
+      assertTicketAvailable(ticket, '2026-08-14T23:59:54.999Z'),
+    ).toThrow('ticket is unavailable')
+    expect(() => assertTicketAvailable(ticket, ticket.expires_at)).toThrow(
+      'ticket is unavailable',
+    )
+  })
+
   test('retains only the original envelopes after schema and binding checks', async () => {
     const payload = await signedEnvelopes()
     const { publicKeys, ...response } = payload

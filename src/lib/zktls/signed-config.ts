@@ -10,6 +10,7 @@ const encoder = new TextEncoder()
 const CONFIG_DOMAIN = 'lighthouse-zktls/config/v1:'
 const TICKET_DOMAIN = 'lighthouse-zktls/session-ticket/v1:'
 const MAX_SIGNED_CONFIG_RESPONSE_BYTES = 72 * 1024
+const TICKET_ISSUED_AT_CLOCK_SKEW_MS = 5_000
 
 export type Ticket = {
   schema: 1
@@ -223,7 +224,7 @@ function validateTicket(value: unknown): Ticket {
 export function assertTicketAvailable(ticket: Ticket, now: string): void {
   const current = isoTime(now, 'now')
   if (
-    current < Date.parse(ticket.issued_at) ||
+    current + TICKET_ISSUED_AT_CLOCK_SKEW_MS < Date.parse(ticket.issued_at) ||
     current >= Date.parse(ticket.expires_at)
   )
     fail('ticket is unavailable.')
