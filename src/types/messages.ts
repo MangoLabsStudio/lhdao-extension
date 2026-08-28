@@ -13,7 +13,7 @@ import type {
 } from '@/lib/binance-square-probe'
 import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
 import type { PublicProductExperienceState } from '@/lib/product-experience-task-bridge'
-import type { LighthouseMember } from '@/lib/queries'
+import type { LighthouseMember, PromoteTweetPricingQuote } from '@/lib/queries'
 import type {
   ActiveCampaignSummary,
   CampaignTaskCache,
@@ -88,10 +88,19 @@ export type MsgRequest =
   | { type: 'verify-task'; campaignId: string }
   /** [legacy] reserve + verify 一锅炖 — 兼容老调用,新代码用 reserve / verify 分两步 */
   | { type: 'submit-task'; campaignId: string }
-  /** 一键推广:推文 + 预算 + 动作 + 档位 → promoteTweet(后端建 ENGAGEMENT 商单) */
+  /** 一键推广:先取服务端冻结报价,再显式确认 promoteTweet。 */
+  | {
+      type: 'preview-promote-tweet-pricing'
+      tweetUrl: string
+      actions: {
+        actionType: PromoteAction
+        tierSlots: Record<string, number>
+      }[]
+    }
   | {
       type: 'promote-tweet'
       tweetUrl: string
+      quoteId: string
       /** 每动作 + 每 tier 招募人数(每动作建一个 ≥2 LUX 子单) */
       actions: {
         actionType: PromoteAction
@@ -274,6 +283,17 @@ export type MsgResponse =
   | { type: 'verify-result'; ok: false; code: SubmitErrorCode; message: string }
   | { type: 'submit-result'; ok: true; reward: number }
   | { type: 'submit-result'; ok: false; code: SubmitErrorCode; message: string }
+  | {
+      type: 'promote-pricing-result'
+      ok: true
+      quote: PromoteTweetPricingQuote
+    }
+  | {
+      type: 'promote-pricing-result'
+      ok: false
+      code: string
+      message: string
+    }
   | {
       type: 'promote-result'
       ok: true
