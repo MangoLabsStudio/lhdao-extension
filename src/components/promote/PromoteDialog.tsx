@@ -1,28 +1,18 @@
 import * as React from 'react'
 import { sendMessage } from '@/lib/messaging'
 import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
-import type { PromoteAction } from '@/types/messages'
+import type { PromoteTweetPricingQuote } from '@/lib/queries'
+import type { MsgResponse, PromoteAction } from '@/types/messages'
 
 /**
  * 一键推广 UI(Shadow DOM React)—— 对齐系统「推文加热」:按 tier 招募人数定价,
  * 每个动作建一个独立 ENGAGEMENT 子单,各子单 ≥ 2 LUX。
  *
  * 录入:选动作(赞/转/评)+ 每 tier 招募人数(同一组人数应用到每个所选动作)。
- * 预算由「人数 × 平台单价」算出(前端预估,服务端为准,含 10% 手续费)。
+ * 金额只展示服务端冻结报价,确认时原样提交 quoteId。
  * 快捷:↻ 按上次配置;🔁 持续复投(成功后给作者建 auto-reinvest)。
  */
 
-// 单价表 = 生产 campaigns/create/engagement-step2.tsx 的 TIER_PRICE(2026-05-27 调价后:
-// COMMENT 的 B/C/D 拉齐到 LIKE 同价)。仅前端预估,实际扣费以服务端价格表为准。
-const PRICE: Record<PromoteAction, Record<string, number>> = {
-  LIKE: { A: 0.4, B: 0.3, C: 0.2, D: 0.1 },
-  RT: { A: 20, B: 15, C: 10, D: 5 },
-  COMMENT: { A: 0.8, B: 0.3, C: 0.2, D: 0.1 },
-}
-// 平台费 10%(与生产「推文加热」口径一致)
-const FEE_RATE = 0.1
-const FEE_PCT = Math.round(FEE_RATE * 100)
-const MIN_PER_ACTION = 2
 const ALL_ACTIONS: { key: PromoteAction; label: string }[] = [
   { key: 'LIKE', label: '赞' },
   { key: 'RT', label: '转发' },
@@ -45,13 +35,6 @@ function loadLast(): LastConfig | null {
   } catch {
     return null
   }
-}
-
-/** 单动作预算 = Σ tier 人数 × 单价 */
-function actionCost(action: PromoteAction, slots: Record<string, number>) {
-  let c = 0
-  for (const t of ALL_TIERS) c += (slots[t] ?? 0) * (PRICE[action]?.[t] ?? 0)
-  return c
 }
 
 function RocketIcon() {
@@ -160,6 +143,45 @@ function ActionGlyph({ kind }: { kind: PromoteAction }) {
 }
 
 type Phase = 'form' | 'loading' | 'done' | 'error'
+type PreviewState = 'idle' | 'loading' | 'ready' | 'error'
+type PromoteRequest = {
+  type: 'promote-tweet'
+  tweetUrl: string
+  actions: { actionType: PromoteAction; tierSlots: Record<string, number> }[]
+  quoteId: string
+  reinvestCount: number
+}
+
+const QUOTE_REFRESH_CODES = new Set([
+  'ENGAGEMENT_PILOT_QUOTE_EXPIRED',
+  'ENGAGEMENT_PILOT_QUOTE_REVOKED',
+  'ENGAGEMENT_PILOT_QUOTE_NOT_FOUND',
+  'ENGAGEMENT_PILOT_QUOTE_MISMATCH',
+  'ENGAGEMENT_PILOT_QUOTE_INVALID',
+])
+const UNCERTAIN_PROMOTE_CODES = new Set([
+  'INTERNAL',
+  'ENGAGEMENT_PILOT_QUOTE_UNAVAILABLE',
+  'ENGAGEMENT_PILOT_QUOTE_STORAGE_UNAVAILABLE',
+])
+
+function pricingErrorMessage(code: string, fallback: string) {
+  if (
+    code === 'PLUGIN_UPGRADE_REQUIRED' ||
+    code === 'ENGAGEMENT_PILOT_QUOTE_REQUIRED'
+  ) {
+    return '当前插件协议不支持报价确认，请升级后重试；若已升级，请稍后再试。'
+  }
+  if (QUOTE_REFRESH_CODES.has(code)) return '报价已变化，请重新确认最新价格。'
+  if (code === 'NO_TOKEN') return '请先连接 Lighthouse 账户。'
+  return fallback || '报价获取失败，请重试。'
+}
+
+function remainingTime(expiresAt: string, nowMs: number) {
+  const seconds = Math.max(0, Math.ceil((Date.parse(expiresAt) - nowMs) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
+}
 
 export function PromoteDialog({
   tweetUrl,
@@ -177,6 +199,20 @@ export function PromoteDialog({
   const [errMsg, setErrMsg] = React.useState('')
   const [balance, setBalance] = React.useState<number | null>(null)
   const [doneMsg, setDoneMsg] = React.useState('')
+  const [quote, setQuote] = React.useState<PromoteTweetPricingQuote | null>(
+    null,
+  )
+  const [previewState, setPreviewState] = React.useState<PreviewState>('idle')
+  const [previewError, setPreviewError] = React.useState('')
+  const [refreshKey, setRefreshKey] = React.useState(0)
+  const [nowMs, setNowMs] = React.useState(() => Date.now())
+  const previewSequence = React.useRef(0)
+  const submitSequence = React.useRef(0)
+  const submittingRef = React.useRef(false)
+  const mountedRef = React.useRef(true)
+  const [retryRequest, setRetryRequest] = React.useState<PromoteRequest | null>(
+    null,
+  )
   const [deviceDenied, setDeviceDenied] = React.useState(false)
   const [reconnectState, setReconnectState] = React.useState<
     'idle' | 'loading' | 'started'
@@ -190,15 +226,46 @@ export function PromoteDialog({
     })
   }, [])
 
-  const toggleAction = (a: PromoteAction) =>
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      previewSequence.current += 1
+      submitSequence.current += 1
+    }
+  }, [])
+
+  React.useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const invalidateQuote = () => {
+    if (submittingRef.current) return
+    previewSequence.current += 1
+    setQuote(null)
+    setPreviewState('idle')
+    setPreviewError('')
+    setPhase('form')
+    setErrMsg('')
+    setRetryRequest(null)
+  }
+  const toggleAction = (a: PromoteAction) => {
+    if (submittingRef.current) return
+    invalidateQuote()
     setActions((prev) =>
       prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a],
     )
-  const setSlot = (tier: string, v: number) =>
+  }
+  const setSlot = (tier: string, v: number) => {
+    if (submittingRef.current) return
+    invalidateQuote()
     setSlots((prev) => ({ ...prev, [tier]: Math.max(0, Math.trunc(v) || 0) }))
+  }
 
   const applyLast = () => {
-    if (!last) return
+    if (!last || submittingRef.current) return
+    invalidateQuote()
     setActions(last.actions)
     setSlots(last.slots)
     setReinvest(last.reinvest)
@@ -206,36 +273,137 @@ export function PromoteDialog({
   }
 
   const totalSlots = ALL_TIERS.reduce((s, t) => s + (slots[t] ?? 0), 0)
-  const perAction = actions.map((a) => ({ a, cost: actionCost(a, slots) }))
-  const belowMin = perAction.filter(
-    (p) => p.cost > 0 && p.cost < MIN_PER_ACTION,
+  const payloadActions = React.useMemo(
+    () =>
+      actions.map((actionType) => {
+        const tierSlots: Record<string, number> = {}
+        for (const tier of ALL_TIERS) {
+          if ((slots[tier] ?? 0) > 0) tierSlots[tier] = slots[tier]
+        }
+        return { actionType, tierSlots }
+      }),
+    [actions, slots],
   )
-  const rewardSum = perAction.reduce((s, p) => s + p.cost, 0)
-  const totalCost = rewardSum * (1 + FEE_RATE)
-  const overBudget = balance != null && totalCost > balance
-  const canSubmit =
-    actions.length > 0 &&
-    totalSlots > 0 &&
-    belowMin.length === 0 &&
-    rewardSum > 0 &&
-    !overBudget
+  const hasQuoteInput = actions.length > 0 && totalSlots > 0
 
-  const submit = async () => {
+  React.useEffect(() => {
+    void refreshKey
+    setQuote(null)
+    setPreviewError('')
+    if (!hasQuoteInput) {
+      setPreviewState('idle')
+      return
+    }
+    const sequence = ++previewSequence.current
+    const controller = new AbortController()
+    setPreviewState('loading')
+    const timer = setTimeout(() => {
+      void sendMessage({
+        type: 'preview-promote-tweet-pricing',
+        tweetUrl,
+        actions: payloadActions,
+      })
+        .then((response) => {
+          if (
+            controller.signal.aborted ||
+            sequence !== previewSequence.current
+          ) {
+            return
+          }
+          if (response.type === 'promote-pricing-result' && response.ok) {
+            setQuote(response.quote)
+            setPreviewState('ready')
+            return
+          }
+          const code =
+            response.type === 'promote-pricing-result'
+              ? response.code
+              : 'INTERNAL'
+          const message =
+            response.type === 'promote-pricing-result'
+              ? response.message
+              : '报价获取失败，请重试。'
+          setPreviewError(pricingErrorMessage(code, message))
+          setPreviewState('error')
+        })
+        .catch(() => {
+          if (
+            controller.signal.aborted ||
+            sequence !== previewSequence.current
+          ) {
+            return
+          }
+          setPreviewError('报价获取失败，请刷新后重试。')
+          setPreviewState('error')
+        })
+    }, 250)
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
+  }, [hasQuoteInput, payloadActions, refreshKey, tweetUrl])
+
+  React.useEffect(() => {
+    if (!quote || Date.parse(quote.expiresAt) > nowMs) return
+    previewSequence.current += 1
+    setQuote(null)
+    setPreviewState('error')
+    setPreviewError('报价已过期，请刷新后重新确认。')
+    setRetryRequest(null)
+  }, [nowMs, quote])
+
+  const canSubmit =
+    phase === 'form' &&
+    previewState === 'ready' &&
+    quote !== null &&
+    Date.parse(quote.expiresAt) > nowMs
+
+  const refreshQuote = () => {
+    if (submittingRef.current) return
+    setPhase('form')
+    setErrMsg('')
+    setRetryRequest(null)
+    setRefreshKey((value) => value + 1)
+  }
+
+  const submit = async (sameRequest?: PromoteRequest) => {
+    if (submittingRef.current) return
+    if (!sameRequest && (!quote || Date.parse(quote.expiresAt) <= Date.now())) {
+      setPreviewError('报价已过期，请刷新后重新确认。')
+      setQuote(null)
+      setPreviewState('error')
+      return
+    }
+    const request =
+      sameRequest ??
+      ({
+        type: 'promote-tweet',
+        tweetUrl,
+        actions: payloadActions,
+        quoteId: quote!.quoteId,
+        reinvestCount: reinvest ? reinvestCount : 0,
+      } satisfies PromoteRequest)
+    submittingRef.current = true
+    const sequence = ++submitSequence.current
     setDeviceDenied(false)
     setReconnectState('idle')
     setPhase('loading')
-    const payloadActions = actions.map((actionType) => {
-      const tierSlots: Record<string, number> = {}
-      for (const t of ALL_TIERS) if (slots[t] > 0) tierSlots[t] = slots[t]
-      return { actionType, tierSlots }
-    })
-    const r = await sendMessage({
-      type: 'promote-tweet',
-      tweetUrl,
-      actions: payloadActions,
-      reinvestCount: reinvest ? reinvestCount : 0,
-    })
+    setErrMsg('')
+    let r: MsgResponse
+    try {
+      r = await sendMessage(request)
+    } catch {
+      r = {
+        type: 'promote-result' as const,
+        ok: false as const,
+        code: 'INTERNAL',
+        message: '插件通信中断，结果可能仍在处理中。',
+      }
+    }
+    if (!mountedRef.current || sequence !== submitSequence.current) return
+    submittingRef.current = false
     if (r.type === 'promote-result' && r.ok) {
+      setRetryRequest(null)
       try {
         localStorage.setItem(
           LAST_KEY,
@@ -247,17 +415,32 @@ export function PromoteDialog({
       )
       setPhase('done')
     } else if (r.type === 'promote-result') {
+      if (QUOTE_REFRESH_CODES.has(r.code)) {
+        setPhase('form')
+        setQuote(null)
+        setPreviewState('error')
+        setPreviewError(pricingErrorMessage(r.code, r.message))
+        setRetryRequest(null)
+        return
+      }
       const denied =
         isPluginDeviceDenied(r.code) || isPluginDeviceDenied(r.message)
-      setDeviceDenied(denied)
+      const authDenied = denied || r.code === 'TOKEN_INVALID'
+      setDeviceDenied(authDenied)
+      if (UNCERTAIN_PROMOTE_CODES.has(r.code)) {
+        setRetryRequest(request)
+      } else {
+        setRetryRequest(null)
+      }
       setErrMsg(
-        denied
+        authDenied
           ? '设备授权已失效，请重新连接后再推广。'
-          : r.message || '推广失败,请重试',
+          : pricingErrorMessage(r.code, r.message || '推广失败,请重试'),
       )
       setPhase('error')
     } else {
-      setErrMsg('推广失败,请重试')
+      setRetryRequest(request)
+      setErrMsg('插件通信中断，结果可能仍在处理中。')
       setPhase('error')
     }
   }
@@ -285,6 +468,7 @@ export function PromoteDialog({
         type="button"
         className="lh-overlay-dismiss"
         aria-label="关闭推广窗口"
+        disabled={phase === 'loading'}
         onClick={onClose}
       />
       <div className="lh-modal">
@@ -293,7 +477,13 @@ export function PromoteDialog({
             <RocketIcon />
             一键推广这条推文
           </span>
-          <button type="button" className="lh-x" onClick={onClose}>
+          <button
+            type="button"
+            className="lh-x"
+            aria-label="关闭推广窗口"
+            disabled={phase === 'loading'}
+            onClick={onClose}
+          >
             ✕
           </button>
         </div>
@@ -312,7 +502,12 @@ export function PromoteDialog({
         ) : (
           <>
             {last && (
-              <button type="button" className="lh-quick" onClick={applyLast}>
+              <button
+                type="button"
+                className="lh-quick"
+                disabled={phase === 'loading'}
+                onClick={applyLast}
+              >
                 ↻ 按上次配置
               </button>
             )}
@@ -326,6 +521,7 @@ export function PromoteDialog({
                   className={
                     actions.includes(a.key) ? 'lh-chip lh-chip-on' : 'lh-chip'
                   }
+                  disabled={phase === 'loading'}
                   onClick={() => toggleAction(a.key)}
                 >
                   <ActionGlyph kind={a.key} />
@@ -345,6 +541,7 @@ export function PromoteDialog({
                     min={0}
                     placeholder="0"
                     value={slots[t] || ''}
+                    disabled={phase === 'loading'}
                     onChange={(e) => setSlot(t, Number(e.currentTarget.value))}
                   />
                 </div>
@@ -355,7 +552,14 @@ export function PromoteDialog({
               <input
                 type="checkbox"
                 checked={reinvest}
-                onChange={(e) => setReinvest(e.currentTarget.checked)}
+                disabled={phase === 'loading'}
+                onChange={(e) => {
+                  if (submittingRef.current) return
+                  setRetryRequest(null)
+                  setPhase('form')
+                  setErrMsg('')
+                  setReinvest(e.currentTarget.checked)
+                }}
               />
               <span>持续复投这个用户</span>
               {reinvest && (
@@ -363,15 +567,20 @@ export function PromoteDialog({
                   className="lh-num lh-num-sm"
                   type="number"
                   min={1}
+                  disabled={phase === 'loading'}
                   value={reinvestCount}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    if (submittingRef.current) return
+                    setRetryRequest(null)
+                    setPhase('form')
+                    setErrMsg('')
                     setReinvestCount(
                       Math.max(
                         1,
                         Math.trunc(Number(e.currentTarget.value)) || 1,
                       ),
                     )
-                  }
+                  }}
                 />
               )}
             </label>
@@ -381,23 +590,102 @@ export function PromoteDialog({
               </div>
             )}
 
-            <div className="lh-est">
-              预估总花费 <b>~{totalCost.toFixed(1)}</b> LUX(含 {FEE_PCT}%
-              手续费)
-              {balance != null && (
-                <span className="lh-bal"> · 余额 {balance.toFixed(1)}</span>
-              )}
-            </div>
-            {belowMin.length > 0 && (
-              <div className="lh-warn">
-                {belowMin
-                  .map((p) => ALL_ACTIONS.find((x) => x.key === p.a)?.label)
-                  .join('/')}{' '}
-                子单低于最低 2 LUX,请增加招募人数
+            {previewState === 'loading' && (
+              <div className="lh-quote-status" role="status">
+                正在获取服务端报价…
               </div>
             )}
-            {overBudget && <div className="lh-warn">余额不足</div>}
+            {quote && (
+              <section
+                className="lh-quote"
+                aria-labelledby="lh-promote-quote-title"
+              >
+                <div className="lh-quote-head">
+                  <span id="lh-promote-quote-title">服务端报价</span>
+                  <b>{quote.totalCost} LUX</b>
+                </div>
+                <div className="lh-quote-meta">
+                  本金 {quote.principal} · 手续费 {quote.promotionFee} LUX
+                  {balance != null && (
+                    <span className="lh-bal"> · 余额 {balance.toFixed(1)}</span>
+                  )}
+                </div>
+                <div className="lh-quote-expiry">
+                  {new Date(quote.expiresAt).toISOString()} UTC 前有效 · 剩余{' '}
+                  {remainingTime(quote.expiresAt, nowMs)}
+                </div>
+                <div className="lh-quote-scroll">
+                  <table className="lh-quote-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">动作/档</th>
+                        <th scope="col">来源</th>
+                        <th scope="col">今日</th>
+                        <th scope="col">明日预计</th>
+                        <th scope="col">数量</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {quote.lines.map((line) => (
+                        <tr
+                          key={`${line.campaignIndex}:${line.actionType}:${line.tier}`}
+                        >
+                          <td>
+                            {line.actionType}/{line.tier}
+                          </td>
+                          <td>
+                            {line.pricingSource === 'PILOT' ? '试点' : '正式价'}
+                          </td>
+                          <td>今日 {line.todayPrice}</td>
+                          <td>明日预计 {line.tomorrowExpectedPrice}</td>
+                          <td>{line.quantity}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {quote.lines
+                  .filter((line) => line.schedule?.length)
+                  .map((line) => (
+                    <section
+                      key={`schedule:${line.campaignIndex}:${line.actionType}:${line.tier}`}
+                      className="lh-schedule-wrap"
+                      aria-label={`${line.actionType}/${line.tier} 价格日程`}
+                    >
+                      <b>
+                        {line.actionType}/{line.tier} 价格日程
+                      </b>
+                      <div className="lh-schedule">
+                        {line.schedule!.map((point) => (
+                          <span key={point.dayIndex}>
+                            第 {point.dayIndex} 日 {point.unitPrice}
+                          </span>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+              </section>
+            )}
+            {previewError && <div className="lh-warn">{previewError}</div>}
+            {previewState === 'error' && hasQuoteInput && (
+              <button
+                type="button"
+                className="lh-secondary"
+                onClick={refreshQuote}
+              >
+                刷新报价
+              </button>
+            )}
             {phase === 'error' && <div className="lh-warn">{errMsg}</div>}
+            {phase === 'error' && retryRequest && (
+              <button
+                type="button"
+                className="lh-secondary"
+                onClick={() => void submit(retryRequest)}
+              >
+                重试同一请求
+              </button>
+            )}
             {phase === 'error' && deviceDenied && (
               <button
                 type="button"
@@ -416,13 +704,13 @@ export function PromoteDialog({
             <button
               type="button"
               className="lh-primary"
-              disabled={!canSubmit || phase === 'loading' || deviceDenied}
-              onClick={submit}
+              disabled={!canSubmit || deviceDenied}
+              onClick={() => void submit()}
             >
               {phase === 'loading' ? '提交中…' : '确认推广'}
             </button>
             <div className="lh-fine">
-              每个动作建一个 ≥2 LUX 子单 · 预算 = 人数 × 平台单价
+              价格由 Lighthouse 服务端冻结；确认后才会扣款
             </div>
           </>
         )}
@@ -532,13 +820,23 @@ export const promoteDialogCss = `
   .lh-num-sm { width: 60px; margin-left: 10px; }
   .lh-reinvest { display: flex; align-items: center; gap: 9px; margin-top: 16px; font-size: 13px; font-weight: 700; color: #c4ccd6; cursor: pointer; }
   .lh-reinvest input[type=checkbox] { width: 17px; height: 17px; accent-color: #0EA5A4; cursor: pointer; }
-  .lh-est {
-    margin: 16px 0 2px; padding: 12px 14px; border-radius: 13px;
-    background: linear-gradient(135deg, rgba(14,165,164,0.13) 0%, rgba(8,145,178,0.1) 100%);
-    border: 1px solid rgba(45,212,191,0.2);
-    font-size: 13px; color: #cbd5e1;
+  .lh-quote-status { margin-top: 14px; font-size: 12px; color: #7dd3fc; }
+  .lh-quote {
+    margin-top: 14px; padding: 12px; min-width: 0; overflow: hidden;
+    border: 1px solid rgba(45,212,191,0.22); border-radius: 14px;
+    background: linear-gradient(145deg, rgba(14,165,164,0.12), rgba(8,145,178,0.05));
   }
-  .lh-est b { color: #5eead4; font-size: 16px; }
+  .lh-quote-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: #a7f3d0; font-size: 12px; font-weight: 800; }
+  .lh-quote-head b { color: #f0fdfa; font-size: 16px; white-space: nowrap; }
+  .lh-quote-meta, .lh-quote-expiry { margin-top: 5px; color: #8ea0b3; font-size: 10.5px; line-height: 1.45; }
+  .lh-quote-scroll { margin-top: 10px; max-width: 100%; overflow-x: auto; }
+  .lh-quote-table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 10.5px; text-align: left; }
+  .lh-quote-table th { padding: 6px; color: #64748b; font-weight: 700; white-space: nowrap; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .lh-quote-table td { padding: 7px 6px; color: #cbd5e1; white-space: nowrap; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .lh-schedule { display: flex; gap: 6px; margin-top: 9px; padding-bottom: 2px; overflow-x: auto; }
+  .lh-schedule span { flex: 0 0 auto; padding: 5px 7px; border-radius: 7px; background: rgba(15,23,42,0.65); color: #94a3b8; font-size: 10px; }
+  .lh-schedule-wrap { margin-top: 9px; min-width: 0; }
+  .lh-schedule-wrap > b { color: #a5f3fc; font-size: 10.5px; }
   .lh-bal { color: #7c8a9a; font-weight: 600; }
   .lh-warn { margin-top: 8px; font-size: 12.5px; font-weight: 700; color: #f87171; }
   .lh-primary {
@@ -551,6 +849,8 @@ export const promoteDialogCss = `
   .lh-primary:hover:not(:disabled) { filter: brightness(1.06); }
   .lh-primary:active:not(:disabled) { transform: translateY(1px); }
   .lh-primary:disabled { opacity: 0.42; cursor: not-allowed; box-shadow: none; }
+  .lh-secondary { width: 100%; margin-top: 10px; padding: 9px; border: 1px solid rgba(103,232,249,0.3); border-radius: 11px; background: rgba(8,145,178,0.08); color: #a5f3fc; font-size: 12px; font-weight: 800; cursor: pointer; }
+  .lh-primary:focus-visible, .lh-secondary:focus-visible, .lh-chip:focus-visible, .lh-quick:focus-visible, .lh-x:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
   .lh-fine { margin-top: 10px; font-size: 11px; color: #5b6675; text-align: center; }
   .lh-result { text-align: center; padding: 14px 4px 4px; }
   .lh-result-emoji { display: flex; justify-content: center; }

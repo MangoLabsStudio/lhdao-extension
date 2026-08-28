@@ -10,6 +10,7 @@ import {
   MintProductExperienceTicketOperationName,
   MY_RESERVED_ENGAGEMENTS_QUERY,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+  PROMOTE_TWEET_MUTATION,
   ProductZkTlsRuleProgressOperationName,
   StartProductZkTlsProofOperationName,
   StartProductZkTlsTestProofOperationName,
@@ -55,7 +56,7 @@ const PRODUCT_EXPERIENCE_OPERATIONS = [
 ] as const
 
 describe('PLUGIN_OPERATIONS', () => {
-  it('contains exactly the approved 19 plugin operations', () => {
+  it('contains the quote preview and versioned quoted spend operations', () => {
     expect(
       PLUGIN_OPERATIONS.map((operation) => operation.operationName),
     ).toEqual([
@@ -70,6 +71,7 @@ describe('PLUGIN_OPERATIONS', () => {
       'ReportEngagementCapture',
       'MintEngagementTicket',
       'SubmitEngagementProof',
+      'PreviewPromoteTweetPricing',
       'PromoteTweet',
       'CreateAutoReinvestTask',
       'MintProductExperienceTicket',
@@ -79,6 +81,9 @@ describe('PLUGIN_OPERATIONS', () => {
       'StartProductZkTlsTestProof',
       'ProductZkTlsRuleProgress',
     ])
+    expect(
+      getPluginOperationByDocument(PROMOTE_TWEET_MUTATION, 'PromoteTweet'),
+    ).toMatchObject({ id: 'spend.promote.v1', permission: 'spend' })
   })
 
   it('keeps every checked-in document hash in sync', async () => {

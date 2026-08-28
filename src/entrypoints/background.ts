@@ -60,10 +60,14 @@ import {
   type MyReservedEngagementsResult,
   POLL_EXTENSION_PAIRING_QUERY,
   type PollExtensionPairingResult,
+  PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
+  type PreviewPromoteTweetPricingResult,
+  type PreviewPromoteTweetPricingVars,
   ProductZkTlsRuleProgressOperationName,
   type ProductZkTlsRuleProgressVariables,
+  type PromoteTweetPricingQuote,
   type PromoteTweetResult,
   type PromoteTweetVars,
   parseMintProductExperienceTestTicketResult,
@@ -613,6 +617,9 @@ export default defineBackground(() => {
     if (req.type === 'promote-tweet') {
       return promoteTweetHandler(req)
     }
+    if (req.type === 'preview-promote-tweet-pricing') {
+      return previewPromoteTweetPricingHandler(req)
+    }
     if (req.type === 'get-balance') {
       const p = await sessionStore.get('userProfile')
       return { type: 'balance-result', balance: p?.newLux ?? null }
@@ -1093,11 +1100,12 @@ export function flattenTasks(
  */
 /**
  * 一键推广:调后端 promoteTweet(带 plugin token)建 ENGAGEMENT 商单。
- * 后端按平台价格表 + 余额校验 + 10% 手续费处理;前端只传 预算/动作/档位。
+ * 后端按冻结报价 + 余额校验 + 现有手续费处理;前端提交原 quoteId。
  */
-async function promoteTweetHandler(req: {
+export async function promoteTweetHandler(req: {
   tweetUrl: string
   actions: { actionType: string; tierSlots: Record<string, number> }[]
+  quoteId: string
   reinvestCount?: number
 }): Promise<MsgResponse> {
   const token = await localStore.get('apiToken')
@@ -1110,7 +1118,11 @@ async function promoteTweetHandler(req: {
     }
   }
   const promoteVariables: PromoteTweetVars = {
-    input: { tweetUrl: req.tweetUrl, actions: req.actions },
+    input: {
+      quoteId: req.quoteId,
+      tweetUrl: req.tweetUrl,
+      actions: req.actions,
+    },
   }
   const promoteKey = spendActionKey('promote', promoteVariables)
   try {
@@ -1149,13 +1161,155 @@ async function promoteTweetHandler(req: {
     }
     const msg = e instanceof GqlError ? e.message : String(e)
     const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
-    let code = 'INTERNAL'
+    let code = pluginPricingErrorCode(e)
     if (httpStatus === 401) code = 'TOKEN_INVALID'
     else if (/Insufficient|余额/.test(msg)) code = 'INSUFFICIENT_BALANCE'
     else if (/DUPLICATE/.test(msg)) code = 'DUPLICATE'
     else if (/最低|MIN_BUDGET/.test(msg)) code = 'MIN_BUDGET'
     return { type: 'promote-result', ok: false, code, message: msg }
   }
+}
+
+export async function previewPromoteTweetPricingHandler(req: {
+  tweetUrl: string
+  actions: { actionType: string; tierSlots: Record<string, number> }[]
+}): Promise<MsgResponse> {
+  const token = await localStore.get('apiToken')
+  if (!token) {
+    return {
+      type: 'promote-pricing-result',
+      ok: false,
+      code: 'NO_TOKEN',
+      message: '请先在插件 options 配置 plugin token',
+    }
+  }
+  const variables: PreviewPromoteTweetPricingVars = {
+    input: { tweetUrl: req.tweetUrl, actions: req.actions },
+  }
+  try {
+    const data = await gql<
+      PreviewPromoteTweetPricingResult,
+      PreviewPromoteTweetPricingVars
+    >(PREVIEW_PROMOTE_TWEET_PRICING_QUERY, variables)
+    if (!isPromoteTweetPricingQuote(data.previewPromoteTweetPricing)) {
+      return {
+        type: 'promote-pricing-result',
+        ok: false,
+        code: 'PLUGIN_PRICING_RESPONSE_INVALID',
+        message: '报价响应无效，请刷新后重试。',
+      }
+    }
+    return {
+      type: 'promote-pricing-result',
+      ok: true,
+      quote: data.previewPromoteTweetPricing,
+    }
+  } catch (e) {
+    const message = e instanceof GqlError ? e.message : String(e)
+    return {
+      type: 'promote-pricing-result',
+      ok: false,
+      code: pluginPricingErrorCode(e),
+      message,
+    }
+  }
+}
+
+const MONEY_STRING = /^\d+(?:\.\d+)?$/
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isMoneyString(value: unknown): value is string {
+  return typeof value === 'string' && MONEY_STRING.test(value)
+}
+
+function isValidDateString(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value))
+}
+
+function isPromoteTweetPricingQuote(
+  value: unknown,
+): value is PromoteTweetPricingQuote {
+  if (
+    !isRecord(value) ||
+    typeof value.quoteId !== 'string' ||
+    value.quoteId.length === 0 ||
+    typeof value.priceVersion !== 'string' ||
+    value.priceVersion.length === 0 ||
+    value.currency !== 'LUX' ||
+    !Number.isInteger(value.precision) ||
+    (value.precision as number) < 0 ||
+    !isValidDateString(value.quotedAt) ||
+    !isValidDateString(value.expiresAt) ||
+    !isMoneyString(value.principal) ||
+    !isMoneyString(value.feeRate) ||
+    !isMoneyString(value.promotionFee) ||
+    !isMoneyString(value.totalCost) ||
+    !Array.isArray(value.lines)
+  ) {
+    return false
+  }
+  return value.lines.every((line) => {
+    if (
+      !isRecord(line) ||
+      !Number.isInteger(line.campaignIndex) ||
+      (line.campaignIndex as number) < 0 ||
+      typeof line.actionType !== 'string' ||
+      line.actionType.length === 0 ||
+      typeof line.tier !== 'string' ||
+      line.tier.length === 0 ||
+      !Number.isInteger(line.quantity) ||
+      (line.quantity as number) <= 0 ||
+      (line.pricingSource !== 'PILOT' && line.pricingSource !== 'LEGACY') ||
+      !isMoneyString(line.unitPrice) ||
+      !isMoneyString(line.principal) ||
+      !isMoneyString(line.todayPrice) ||
+      !isMoneyString(line.tomorrowExpectedPrice) ||
+      (line.schedule !== null && !Array.isArray(line.schedule))
+    ) {
+      return false
+    }
+    return (
+      line.schedule === null ||
+      line.schedule.every(
+        (point) =>
+          isRecord(point) &&
+          Number.isInteger(point.dayIndex) &&
+          (point.dayIndex as number) >= 0 &&
+          isMoneyString(point.unitPrice),
+      )
+    )
+  })
+}
+
+function pluginPricingErrorCode(error: unknown): string {
+  if (!(error instanceof GqlError)) return 'INTERNAL'
+  const candidates = [
+    ...(error.graphqlErrors ?? []).map((entry) => entry.extensions?.code),
+    error.message,
+  ]
+  if (
+    candidates.some((value) =>
+      /PLUGIN_OPERATION_DENIED|PLUGIN_SECURITY_REQUIRED|ENGAGEMENT_PILOT_QUOTE_REQUIRED/.test(
+        String(value),
+      ),
+    )
+  ) {
+    return 'PLUGIN_UPGRADE_REQUIRED'
+  }
+  for (const code of [
+    'ENGAGEMENT_PILOT_QUOTE_EXPIRED',
+    'ENGAGEMENT_PILOT_QUOTE_REVOKED',
+    'ENGAGEMENT_PILOT_QUOTE_NOT_FOUND',
+    'ENGAGEMENT_PILOT_QUOTE_MISMATCH',
+    'ENGAGEMENT_PILOT_QUOTE_INVALID',
+    'ENGAGEMENT_PILOT_QUOTE_UNAVAILABLE',
+  ]) {
+    if (candidates.some((value) => String(value).includes(code))) return code
+  }
+  return error.httpStatus === 401 ? 'TOKEN_INVALID' : 'INTERNAL'
 }
 
 async function submitTask(campaignId: string): Promise<MsgResponse> {
