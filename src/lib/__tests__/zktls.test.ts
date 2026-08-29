@@ -2016,8 +2016,14 @@ describe('zkTLS strict boundaries', () => {
     })
   })
 
-  test('passes only complete half-open V4 ranges to the prover', async () => {
-    const config = validateConnector(v4Connector())
+  test.each([
+    ['fixed', false],
+    ['chunked', true],
+  ] as const)('passes only complete half-open V4 ranges to the prover for %s framing', async (_, chunked) => {
+    const config = validateConnector({
+      ...v4Connector(),
+      ...(chunked ? { response_transfer_encoding: 'chunked' } : {}),
+    })
     if (config.interpreter_version !== 4) throw new Error('wrong connector')
     const captured = {
       path: '/v1/volume?day=2026-08-20',
@@ -2048,13 +2054,19 @@ describe('zkTLS strict boundaries', () => {
         `Content-Length: ${bodyBytes.length}\r\n\r\n${captured.body}`,
     )
     const responseBody = '{"data":{"balance":100}}'
+    const responseLength = new TextEncoder().encode(responseBody).length
     const received = new TextEncoder().encode(
       'HTTP/1.1 200 OK\r\n' +
         'Content-Type: application/json\r\n' +
-        `Content-Length: ${new TextEncoder().encode(responseBody).length}\r\n` +
+        (chunked
+          ? 'Transfer-Encoding: chunked\r\n'
+          : `Content-Length: ${responseLength}\r\n`) +
         'Connection: close\r\n\r\n' +
-        responseBody,
+        (chunked
+          ? `${responseLength.toString(16)}\r\n${responseBody}\r\n0\r\n\r\n`
+          : responseBody),
     )
+    const rawReceived = received.slice()
 
     const reveal = await transcriptRevealRanges(message, sent, received)
 
@@ -2064,6 +2076,7 @@ describe('zkTLS strict boundaries', () => {
     })
     const prover = { reveal: vi.fn().mockResolvedValue(undefined) }
     await revealTranscript(prover, reveal)
+    expect(received).toEqual(rawReceived)
     expect(prover.reveal).toHaveBeenCalledWith(
       {
         sent: [{ start: 0, end: sent.length }],

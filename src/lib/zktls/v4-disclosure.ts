@@ -1,5 +1,6 @@
 import type { CapturedRequest } from './capture'
 import type { V4Connector } from './interpreter'
+import { v4DechunkBody } from './v4-chunked'
 import { v4GunzipJson } from './v4-gzip'
 
 export type DisclosureRange = Readonly<{ start: number; end: number }>
@@ -57,7 +58,7 @@ function decode(bytes: Uint8Array): string {
 
 function responseBody(
   received: Uint8Array,
-  contentEncoding?: 'gzip',
+  connector: V4Connector,
 ): Uint8Array {
   const lines: Uint8Array[] = []
   let offset = 0
@@ -102,16 +103,21 @@ function responseBody(
     headers.set(lowerName, value)
   }
   if (
-    headers.has('transfer-encoding') ||
     headers.get('content-type') !== 'application/json' ||
-    (contentEncoding === 'gzip'
+    (connector.response_content_encoding === 'gzip'
       ? headers.get('content-encoding') !== 'gzip'
       : headers.has('content-encoding'))
   )
     return fail()
   const length = headers.get('content-length')
   const body = received.subarray(bodyOffset)
+  if (connector.response_transfer_encoding === 'chunked') {
+    if (headers.get('transfer-encoding') !== 'chunked' || length !== undefined)
+      return fail()
+    return v4DechunkBody(body, connector.request.max_recv_data)
+  }
   if (
+    headers.has('transfer-encoding') ||
     length === undefined ||
     !DECIMAL.test(length) ||
     !Number.isSafeInteger(Number(length)) ||
@@ -496,19 +502,23 @@ export async function v4ResponseDisclosureRanges(
     received.length > MAX_V4_RESPONSE_BYTES
   )
     return fail()
-  const compressed = responseBody(received, connector.response_content_encoding)
-  const body =
-    connector.response_content_encoding === 'gzip'
-      ? await v4GunzipJson(compressed, connector.max_decoded_data!)
-      : compressed
+  let entity: Uint8Array | undefined
+  let decoded: Uint8Array | undefined
   try {
+    entity = responseBody(received, connector)
+    decoded =
+      connector.response_content_encoding === 'gzip'
+        ? await v4GunzipJson(entity, connector.max_decoded_data!)
+        : entity
     if (connector.response_content_encoding !== 'gzip') {
-      const text = decode(received)
-      if (encoder.encode(text).length !== received.length) return fail()
+      const text = decode(decoded)
+      if (encoder.encode(text).length !== decoded.length) return fail()
     }
-    new StrictResponseJsonParser(body).parse()
+    new StrictResponseJsonParser(decoded).parse()
     return [{ start: 0, end: received.length }]
   } finally {
-    if (connector.response_content_encoding === 'gzip') body.fill(0)
+    if (decoded && decoded !== entity) decoded.fill(0)
+    if (entity && connector.response_transfer_encoding === 'chunked')
+      entity.fill(0)
   }
 }

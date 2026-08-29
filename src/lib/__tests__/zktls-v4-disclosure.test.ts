@@ -88,6 +88,13 @@ function gzipConnector(method: 'GET' | 'POST' = 'POST'): V4Connector {
   }
 }
 
+function chunkedConnector(gzip = false): V4Connector {
+  return {
+    ...(gzip ? gzipConnector() : connector()),
+    response_transfer_encoding: 'chunked',
+  }
+}
+
 const path = '/v1/query?account=acct-1'
 const body = '{"account":"acct-1","note":"exact bytes"}'
 
@@ -577,7 +584,92 @@ function response(
   return result
 }
 
+function chunked(body: Uint8Array): Uint8Array {
+  const head = encoder.encode(`${body.length.toString(16)}\r\n`)
+  const tail = encoder.encode('\r\n0\r\n\r\n')
+  const result = new Uint8Array(head.length + body.length + tail.length)
+  result.set(head)
+  result.set(body, head.length)
+  result.set(tail, head.length + body.length)
+  return result
+}
+
 describe('complete V4 JSON response disclosure', () => {
+  test('validates the same JSON across all signed framing and encoding combinations', async () => {
+    const json = encoder.encode('{"value":"ok"}')
+    const cases: [V4Connector, Uint8Array][] = [
+      [connector(), response(json)],
+      [
+        chunkedConnector(),
+        response(chunked(json), {
+          headers: [
+            'Content-Type: application/json',
+            'Transfer-Encoding: chunked',
+          ],
+        }),
+      ],
+      [
+        gzipConnector(),
+        response(GZIP_JSON, {
+          headers: [
+            'Content-Type: application/json',
+            `Content-Length: ${GZIP_JSON.length}`,
+            'Content-Encoding: gzip',
+          ],
+        }),
+      ],
+      [
+        chunkedConnector(true),
+        response(chunked(GZIP_JSON), {
+          headers: [
+            'Content-Type: application/json',
+            'Transfer-Encoding: chunked',
+            'Content-Encoding: gzip',
+          ],
+        }),
+      ],
+    ]
+
+    for (const [config, received] of cases) {
+      const raw = received.slice()
+      await expect(
+        v4ResponseDisclosureRanges(received, config),
+      ).resolves.toEqual([{ start: 0, end: received.length }])
+      expect(received).toEqual(raw)
+    }
+  })
+
+  test.each([
+    [
+      'content length',
+      [
+        'Content-Type: application/json',
+        'Transfer-Encoding: chunked',
+        'Content-Length: 14',
+      ],
+    ],
+    ['missing transfer encoding', ['Content-Type: application/json']],
+    [
+      'noncanonical transfer encoding',
+      ['Content-Type: application/json', 'Transfer-Encoding: Chunked'],
+    ],
+    [
+      'duplicate transfer encoding',
+      [
+        'Content-Type: application/json',
+        'Transfer-Encoding: chunked',
+        'transfer-encoding: chunked',
+      ],
+    ],
+  ])('rejects chunked framing with %s', async (_, headers) => {
+    await expect(
+      v4ResponseDisclosureRanges(
+        response(chunked(encoder.encode('{"value":"ok"}')), { headers }),
+        chunkedConnector(),
+      ),
+    ).rejects.toThrow()
+  })
+
   test('accepts the fixed provider-neutral gzip response bytes', async () => {
     const received = fixedBytes(GZIP_INTEGRATION_FIXTURE.responseBase64)
 
