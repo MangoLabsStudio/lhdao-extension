@@ -112,6 +112,7 @@ function responseBody(
   const length = headers.get('content-length')
   const body = received.subarray(bodyOffset)
   if (connector.response_transfer_encoding === 'chunked') {
+    if (!decode(lines[0]!).startsWith('HTTP/1.1 ')) return fail()
     if (headers.get('transfer-encoding') !== 'chunked' || length !== undefined)
       return fail()
     return v4DechunkBody(body, connector.request.max_recv_data)

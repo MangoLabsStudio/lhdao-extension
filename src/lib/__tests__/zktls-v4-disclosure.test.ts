@@ -636,6 +636,30 @@ describe('complete V4 JSON response disclosure', () => {
   })
 
   test.each([
+    'chunkedIdentity',
+    'chunkedGzip',
+  ] as const)('rejects HTTP/1.0 %s fixture responses', async (mode) => {
+    const received = fixedBytes(INTEGRATION_FIXTURE.modes[mode].responseBase64)
+    received.set(encoder.encode('HTTP/1.0'), 0)
+
+    await expect(
+      v4ResponseDisclosureRanges(received, integrationConnector(mode)),
+    ).rejects.toThrow()
+  })
+
+  test.each([
+    'fixedIdentity',
+    'fixedGzip',
+  ] as const)('accepts HTTP/1.0 %s fixture responses', async (mode) => {
+    const received = fixedBytes(INTEGRATION_FIXTURE.modes[mode].responseBase64)
+    received.set(encoder.encode('HTTP/1.0'), 0)
+
+    await expect(
+      v4ResponseDisclosureRanges(received, integrationConnector(mode)),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
+  })
+
+  test.each([
     [
       'content length',
       [
