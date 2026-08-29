@@ -13,7 +13,11 @@ const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
 function fixedBytes(base64: string): Uint8Array {
-  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+  const standard = base64.replaceAll('-', '+').replaceAll('_', '/')
+  return Uint8Array.from(
+    atob(standard.padEnd(standard.length + ((4 - standard.length) % 4), '=')),
+    (character) => character.charCodeAt(0),
+  )
 }
 
 const GZIP_JSON = fixedBytes('H4sIAAAAAAAAE6tWKkvMKU1VslLKz1aqBQCpVgT8DgAAAA==')
@@ -614,7 +618,7 @@ describe('complete V4 JSON response disclosure', () => {
   test('validates the same JSON across all signed framing and encoding combinations', async () => {
     expect(
       createHash('sha256').update(INTEGRATION_FIXTURE_BYTES).digest('hex'),
-    ).toBe('868bde2bf82e7a571c1df692e46d07efbb7cffd25d5ac06830917d4d6cad4d35')
+    ).toBe('267091f2e61935e6c967b5e9094bc5c5727f48ae9887455f8a040827b84f153e')
     const cases: [V4Connector, Uint8Array][] = Object.entries(
       INTEGRATION_FIXTURE.modes,
     ).map(([mode, fixture]) => [
