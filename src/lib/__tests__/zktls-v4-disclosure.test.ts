@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import type { CapturedRequest } from '../zktls/capture'
@@ -22,15 +23,30 @@ const GZIP_NUL = fixedBytes('H4sIAAAAAAAAE6tWqlCyUmJQqgUAz5rj0gkAAAA=')
 const GZIP_DUPLICATE_KEY = fixedBytes(
   'H4sIAAAAAAAAE6tWys9WsiopKk3VAbPSEnOKU2sBcCLeSBYAAAA=',
 )
-const GZIP_INTEGRATION_FIXTURE = JSON.parse(
-  readFileSync('test/fixtures/product-zktls-v4-gzip.json', 'utf8'),
+const INTEGRATION_FIXTURE_BYTES = readFileSync(
+  'test/fixtures/product-zktls-v4-response-framing.json',
+)
+const INTEGRATION_FIXTURE = JSON.parse(
+  INTEGRATION_FIXTURE_BYTES.toString('utf8'),
 ) as {
-  connector: V4Connector
+  baseConnector: V4Connector
   gzipBase64: string
   requestBase64: string
-  responseBase64: string
+  modes: Record<
+    'fixedIdentity' | 'fixedGzip' | 'chunkedIdentity' | 'chunkedGzip',
+    { connectorFields: Partial<V4Connector>; responseBase64: string }
+  >
 }
-const GZIP_INTEGRATION = fixedBytes(GZIP_INTEGRATION_FIXTURE.gzipBase64)
+const GZIP_INTEGRATION = fixedBytes(INTEGRATION_FIXTURE.gzipBase64)
+
+function integrationConnector(
+  mode: keyof typeof INTEGRATION_FIXTURE.modes,
+): V4Connector {
+  return {
+    ...structuredClone(INTEGRATION_FIXTURE.baseConnector),
+    ...INTEGRATION_FIXTURE.modes[mode].connectorFields,
+  } as V4Connector
+}
 
 function connector(method: 'GET' | 'POST' = 'POST'): V4Connector {
   return {
@@ -149,8 +165,8 @@ function disclosed(
 
 describe('complete V4 public request disclosure', () => {
   test('matches the fixed provider-neutral gzip request bytes', () => {
-    const config = structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
-    const sent = fixedBytes(GZIP_INTEGRATION_FIXTURE.requestBase64)
+    const config = integrationConnector('fixedGzip')
+    const sent = fixedBytes(INTEGRATION_FIXTURE.requestBase64)
     const captured: CapturedRequest = {
       path: '/v1/history?account=acct-1',
       method: 'GET',
@@ -596,39 +612,15 @@ function chunked(body: Uint8Array): Uint8Array {
 
 describe('complete V4 JSON response disclosure', () => {
   test('validates the same JSON across all signed framing and encoding combinations', async () => {
-    const json = encoder.encode('{"value":"ok"}')
-    const cases: [V4Connector, Uint8Array][] = [
-      [connector(), response(json)],
-      [
-        chunkedConnector(),
-        response(chunked(json), {
-          headers: [
-            'Content-Type: application/json',
-            'Transfer-Encoding: chunked',
-          ],
-        }),
-      ],
-      [
-        gzipConnector(),
-        response(GZIP_JSON, {
-          headers: [
-            'Content-Type: application/json',
-            `Content-Length: ${GZIP_JSON.length}`,
-            'Content-Encoding: gzip',
-          ],
-        }),
-      ],
-      [
-        chunkedConnector(true),
-        response(chunked(GZIP_JSON), {
-          headers: [
-            'Content-Type: application/json',
-            'Transfer-Encoding: chunked',
-            'Content-Encoding: gzip',
-          ],
-        }),
-      ],
-    ]
+    expect(
+      createHash('sha256').update(INTEGRATION_FIXTURE_BYTES).digest('hex'),
+    ).toBe('868bde2bf82e7a571c1df692e46d07efbb7cffd25d5ac06830917d4d6cad4d35')
+    const cases: [V4Connector, Uint8Array][] = Object.entries(
+      INTEGRATION_FIXTURE.modes,
+    ).map(([mode, fixture]) => [
+      integrationConnector(mode as keyof typeof INTEGRATION_FIXTURE.modes),
+      fixedBytes(fixture.responseBase64),
+    ])
 
     for (const [config, received] of cases) {
       const raw = received.slice()
@@ -671,12 +663,15 @@ describe('complete V4 JSON response disclosure', () => {
   })
 
   test('accepts the fixed provider-neutral gzip response bytes', async () => {
-    const received = fixedBytes(GZIP_INTEGRATION_FIXTURE.responseBase64)
+    const received = fixedBytes(
+      INTEGRATION_FIXTURE.modes.fixedGzip.responseBase64,
+    )
+    const config = integrationConnector('fixedGzip')
 
     expect(GZIP_INTEGRATION).toHaveLength(61)
-    await expect(
-      v4ResponseDisclosureRanges(received, GZIP_INTEGRATION_FIXTURE.connector),
-    ).resolves.toEqual([{ start: 0, end: received.length }])
+    await expect(v4ResponseDisclosureRanges(received, config)).resolves.toEqual(
+      [{ start: 0, end: received.length }],
+    )
   })
 
   test('reveals the complete compressed HTTP transcript after validating decoded JSON', async () => {
