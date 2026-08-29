@@ -73,7 +73,7 @@ function actionLabel(state: ProductExperienceControllerState): string | null {
   }
   if (status === 'reauthorize') return '重新授权'
   if (isRetryableProofState(state)) return '重试证明'
-  if (isContinuableIncompleteProofState(state)) return '继续证明'
+  if (isContinuableZkTlsProofState(state)) return '继续证明'
   if (status === 'ready') return '开始验证'
   return null
 }
@@ -88,16 +88,14 @@ function isRetryableProofState(
   )
 }
 
-function isContinuableIncompleteProofState(
+function isContinuableZkTlsProofState(
   state: ProductExperienceControllerState,
 ): boolean {
   return (
     state.status === 'observing' &&
     state.error === null &&
     state.currentOriginAllowed &&
-    state.zkTlsProgress?.some(
-      (entry) => entry.status === 'PARTIAL' || entry.status === 'PENDING',
-    ) === true
+    state.zkTlsProgress !== undefined
   )
 }
 

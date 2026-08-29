@@ -394,6 +394,26 @@ describe('product experience popup', () => {
     })
   })
 
+  it('continues an observing zkTLS session before progress is loaded', async () => {
+    const harness = await renderPopup(
+      productState('observing', { zkTlsProgress: [] }),
+    )
+
+    await act(async () => findButton(harness.container, '继续证明').click())
+
+    await vi.waitFor(() => {
+      expect(
+        harness.requests.filter(
+          (request) =>
+            request &&
+            typeof request === 'object' &&
+            'type' in request &&
+            request.type === 'start-product-experience',
+        ),
+      ).toEqual([{ type: 'start-product-experience' }])
+    })
+  })
+
   it('shows verified only for the authoritative verified state', async () => {
     const harness = await renderPopup(
       productState('submitting', {

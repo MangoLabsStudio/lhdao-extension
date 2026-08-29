@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let a user explicitly continue an incomplete zkTLS rule after the backend reports `PARTIAL` or exposes its next connector as `PENDING`.
+**Goal:** Let a user explicitly continue an observing zkTLS session, including before progress is populated and after the backend reports `PARTIAL` or `PENDING`.
 
-**Architecture:** Reuse the popup's existing `start-product-experience` action. Add only an incomplete-progress action predicate and label; the existing controller will recheck the active tab, reinject the watcher, and accept new evidence through the current guarded path.
+**Architecture:** Reuse the popup's existing `start-product-experience` action. The presence of the zkTLS progress field identifies the session; its contents are not a reliable stage discriminator because the list can be empty before the first poll. The existing controller will recheck the active tab, reinject the watcher, and accept new evidence through the current guarded path.
 
 **Tech Stack:** React 19, TypeScript, WXT Chrome MV3, Vitest, Biome
 
@@ -98,16 +98,14 @@ the existing popup tests remain green.
 In `ProductExperienceCard.tsx`, add:
 
 ```tsx
-function isContinuableIncompleteProofState(
+function isContinuableZkTlsProofState(
   state: ProductExperienceControllerState,
 ): boolean {
   return (
     state.status === 'observing' &&
     state.error === null &&
     state.currentOriginAllowed &&
-    state.zkTlsProgress?.some(
-      (entry) => entry.status === 'PARTIAL' || entry.status === 'PENDING',
-    ) === true
+    state.zkTlsProgress !== undefined
   )
 }
 ```
@@ -116,7 +114,7 @@ Keep authorization and retry actions first, then return the new label:
 
 ```tsx
 if (isRetryableProofState(state)) return '重试证明'
-if (isContinuableIncompleteProofState(state)) return '继续证明'
+if (isContinuableZkTlsProofState(state)) return '继续证明'
 if (status === 'ready') return '开始验证'
 ```
 

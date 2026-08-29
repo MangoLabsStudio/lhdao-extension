@@ -5,17 +5,18 @@
 A zkTLS rule can need more than one proof. The first proof may establish an
 account binding while the next proof supplies the metric that completes the
 same rule. After the backend reports `PARTIAL`, it may immediately expose the
-next connector as `PENDING`. The popup shows that progress but offers no
-action. The page watcher emits each rule only once, so the user cannot start
-the next proof without reloading the page.
+next connector as `PENDING`; a newly restored session may also have an empty
+progress list until its first backend poll. The popup offers no action in any
+of those states. The page watcher emits each rule only once, so the user cannot
+start the next proof without reloading the page.
 
 ## Decision
 
 Show `继续证明` when all of these conditions hold:
 
 - the controller is observing the current authorized site;
-- zkTLS progress exists;
-- at least one rule has backend status `PARTIAL` or `PENDING`;
+- the controller state identifies a zkTLS session by including its progress
+  field, even when the list is not populated yet;
 - no retryable proof error is present.
 
 The button reuses the existing `start-product-experience` action. That action
@@ -53,6 +54,7 @@ failed or expired proof recovery still show their current labels.
 
 - A popup state containing `PARTIAL` renders `继续证明`.
 - A popup state containing the next stage as `PENDING` renders `继续证明`.
+- A newly restored zkTLS session with an empty progress list renders `继续证明`.
 - Clicking it sends the existing `start-product-experience` request once.
 - Retryable errors still render `重试证明`, not `继续证明`.
 - Existing popup and Product Experience controller suites remain green.
