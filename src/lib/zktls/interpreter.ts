@@ -129,6 +129,8 @@ export type V4ScalarType =
   | 'BOOLEAN'
   | 'UTC_TIMESTAMP'
 
+export type V4PipelineCast = V4ScalarType | 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
+
 export type V4TemplateValue =
   | null
   | boolean
@@ -195,7 +197,7 @@ export type V4Pipeline = {
   orderBy?: { path: string; direction: 'ASC' | 'DESC' }
   groupBy?: { path: string; interval: 'UTC_DAY' }
   valuePath?: string
-  cast: V4ScalarType
+  cast: V4PipelineCast
   reduce?:
     | 'SUM'
     | 'COUNT'
@@ -875,6 +877,10 @@ const V4_SCALAR_TYPES = new Set<V4ScalarType>([
   'INTEGER',
   'BOOLEAN',
   'UTC_TIMESTAMP',
+])
+const V4_PIPELINE_CASTS = new Set<V4PipelineCast>([
+  ...V4_SCALAR_TYPES,
+  'EVM_ADDRESS_FROM_BYTES32_PREFIX',
 ])
 const V4_COUNT_UNITS = new Set(['count', 'days', 'items'])
 const V4_DECIMAL_SCALE = 100_000_000n
@@ -1671,6 +1677,10 @@ function v4ReducerType(reducer: string, input: V4ScalarType): V4ScalarType {
   return input
 }
 
+function v4PipelineCastType(cast: V4PipelineCast): V4ScalarType {
+  return cast === 'EVM_ADDRESS_FROM_BYTES32_PREFIX' ? 'STRING' : cast
+}
+
 function v4ReducerSupports(reducer: string, input: V4ScalarType): boolean {
   if (['COUNT', 'DISTINCT_COUNT', 'FIRST', 'LAST'].includes(reducer))
     return true
@@ -1710,13 +1720,14 @@ function v4Pipelines(
     const output = v4Identifier(input.output, 'pipeline.output')
     if (previous && previous >= output) fail('connector.pipelines is invalid.')
     previous = output
-    if (!V4_SCALAR_TYPES.has(input.cast as V4ScalarType))
+    if (!V4_PIPELINE_CASTS.has(input.cast as V4PipelineCast))
       fail('pipeline.cast is invalid.')
-    const cast = input.cast as V4ScalarType
+    const cast = input.cast as V4PipelineCast
     const source = v4JsonPath(input.sourcePath)
     const collection = source.some((segment) => segment.kind === 'COLLECTION')
     const reduce = input.reduce as string | undefined
     const finalReduce = input.finalReduce as string | undefined
+    const addressCast = cast === 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
     if (
       reduce !== undefined &&
       ![
@@ -1738,6 +1749,17 @@ function v4Pipelines(
     )
       fail('pipeline.finalReduce is invalid.')
     if (
+      (addressCast &&
+        (collection ||
+          input.filter !== undefined ||
+          input.orderBy !== undefined ||
+          input.groupBy !== undefined ||
+          input.valuePath !== undefined ||
+          reduce !== undefined ||
+          input.postFilter !== undefined ||
+          finalReduce !== undefined ||
+          input.valueUnit !== undefined ||
+          input.outputUnit !== undefined)) ||
       ((input.filter !== undefined ||
         input.orderBy !== undefined ||
         input.groupBy !== undefined ||
@@ -1789,7 +1811,7 @@ function v4Pipelines(
       (finalReduce === 'COUNT' && !V4_COUNT_UNITS.has(outputUnit ?? ''))
     )
       fail('pipeline units are invalid.')
-    let stageType = cast
+    let stageType = v4PipelineCastType(cast)
     let cardinality: 'SCALAR' | 'COLLECTION' = collection
       ? 'COLLECTION'
       : 'SCALAR'
@@ -2108,7 +2130,7 @@ function validateV4Connector(value: unknown): V4Connector {
       (item) => item.output === walletOutput,
     )
     const pipeline = walletPipelines[0]
-    let outputType = pipeline?.cast
+    let outputType = pipeline ? v4PipelineCastType(pipeline.cast) : undefined
     if (pipeline?.reduce)
       outputType = v4ReducerType(pipeline.reduce, outputType!)
     if (pipeline?.finalReduce)

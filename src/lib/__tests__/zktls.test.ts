@@ -1133,6 +1133,100 @@ describe('zkTLS strict boundaries', () => {
     expect(() => validateConnector(missingAccountBinding)).toThrow()
   })
 
+  test('parses a signed bytes32-prefix wallet cast as a scalar string output', () => {
+    const binding = cloneV4()
+    binding.purpose = 'ACCOUNT_BINDING'
+    binding.account_binding = {
+      providerKey: 'example',
+      accountVariable: 'accountId',
+      walletOutput: 'wallet',
+      addressType: 'EVM',
+    }
+    binding.variables = [
+      {
+        name: 'accountId',
+        scalarType: 'STRING',
+        source: {
+          kind: 'CAPTURED_REQUEST',
+          location: 'BODY_JSON',
+          selector: '$.input.account',
+        },
+      },
+    ]
+    binding.resolved_variables = {}
+    binding.request.matcher.query.required = {}
+    binding.request.body = { input: { account: { $var: 'accountId' } } }
+    binding.pipelines = [
+      {
+        output: 'wallet',
+        sourcePath: '$.subaccount',
+        cast: 'EVM_ADDRESS_FROM_BYTES32_PREFIX' as never,
+      },
+    ]
+    binding.disclosure = {
+      key_paths: ['$.subaccount'],
+      scalar_paths: ['$.subaccount'],
+      collection_paths: [],
+      max_elements: 200,
+    }
+
+    const result = validateConnector(binding)
+
+    expect(result).toMatchObject({
+      pipelines: [
+        {
+          output: 'wallet',
+          cast: 'EVM_ADDRESS_FROM_BYTES32_PREFIX',
+        },
+      ],
+    })
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(Object.isFrozen((result as typeof binding).pipelines[0])).toBe(true)
+  })
+
+  test.each([
+    { valueUnit: 'address', outputUnit: 'address' },
+    {
+      sourcePath: '$.rows[*]',
+      reduce: 'COUNT',
+      valueUnit: 'count',
+      outputUnit: 'count',
+    },
+  ])('rejects invalid bytes32-prefix wallet pipeline stages: %p', (patch) => {
+    const binding = cloneV4()
+    binding.purpose = 'ACCOUNT_BINDING'
+    binding.account_binding = {
+      providerKey: 'example',
+      accountVariable: 'accountId',
+      walletOutput: 'wallet',
+      addressType: 'EVM',
+    }
+    binding.variables = [
+      {
+        name: 'accountId',
+        scalarType: 'STRING',
+        source: {
+          kind: 'CAPTURED_REQUEST',
+          location: 'BODY_JSON',
+          selector: '$.input.account',
+        },
+      },
+    ]
+    binding.resolved_variables = {}
+    binding.request.matcher.query.required = {}
+    binding.request.body = { input: { account: { $var: 'accountId' } } }
+    binding.pipelines = [
+      {
+        output: 'wallet',
+        sourcePath: '$.subaccount',
+        cast: 'EVM_ADDRESS_FROM_BYTES32_PREFIX' as never,
+        ...patch,
+      },
+    ]
+
+    expect(() => validateConnector(binding)).toThrow()
+  })
+
   test('accepts V4 DNS origins with punycode on the default HTTPS port', () => {
     const value = cloneV4()
     value.page_origin = 'https://xn--bcher-kva.example'
