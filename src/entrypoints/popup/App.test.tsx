@@ -359,8 +359,8 @@ describe('product experience popup', () => {
     expect(harness.container.textContent).not.toContain('重试证明')
   })
 
-  it('does not offer continue before the backend reports PARTIAL', async () => {
-    const { container } = await renderPopup(
+  it('continues a backend PENDING next-stage proof through the existing start action', async () => {
+    const harness = await renderPopup(
       productState('observing', {
         zkTlsProgress: [
           {
@@ -375,8 +375,23 @@ describe('product experience popup', () => {
       }),
     )
 
-    await vi.waitFor(() => expect(container.textContent).toContain('等待证明'))
-    expect(container.textContent).not.toContain('继续证明')
+    await vi.waitFor(() =>
+      expect(harness.container.textContent).toContain('等待证明'),
+    )
+    const button = findButton(harness.container, '继续证明')
+    await act(async () => button.click())
+
+    await vi.waitFor(() => {
+      expect(
+        harness.requests.filter(
+          (request) =>
+            request &&
+            typeof request === 'object' &&
+            'type' in request &&
+            request.type === 'start-product-experience',
+        ),
+      ).toEqual([{ type: 'start-product-experience' }])
+    })
   })
 
   it('shows verified only for the authoritative verified state', async () => {

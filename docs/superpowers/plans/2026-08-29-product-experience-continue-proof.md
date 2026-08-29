@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let a user explicitly continue a zkTLS rule after the backend reports `PARTIAL`.
+**Goal:** Let a user explicitly continue an incomplete zkTLS rule after the backend reports `PARTIAL` or exposes its next connector as `PENDING`.
 
-**Architecture:** Reuse the popup's existing `start-product-experience` action. Add only a partial-progress action predicate and label; the existing controller will recheck the active tab, reinject the watcher, and accept new evidence through the current guarded path.
+**Architecture:** Reuse the popup's existing `start-product-experience` action. Add only an incomplete-progress action predicate and label; the existing controller will recheck the active tab, reinject the watcher, and accept new evidence through the current guarded path.
 
 **Tech Stack:** React 19, TypeScript, WXT Chrome MV3, Vitest, Biome
 
@@ -57,12 +57,12 @@ it('continues a backend PARTIAL proof through the existing start action', async 
 })
 ```
 
-Add a second test that renders only `PENDING` progress and asserts that
-`继续证明` is absent:
+Add a second test that renders the next connector as `PENDING`, clicks
+`继续证明`, and asserts that the existing start request is sent once:
 
 ```tsx
-it('does not offer continue before the backend reports PARTIAL', async () => {
-  const { container } = await renderPopup(
+it('continues a backend PENDING next-stage proof through the existing start action', async () => {
+  const harness = await renderPopup(
     productState('observing', {
       zkTlsProgress: [
         {
@@ -77,8 +77,8 @@ it('does not offer continue before the backend reports PARTIAL', async () => {
     }),
   )
 
-  await vi.waitFor(() => expect(container.textContent).toContain('等待证明'))
-  expect(container.textContent).not.toContain('继续证明')
+  const button = findButton(harness.container, '继续证明')
+  await act(async () => button.click())
 })
 ```
 
@@ -98,14 +98,16 @@ the existing popup tests remain green.
 In `ProductExperienceCard.tsx`, add:
 
 ```tsx
-function isContinuablePartialProofState(
+function isContinuableIncompleteProofState(
   state: ProductExperienceControllerState,
 ): boolean {
   return (
     state.status === 'observing' &&
     state.error === null &&
     state.currentOriginAllowed &&
-    state.zkTlsProgress?.some((entry) => entry.status === 'PARTIAL') === true
+    state.zkTlsProgress?.some(
+      (entry) => entry.status === 'PARTIAL' || entry.status === 'PENDING',
+    ) === true
   )
 }
 ```
@@ -114,7 +116,7 @@ Keep authorization and retry actions first, then return the new label:
 
 ```tsx
 if (isRetryableProofState(state)) return '重试证明'
-if (isContinuablePartialProofState(state)) return '继续证明'
+if (isContinuableIncompleteProofState(state)) return '继续证明'
 if (status === 'ready') return '开始验证'
 ```
 

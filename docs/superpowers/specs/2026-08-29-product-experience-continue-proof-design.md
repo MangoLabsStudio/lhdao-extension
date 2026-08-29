@@ -4,9 +4,10 @@
 
 A zkTLS rule can need more than one proof. The first proof may establish an
 account binding while the next proof supplies the metric that completes the
-same rule. After the backend reports `PARTIAL`, the popup shows the progress
-but offers no action. The page watcher emits each rule only once, so the user
-cannot start the next proof without reloading the page.
+same rule. After the backend reports `PARTIAL`, it may immediately expose the
+next connector as `PENDING`. The popup shows that progress but offers no
+action. The page watcher emits each rule only once, so the user cannot start
+the next proof without reloading the page.
 
 ## Decision
 
@@ -14,7 +15,7 @@ Show `继续证明` when all of these conditions hold:
 
 - the controller is observing the current authorized site;
 - zkTLS progress exists;
-- at least one rule has backend status `PARTIAL`;
+- at least one rule has backend status `PARTIAL` or `PENDING`;
 - no retryable proof error is present.
 
 The button reuses the existing `start-product-experience` action. That action
@@ -34,10 +35,10 @@ not bypass page matching or enqueue a proof directly.
 
 ## User Experience
 
-The status remains `部分完成`. A `继续证明` button appears in the existing action
-area. While the action runs, the existing busy state prevents duplicate
-clicks. Existing actions keep their precedence: authorization and failed or
-expired proof recovery still show their current labels.
+The status remains `部分完成` or `等待证明`. A `继续证明` button appears in the
+existing action area. While the action runs, the existing busy state prevents
+duplicate clicks. Existing actions keep their precedence: authorization and
+failed or expired proof recovery still show their current labels.
 
 ## Safety and Compatibility
 
@@ -51,7 +52,7 @@ expired proof recovery still show their current labels.
 ## Tests
 
 - A popup state containing `PARTIAL` renders `继续证明`.
+- A popup state containing the next stage as `PENDING` renders `继续证明`.
 - Clicking it sends the existing `start-product-experience` request once.
 - Retryable errors still render `重试证明`, not `继续证明`.
-- Non-partial pending progress does not render the new action.
 - Existing popup and Product Experience controller suites remain green.
