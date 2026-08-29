@@ -243,6 +243,9 @@ const GZIP_INTEGRATION_FIXTURE = JSON.parse(
   configDigest: string
   identityConfigDigest: string
 }
+const EVM_PREFIX_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-evm-prefix.json', 'utf8'),
+) as { cast: string }
 
 function gzipIntegrationConnector(): Record<string, unknown> {
   return structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
@@ -1160,7 +1163,7 @@ describe('zkTLS strict boundaries', () => {
       {
         output: 'wallet',
         sourcePath: '$.subaccount',
-        cast: 'EVM_ADDRESS_FROM_BYTES32_PREFIX' as never,
+        cast: EVM_PREFIX_INTEGRATION_FIXTURE.cast as never,
       },
     ]
     binding.disclosure = {
