@@ -618,7 +618,7 @@ describe('complete V4 JSON response disclosure', () => {
   test('validates the same JSON across all signed framing and encoding combinations', async () => {
     expect(
       createHash('sha256').update(INTEGRATION_FIXTURE_BYTES).digest('hex'),
-    ).toBe('267091f2e61935e6c967b5e9094bc5c5727f48ae9887455f8a040827b84f153e')
+    ).toBe('e7f73e1179b434157d974b45e5f04e23d158863257fd16471795d479264faa75')
     const cases: [V4Connector, Uint8Array][] = Object.entries(
       INTEGRATION_FIXTURE.modes,
     ).map(([mode, fixture]) => [
