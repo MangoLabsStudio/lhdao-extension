@@ -511,6 +511,71 @@ export interface MintWatermarkTokenResult {
 // ── 一键推广(promoteTweet)──────────────────────────────────────────
 // 后端按平台价格表把 预算+动作+档位 折成 ENGAGEMENT 商单(余额校验/10% 手续费)。
 // promoteTweet 返回创建的子单数组(每动作一个)。
+export const PREVIEW_PROMOTE_TWEET_PRICING_QUERY = `
+  query PreviewPromoteTweetPricing($input: PromoteTweetPreviewInput!) {
+    previewPromoteTweetPricing(input: $input) {
+      quoteId
+      priceVersion
+      currency
+      precision
+      quotedAt
+      expiresAt
+      principal
+      feeRate
+      promotionFee
+      totalCost
+      lines {
+        campaignIndex
+        actionType
+        tier
+        quantity
+        pricingSource
+        unitPrice
+        principal
+        todayPrice
+        tomorrowExpectedPrice
+        schedule { dayIndex unitPrice }
+      }
+    }
+  }
+`
+
+export interface PromoteTweetPricingQuote {
+  quoteId: string
+  priceVersion: string
+  currency: 'LUX'
+  precision: number
+  quotedAt: string
+  expiresAt: string
+  principal: string
+  feeRate: string
+  promotionFee: string
+  totalCost: string
+  lines: {
+    campaignIndex: number
+    actionType: string
+    tier: string
+    quantity: number
+    pricingSource: 'PILOT' | 'LEGACY'
+    unitPrice: string
+    principal: string
+    todayPrice: string
+    tomorrowExpectedPrice: string
+    schedule: { dayIndex: number; unitPrice: string }[] | null
+  }[]
+}
+
+export interface PreviewPromoteTweetPricingVars {
+  input: {
+    tweetUrl: string
+    actions: { actionType: string; tierSlots: Record<string, number> }[]
+  }
+}
+
+export interface PreviewPromoteTweetPricingResult {
+  previewPromoteTweetPricing: PromoteTweetPricingQuote
+}
+
 export const PROMOTE_TWEET_MUTATION = `
   mutation PromoteTweet($input: PromoteTweetInput!) {
     promoteTweet(input: $input) {
@@ -521,6 +586,7 @@ export const PROMOTE_TWEET_MUTATION = `
 
 export interface PromoteTweetVars {
   input: {
+    quoteId: string
     tweetUrl: string
     actions: { actionType: string; tierSlots: Record<string, number> }[]
   }

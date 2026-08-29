@@ -10,6 +10,7 @@ import {
   MintProductExperienceTicketOperationName,
   MY_RESERVED_ENGAGEMENTS_QUERY,
   POLL_EXTENSION_PAIRING_QUERY,
+  PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
   ProductZkTlsRuleProgressOperationName,
@@ -117,6 +118,13 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     SUBMIT_ENGAGEMENT_PROOF_MUTATION,
     '3545cd4cbfbc22c5738fb9c9423d8c0e62a20809e0887183106c40c2ca3814de',
     'verify',
+  ),
+  operation(
+    'read.promote-pricing.v1',
+    'PreviewPromoteTweetPricing',
+    PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
+    '890c5e721d87d1dda193d0e354aeeffde72d4a7613769df2853e1189f1b470ec',
+    'read',
   ),
   operation(
     'spend.promote.v1',
