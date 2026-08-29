@@ -36,22 +36,29 @@ async function requireSingleMember(
   maxDecodedBytes: number,
 ): Promise<void> {
   const payloadOffset = gzipPayloadOffset(compressed)
+  const chunks: Uint8Array[] = []
   let total = 0
-  await new ReadableStream<BufferSource>({
-    start(controller) {
-      controller.enqueue(compressed.subarray(payloadOffset, -8))
-      controller.close()
-    },
-  })
-    .pipeThrough(new DecompressionStream('deflate-raw'))
-    .pipeTo(
-      new WritableStream<Uint8Array<ArrayBuffer>>({
-        write(chunk) {
-          total += chunk.byteLength
-          if (total > maxDecodedBytes) throw new Error(INVALID_GZIP)
-        },
-      }),
-    )
+  try {
+    await new ReadableStream<BufferSource>({
+      start(controller) {
+        controller.enqueue(compressed.subarray(payloadOffset, -8))
+        controller.close()
+      },
+    })
+      .pipeThrough(new DecompressionStream('deflate-raw'))
+      .pipeTo(
+        new WritableStream<Uint8Array<ArrayBuffer>>({
+          write(chunk) {
+            chunks.push(chunk)
+            total += chunk.byteLength
+            if (total > maxDecodedBytes) throw new Error(INVALID_GZIP)
+          },
+        }),
+      )
+  } finally {
+    for (const chunk of chunks) chunk.fill(0)
+    chunks.length = 0
+  }
 }
 
 export async function v4GunzipJson(
@@ -84,12 +91,12 @@ export async function v4GunzipJson(
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+      chunks.push(value)
       total += value.byteLength
       if (total > maxDecodedBytes) {
         await reader.cancel().catch(() => undefined)
         throw new Error(INVALID_GZIP)
       }
-      chunks.push(value)
     }
 
     const decoded = new Uint8Array(total)
@@ -103,6 +110,7 @@ export async function v4GunzipJson(
     await reader?.cancel().catch(() => undefined)
     throw new Error(INVALID_GZIP)
   } finally {
+    for (const chunk of chunks) chunk.fill(0)
     chunks.length = 0
     try {
       reader?.releaseLock()
