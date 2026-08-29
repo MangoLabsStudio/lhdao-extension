@@ -39,6 +39,7 @@ function concat(...parts: Uint8Array[]): Uint8Array {
 
 function captureDecompressionChunks(
   outputs: Record<'deflate-raw' | 'gzip', readonly Uint8Array[]>,
+  inputs: Uint8Array[],
 ): Uint8Array[] {
   const retained: Uint8Array[] = []
   class CapturingDecompressionStream {
@@ -48,7 +49,8 @@ function captureDecompressionChunks(
     constructor(format: 'deflate-raw' | 'gzip') {
       const stream = new TransformStream<BufferSource, Uint8Array<ArrayBuffer>>(
         {
-          transform(_input, controller) {
+          transform(input, controller) {
+            inputs.push(input as Uint8Array)
             for (const output of outputs[format]) {
               const chunk = new Uint8Array(output)
               retained.push(chunk)
@@ -67,12 +69,18 @@ function captureDecompressionChunks(
 
 describe('V4 bounded gzip decoder', () => {
   test('zeroes both decompression passes without clearing the returned copy', async () => {
-    const retained = captureDecompressionChunks({
-      'deflate-raw': [Uint8Array.of(1, 2, 3)],
-      gzip: [encoder.encode('{"value":'), encoder.encode('"ok"}')],
-    })
+    const inputs: Uint8Array[] = []
+    const caller = GZIP_JSON_FIXTURE.slice()
+    const original = caller.slice()
+    const retained = captureDecompressionChunks(
+      {
+        'deflate-raw': [Uint8Array.of(1, 2, 3)],
+        gzip: [encoder.encode('{"value":'), encoder.encode('"ok"}')],
+      },
+      inputs,
+    )
     try {
-      const decoded = await v4GunzipJson(GZIP_JSON_FIXTURE, 14)
+      const decoded = await v4GunzipJson(caller, 14)
 
       expect(decoded).toEqual(encoder.encode('{"value":"ok"}'))
       expect(decoded.some((byte) => byte !== 0)).toBe(true)
@@ -80,22 +88,38 @@ describe('V4 bounded gzip decoder', () => {
       expect(retained.every((chunk) => chunk.every((byte) => byte === 0))).toBe(
         true,
       )
+      expect(inputs).toHaveLength(2)
+      expect(inputs.every((input) => input.every((byte) => byte === 0))).toBe(
+        true,
+      )
+      expect(caller).toEqual(original)
     } finally {
       vi.unstubAllGlobals()
     }
   })
 
   test('zeroes retained chunks when decoded output exceeds its cap', async () => {
-    const retained = captureDecompressionChunks({
-      'deflate-raw': [Uint8Array.of(1, 2, 3)],
-      gzip: [encoder.encode('ab'), encoder.encode('cd')],
-    })
+    const inputs: Uint8Array[] = []
+    const caller = GZIP_JSON_FIXTURE.slice()
+    const original = caller.slice()
+    const retained = captureDecompressionChunks(
+      {
+        'deflate-raw': [Uint8Array.of(1, 2, 3)],
+        gzip: [encoder.encode('ab'), encoder.encode('cd')],
+      },
+      inputs,
+    )
     try {
-      await expect(v4GunzipJson(GZIP_JSON_FIXTURE, 3)).rejects.toThrow(INVALID)
+      await expect(v4GunzipJson(caller, 3)).rejects.toThrow(INVALID)
       expect(retained).toHaveLength(3)
       expect(retained.every((chunk) => chunk.every((byte) => byte === 0))).toBe(
         true,
       )
+      expect(inputs).toHaveLength(2)
+      expect(inputs.every((input) => input.every((byte) => byte === 0))).toBe(
+        true,
+      )
+      expect(caller).toEqual(original)
     } finally {
       vi.unstubAllGlobals()
     }

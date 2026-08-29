@@ -73,11 +73,12 @@ export async function v4GunzipJson(
   )
     throw new Error(INVALID_GZIP)
 
+  let input: Uint8Array<ArrayBuffer> | undefined
   let reader: ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>> | undefined
   const chunks: Uint8Array[] = []
   let total = 0
   try {
-    const input = new Uint8Array(compressed)
+    input = new Uint8Array(compressed)
     await requireSingleMember(input, maxDecodedBytes)
     reader = new ReadableStream<BufferSource>({
       start(controller) {
@@ -110,6 +111,7 @@ export async function v4GunzipJson(
     await reader?.cancel().catch(() => undefined)
     throw new Error(INVALID_GZIP)
   } finally {
+    input?.fill(0)
     for (const chunk of chunks) chunk.fill(0)
     chunks.length = 0
     try {
