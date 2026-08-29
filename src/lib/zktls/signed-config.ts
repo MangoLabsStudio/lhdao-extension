@@ -326,6 +326,7 @@ export async function fetchAndVerifySignedConfig(
     now,
   })
   assertConnectorAvailable(config, now)
+  ;(payload.config_envelope as Record<string, unknown>).config = config
   const configEnvelope = deepFreeze(payload.config_envelope as ConfigEnvelope)
   const ticketEnvelope = deepFreeze(payload.ticket_envelope as TicketEnvelope)
   return {

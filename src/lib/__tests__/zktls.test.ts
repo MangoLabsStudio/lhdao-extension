@@ -896,6 +896,91 @@ describe('zkTLS strict boundaries', () => {
     expect(Object.hasOwn(result, 'max_decoded_data')).toBe(false)
   })
 
+  test('parses, copies, and deeply freezes the signed V4 chunked framing contract', async () => {
+    const config = {
+      ...v4Connector(),
+      response_transfer_encoding: 'chunked',
+    }
+    const direct = validateConnector(config)
+    expect(direct).not.toBe(config)
+    config.response_transfer_encoding = 'identity'
+    expect(direct).toMatchObject({ response_transfer_encoding: 'chunked' })
+    config.response_transfer_encoding = 'chunked'
+    const payload = await signedV4Envelopes(config)
+    const { publicKeys, signTicket: _signTicket, ...response } = payload
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+
+    try {
+      const result = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        },
+      )
+
+      expect(result.config).toMatchObject({
+        response_transfer_encoding: 'chunked',
+      })
+      expect(Object.isFrozen(result.config)).toBe(true)
+      expect(() => {
+        ;(result.config as Record<string, unknown>).response_transfer_encoding =
+          'fixed'
+      }).toThrow()
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('keeps fixed-length V4 connectors free of a transfer-encoding field', () => {
+    const result = validateConnector(v4Connector())
+
+    expect(Object.hasOwn(result, 'response_transfer_encoding')).toBe(false)
+  })
+
+  test.each([
+    'identity',
+    'CHUNKED',
+    'br',
+  ])('rejects invalid V4 response framing %s', (response_transfer_encoding) => {
+    expect(() =>
+      validateConnector({ ...v4Connector(), response_transfer_encoding }),
+    ).toThrow()
+  })
+
+  test('rejects accessor-backed, hidden, and proxied V4 response framing', () => {
+    const accessor = v4Connector()
+    let reads = 0
+    Object.defineProperty(accessor, 'response_transfer_encoding', {
+      enumerable: true,
+      get() {
+        reads += 1
+        return 'chunked'
+      },
+    })
+    expect(() => validateConnector(accessor)).toThrow()
+    expect(reads).toBe(0)
+
+    const hidden = v4Connector()
+    Object.defineProperty(hidden, 'response_transfer_encoding', {
+      enumerable: false,
+      value: 'chunked',
+    })
+    expect(() => validateConnector(hidden)).toThrow()
+
+    expect(() =>
+      validateConnector(
+        new Proxy(
+          { ...v4Connector(), response_transfer_encoding: 'chunked' },
+          {},
+        ),
+      ),
+    ).toThrow()
+  })
+
   test.each([
     { response_content_encoding: 'gzip' },
     { max_decoded_data: 64 },

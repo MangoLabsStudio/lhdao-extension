@@ -243,6 +243,7 @@ export type V4Connector = {
   resolved_variables: Record<string, V4ResolvedVariable>
   response_format: 'json'
   response_status: 200
+  response_transfer_encoding?: 'chunked'
   response_content_encoding?: 'gzip'
   max_decoded_data?: number
   disclosure: {
@@ -1933,13 +1934,18 @@ function v4TemplateAtPath(
 
 function validateV4Connector(value: unknown): V4Connector {
   v4PlainData(value)
+  let copied: unknown
   try {
-    structuredClone(value)
+    copied = structuredClone(value)
   } catch {
     fail('V4 connector is invalid.')
   }
-  const initial = v4Record(value, 'connector')
+  const initial = v4Record(copied, 'connector')
   const purpose = initial.purpose
+  const hasResponseTransferEncoding = Object.hasOwn(
+    initial,
+    'response_transfer_encoding',
+  )
   const hasResponseContentEncoding = Object.hasOwn(
     initial,
     'response_content_encoding',
@@ -1962,6 +1968,7 @@ function validateV4Connector(value: unknown): V4Connector {
     'resolved_variables',
     'response_format',
     'response_status',
+    ...(hasResponseTransferEncoding ? ['response_transfer_encoding'] : []),
     ...(hasResponseContentEncoding
       ? ['response_content_encoding', 'max_decoded_data']
       : []),
@@ -1979,6 +1986,11 @@ function validateV4Connector(value: unknown): V4Connector {
     input.response_status !== 200
   )
     fail('V4 connector constants are invalid.')
+  if (
+    hasResponseTransferEncoding &&
+    input.response_transfer_encoding !== 'chunked'
+  )
+    fail('V4 response framing is invalid.')
   if (
     hasResponseContentEncoding &&
     (input.response_content_encoding !== 'gzip' ||
@@ -2166,8 +2178,8 @@ function validateV4Connector(value: unknown): V4Connector {
     !same(disclosure.collection_paths, expected.collection_paths)
   )
     fail('disclosure is invalid.')
-  if (bytes(canonicalJson(value)) > 65_536) fail('V4 connector is too large.')
-  return v4DeepFreeze(value as V4Connector)
+  if (bytes(canonicalJson(copied)) > 65_536) fail('V4 connector is too large.')
+  return v4DeepFreeze(copied as V4Connector)
 }
 
 export function validateConnector(value: unknown): Connector {
