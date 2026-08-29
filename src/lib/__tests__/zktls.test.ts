@@ -246,6 +246,9 @@ const GZIP_INTEGRATION_FIXTURE = JSON.parse(
 const EVM_PREFIX_INTEGRATION_FIXTURE = JSON.parse(
   readFileSync('test/fixtures/product-zktls-v4-evm-prefix.json', 'utf8'),
 ) as { cast: string }
+const WINDOW_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-window.json', 'utf8'),
+) as { connector: Record<string, unknown>; hashes: { connector: string } }
 
 function gzipIntegrationConnector(): Record<string, unknown> {
   return structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
@@ -854,6 +857,16 @@ describe('zkTLS strict boundaries', () => {
     delete identity.max_decoded_data
     await expect(configDigest(validateConnector(identity))).resolves.toBe(
       GZIP_INTEGRATION_FIXTURE.identityConfigDigest,
+    )
+  })
+
+  test('matches the shared generic window connector and digest', async () => {
+    const normalized = validateConnector(
+      structuredClone(WINDOW_INTEGRATION_FIXTURE.connector),
+    )
+
+    await expect(configDigest(normalized)).resolves.toBe(
+      WINDOW_INTEGRATION_FIXTURE.hashes.connector,
     )
   })
 

@@ -94,13 +94,13 @@ function responseBody(
     const name = decode(line.subarray(0, colon))
     if (!HEADER_NAME.test(name)) return fail()
     const lowerName = name.toLowerCase()
-    if (headers.has(lowerName)) return fail()
+    if (headers.has(lowerName) && lowerName !== 'set-cookie') return fail()
     const value = trimOws(decode(line.subarray(colon + 1)))
     for (let index = 0; index < value.length; index += 1) {
       const code = value.charCodeAt(index)
       if ((code < 0x20 && code !== 0x09) || code === 0x7f) return fail()
     }
-    headers.set(lowerName, value)
+    if (lowerName !== 'set-cookie') headers.set(lowerName, value)
   }
   if (
     headers.get('content-type') !== 'application/json' ||

@@ -42,6 +42,14 @@ const INTEGRATION_FIXTURE = JSON.parse(
   >
 }
 const GZIP_INTEGRATION = fixedBytes(INTEGRATION_FIXTURE.gzipBase64)
+const WINDOW_FIXTURE_BYTES = readFileSync(
+  'test/fixtures/product-zktls-v4-window.json',
+)
+const WINDOW_FIXTURE = JSON.parse(WINDOW_FIXTURE_BYTES.toString('utf8')) as {
+  connector: V4Connector
+  responseBase64url: string
+  hashes: { connector: string }
+}
 
 function integrationConnector(
   mode: keyof typeof INTEGRATION_FIXTURE.modes,
@@ -615,6 +623,30 @@ function chunked(body: Uint8Array): Uint8Array {
 }
 
 describe('complete V4 JSON response disclosure', () => {
+  test('accepts the shared redacted rolling-window response', async () => {
+    const received = fixedBytes(WINDOW_FIXTURE.responseBase64url)
+
+    await expect(
+      v4ResponseDisclosureRanges(received, WINDOW_FIXTURE.connector),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
+  })
+
+  test('accepts repeated response cookies for verifier-side redaction', async () => {
+    const body = encoder.encode('{"ok":true}')
+    const received = response(body, {
+      headers: [
+        'Content-Type: application/json',
+        `Content-Length: ${body.length}`,
+        'Set-Cookie: sid=private; Secure',
+        'Set-Cookie: preference=private; Secure',
+      ],
+    })
+
+    await expect(
+      v4ResponseDisclosureRanges(received, connector('GET')),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
+  })
+
   test('validates the same JSON across all signed framing and encoding combinations', async () => {
     expect(
       createHash('sha256').update(INTEGRATION_FIXTURE_BYTES).digest('hex'),
