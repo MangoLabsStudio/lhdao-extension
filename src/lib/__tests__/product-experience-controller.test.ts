@@ -1109,7 +1109,10 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     expect(harness.storage.session).toBeNull()
   })
 
-  it('ends a PARTIAL attempt and allows later DOM evidence to start the next aggregate session', async () => {
+  it.each([
+    'PARTIAL',
+    'INSUFFICIENT_DATA',
+  ] as const)('ends a %s attempt and allows later DOM evidence to start a new session', async (backendStatus) => {
     harness.startZkTls
       .mockResolvedValueOnce({
         sessionId: 'aggregate-day-1',
@@ -1125,7 +1128,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
       {
         ruleId: 'rule-a',
         title: 'Three trading days',
-        status: 'PARTIAL',
+        status: backendStatus,
         current: 1,
         target: 3,
         unit: 'days',
@@ -1158,7 +1161,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     expect(partialState.zkTlsProgress).toContainEqual(
       expect.objectContaining({
         ruleId: 'rule-a',
-        status: 'PARTIAL',
+        status: backendStatus,
         current: 1,
         target: 3,
       }),

@@ -1220,6 +1220,9 @@ export class ProductExperienceController {
       const activeProgress = progress.find(
         (entry) => entry.ruleId === activeRuleId,
       )
+      const attemptFinishedWithoutVerification =
+        activeProgress?.status === 'PARTIAL' ||
+        activeProgress?.status === 'INSUFFICIENT_DATA'
       const updated = await this.mutateZkTlsSession(sessionId, (current) => {
         const authorizationRequired =
           current.status === 'reauthorize' ||
@@ -1236,7 +1239,7 @@ export class ProductExperienceController {
         current.zkTlsQueue = current.zkTlsQueue.filter(
           (item) => !durableVerified.has(item.ruleId),
         )
-        if (activeProgress?.status === 'PARTIAL') {
+        if (attemptFinishedWithoutVerification) {
           current.zkTlsQueue = current.zkTlsQueue.filter(
             (item) => item.ruleId !== activeRuleId,
           )
@@ -1274,7 +1277,7 @@ export class ProductExperienceController {
         await this.notify()
         return false
       }
-      if (activeProgress?.status === 'PARTIAL') {
+      if (attemptFinishedWithoutVerification) {
         await this.notify()
         return true
       }

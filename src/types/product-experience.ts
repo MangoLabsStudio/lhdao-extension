@@ -5,6 +5,7 @@ export type ProductZkTlsProgressStatus =
   | 'PENDING'
   | 'SUBMITTED'
   | 'PARTIAL'
+  | 'INSUFFICIENT_DATA'
   | 'VERIFIED'
 export type ProductZkTlsScalar = boolean | number | string | null
 

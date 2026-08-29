@@ -873,6 +873,7 @@ function requireProductZkTlsStatus(value: unknown): ProductZkTlsProgressStatus {
     value === 'PENDING' ||
     value === 'SUBMITTED' ||
     value === 'PARTIAL' ||
+    value === 'INSUFFICIENT_DATA' ||
     value === 'VERIFIED'
   ) {
     return value

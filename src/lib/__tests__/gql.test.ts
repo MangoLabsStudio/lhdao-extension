@@ -1193,6 +1193,14 @@ describe('product experience GraphQL document and response parsers', () => {
         target: null,
         unit: null,
       },
+      {
+        ruleId: 'window',
+        title: 'Complete response window',
+        status: 'INSUFFICIENT_DATA',
+        current: null,
+        target: null,
+        unit: null,
+      },
     ]
 
     expect(parseResult({ productZkTlsRuleProgress: progress })).toEqual({

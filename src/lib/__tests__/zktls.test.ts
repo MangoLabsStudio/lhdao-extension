@@ -1042,6 +1042,110 @@ describe('zkTLS strict boundaries', () => {
     expect(() => validateConnector(new Proxy(config, {}))).toThrow()
   })
 
+  test('accepts signed generic rolling-window transforms', () => {
+    const config = cloneV4()
+    config.period_days = 7
+    config.variables.push({
+      name: 'periodStart',
+      scalarType: 'UTC_TIMESTAMP',
+      source: { kind: 'SESSION', field: 'periodStart' },
+    })
+    config.resolved_variables.periodStart = {
+      type: 'UTC_TIMESTAMP',
+      value: '2026-08-14T00:00:00.000Z',
+    }
+    testRecord(testRecord(config.request.body).input).limit = 3
+    config.pipelines = [
+      {
+        output: 'qualifyingDays',
+        sourcePath: '$.orders[*]',
+        orderBy: { path: '$.time', direction: 'DESC' },
+        groupBy: { path: '$.time', interval: 'UTC_DAY' },
+        valuePath: '$.amount',
+        cast: 'DECIMAL',
+        fixedDecimals: 18,
+        absolute: true,
+        timestamp: { path: '$.time', format: 'UNIX_SECONDS' },
+        coverage: { kind: 'DESCENDING_WINDOW', requestLimit: 3 },
+        reduce: 'SUM',
+        postFilter: { op: 'GTE', value: 6000, unit: 'USDT' },
+        finalReduce: 'COUNT',
+        valueUnit: 'USDT',
+        outputUnit: 'days',
+      },
+    ]
+    config.disclosure = {
+      key_paths: ['$.orders', '$.orders[*].amount', '$.orders[*].time'],
+      scalar_paths: ['$.orders[*].amount', '$.orders[*].time'],
+      collection_paths: ['$.orders'],
+      max_elements: 200,
+    }
+
+    expect(validateConnector(config)).toMatchObject({
+      period_days: 7,
+      pipelines: [
+        expect.objectContaining({
+          fixedDecimals: 18,
+          absolute: true,
+          timestamp: { path: '$.time', format: 'UNIX_SECONDS' },
+          coverage: { kind: 'DESCENDING_WINDOW', requestLimit: 3 },
+        }),
+      ],
+    })
+  })
+
+  test.each([
+    { period_days: 0 },
+    { period_days: 366 },
+    {
+      period_days: 7,
+      coverage: { kind: 'DESCENDING_WINDOW', requestLimit: 4 },
+    },
+    { period_days: 7, timestamp: { path: '$.time', format: 'AUTO' } },
+    { period_days: 7, fixedDecimals: 19 },
+  ])('rejects invalid rolling-window contract %#', (patch) => {
+    const config = cloneV4()
+    Object.assign(
+      config,
+      { period_days: 7 },
+      patch.period_days === undefined ? {} : { period_days: patch.period_days },
+    )
+    config.variables.push({
+      name: 'periodStart',
+      scalarType: 'UTC_TIMESTAMP',
+      source: { kind: 'SESSION', field: 'periodStart' },
+    })
+    config.resolved_variables.periodStart = {
+      type: 'UTC_TIMESTAMP',
+      value: '2026-08-14T00:00:00.000Z',
+    }
+    testRecord(testRecord(config.request.body).input).limit = 3
+    config.pipelines[0] = {
+      output: 'balance',
+      sourcePath: '$.items[*]',
+      orderBy: { path: '$.time', direction: 'DESC' },
+      valuePath: '$.amount',
+      cast: 'DECIMAL',
+      fixedDecimals: patch.fixedDecimals ?? 18,
+      timestamp: patch.timestamp ?? { path: '$.time', format: 'UNIX_SECONDS' },
+      coverage: patch.coverage ?? {
+        kind: 'DESCENDING_WINDOW',
+        requestLimit: 3,
+      },
+      reduce: 'SUM',
+      valueUnit: 'USDT',
+      outputUnit: 'USDT',
+    }
+    config.disclosure = {
+      key_paths: ['$.items', '$.items[*].amount', '$.items[*].time'],
+      scalar_paths: ['$.items[*].amount', '$.items[*].time'],
+      collection_paths: ['$.items'],
+      max_elements: 200,
+    }
+
+    expect(() => validateConnector(config)).toThrow()
+  })
+
   test.each([
     'root',
     'request',

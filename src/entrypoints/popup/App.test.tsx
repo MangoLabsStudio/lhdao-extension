@@ -540,6 +540,14 @@ describe('product experience popup', () => {
             unit: null,
           },
           {
+            ruleId: 'window',
+            title: '完整周期',
+            status: 'INSUFFICIENT_DATA',
+            current: null,
+            target: null,
+            unit: null,
+          },
+          {
             ruleId: 'pending',
             title: '账户状态',
             status: 'PENDING',
@@ -554,6 +562,7 @@ describe('product experience popup', () => {
     await vi.waitFor(() => {
       expect(container.textContent).toContain('已完成（120 / 100 USDT）')
       expect(container.textContent).toContain('部分完成（2 / 3）')
+      expect(container.textContent).toContain('数据范围不足')
       expect(container.textContent).toContain('已提交，等待后端确认')
       expect(container.textContent).toContain('等待证明')
     })

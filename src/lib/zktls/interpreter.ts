@@ -198,6 +198,13 @@ export type V4Pipeline = {
   groupBy?: { path: string; interval: 'UTC_DAY' }
   valuePath?: string
   cast: V4PipelineCast
+  fixedDecimals?: number
+  absolute?: boolean
+  timestamp?: {
+    path: string
+    format: 'ISO_8601' | 'UNIX_SECONDS' | 'UNIX_MILLISECONDS'
+  }
+  coverage?: { kind: 'DESCENDING_WINDOW'; requestLimit: number }
   reduce?:
     | 'SUM'
     | 'COUNT'
@@ -220,6 +227,7 @@ export type V4Connector = {
   revision: 1
   disabled: false
   expires_at: string
+  period_days?: number
   page_origin: string
   origin: string
   request: {
@@ -1708,6 +1716,10 @@ function v4Pipelines(
         'groupBy',
         'valuePath',
         'cast',
+        'fixedDecimals',
+        'absolute',
+        'timestamp',
+        'coverage',
         'reduce',
         'postFilter',
         'finalReduce',
@@ -1728,6 +1740,7 @@ function v4Pipelines(
     const reduce = input.reduce as string | undefined
     const finalReduce = input.finalReduce as string | undefined
     const addressCast = cast === 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
+    const numericCast = cast === 'DECIMAL' || cast === 'INTEGER'
     if (
       reduce !== undefined &&
       ![
@@ -1749,6 +1762,13 @@ function v4Pipelines(
     )
       fail('pipeline.finalReduce is invalid.')
     if (
+      (input.fixedDecimals !== undefined &&
+        (!numericCast ||
+          !Number.isInteger(input.fixedDecimals) ||
+          (input.fixedDecimals as number) < 0 ||
+          (input.fixedDecimals as number) > 18)) ||
+      (input.absolute !== undefined &&
+        (!numericCast || typeof input.absolute !== 'boolean')) ||
       (addressCast &&
         (collection ||
           input.filter !== undefined ||
@@ -1799,6 +1819,39 @@ function v4Pipelines(
       if (group.interval !== 'UTC_DAY') fail('pipeline.groupBy is invalid.')
     }
     if (input.valuePath !== undefined) v4JsonPath(input.valuePath)
+    if (input.timestamp !== undefined) {
+      const timestamp = v4Exact(
+        input.timestamp,
+        ['path', 'format'],
+        'pipeline.timestamp',
+      )
+      v4JsonPath(timestamp.path)
+      if (
+        timestamp.format !== 'ISO_8601' &&
+        timestamp.format !== 'UNIX_SECONDS' &&
+        timestamp.format !== 'UNIX_MILLISECONDS'
+      )
+        fail('pipeline.timestamp is invalid.')
+    }
+    if (input.coverage !== undefined) {
+      const coverage = v4Exact(
+        input.coverage,
+        ['kind', 'requestLimit'],
+        'pipeline.coverage',
+      )
+      if (
+        coverage.kind !== 'DESCENDING_WINDOW' ||
+        !Number.isInteger(coverage.requestLimit) ||
+        (coverage.requestLimit as number) < 1 ||
+        (coverage.requestLimit as number) > 200 ||
+        input.timestamp === undefined ||
+        input.orderBy === undefined ||
+        (input.orderBy as V4Record).direction !== 'DESC' ||
+        (input.orderBy as V4Record).path !== (input.timestamp as V4Record).path
+      )
+        fail('pipeline.coverage is invalid.')
+      references.set('periodStart', (references.get('periodStart') ?? 0) + 1)
+    }
     const valueUnit = v4Unit(input.valueUnit, 'pipeline.valueUnit')
     const outputUnit = v4Unit(input.outputUnit, 'pipeline.outputUnit')
     if (
@@ -1924,6 +1977,7 @@ function v4DisclosurePlan(pipelines: readonly V4Pipeline[]) {
     if (pipeline.orderBy) dependency(source, pipeline.orderBy.path)
     if (pipeline.groupBy) dependency(source, pipeline.groupBy.path)
     if (pipeline.valuePath) dependency(source, pipeline.valuePath)
+    if (pipeline.timestamp) dependency(source, pipeline.timestamp.path)
   }
   return {
     key_paths: [...keys].sort(),
@@ -1954,6 +2008,20 @@ function v4TemplateAtPath(
   return current
 }
 
+function v4CountRequestValue(value: unknown, expected: number): number {
+  if (value === expected) return 1
+  if (Array.isArray(value))
+    return value.reduce(
+      (count, item) => count + v4CountRequestValue(item, expected),
+      0,
+    )
+  if (!value || typeof value !== 'object') return 0
+  return Object.values(value).reduce(
+    (count, item) => count + v4CountRequestValue(item, expected),
+    0,
+  )
+}
+
 function validateV4Connector(value: unknown): V4Connector {
   v4PlainData(value)
   let copied: unknown
@@ -1973,6 +2041,7 @@ function validateV4Connector(value: unknown): V4Connector {
     'response_content_encoding',
   )
   const hasMaxDecodedData = Object.hasOwn(initial, 'max_decoded_data')
+  const hasPeriodDays = Object.hasOwn(initial, 'period_days')
   if (hasResponseContentEncoding !== hasMaxDecodedData)
     fail('V4 response encoding is invalid.')
   const fields = [
@@ -1983,6 +2052,7 @@ function validateV4Connector(value: unknown): V4Connector {
     'purpose',
     ...(purpose === 'ACCOUNT_BINDING' ? ['account_binding'] : []),
     'expires_at',
+    ...(hasPeriodDays ? ['period_days'] : []),
     'page_origin',
     'origin',
     'request',
@@ -2008,6 +2078,14 @@ function validateV4Connector(value: unknown): V4Connector {
     input.response_status !== 200
   )
     fail('V4 connector constants are invalid.')
+  if (
+    hasPeriodDays &&
+    (purpose !== 'METRIC' ||
+      !Number.isInteger(input.period_days) ||
+      (input.period_days as number) < 1 ||
+      (input.period_days as number) > 365)
+  )
+    fail('period_days is invalid.')
   if (
     hasResponseTransferEncoding &&
     input.response_transfer_encoding !== 'chunked'
@@ -2105,6 +2183,26 @@ function validateV4Connector(value: unknown): V4Connector {
   }
 
   const pipelines = v4Pipelines(input.pipelines, variables, references)
+  const coveragePipelines = pipelines.filter((pipeline) => pipeline.coverage)
+  if (
+    coveragePipelines.some(
+      (pipeline) =>
+        !hasPeriodDays ||
+        v4CountRequestValue(
+          { requiredQuery, body: request.body },
+          pipeline.coverage!.requestLimit,
+        ) !== 1,
+    ) ||
+    (coveragePipelines.length > 0 &&
+      ![...variables.values()].some(
+        (variable) =>
+          variable.name === 'periodStart' &&
+          variable.scalarType === 'UTC_TIMESTAMP' &&
+          variable.source.kind === 'SESSION' &&
+          variable.source.field === 'periodStart',
+      ))
+  )
+    fail('pipeline.coverage is invalid.')
   v4ResolvedVariables(input.resolved_variables, variables)
   const binding =
     purpose === 'ACCOUNT_BINDING'
