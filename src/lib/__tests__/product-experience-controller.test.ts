@@ -1298,18 +1298,12 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
   })
 
-  it('retries cleared failed work only after a later trigger', async () => {
-    harness.startZkTls
-      .mockResolvedValueOnce({
-        sessionId: 'failed-session',
-        connectorId: 'failed-connector',
-        expiresAt: '2026-07-13T10:10:00.000Z',
-      })
-      .mockResolvedValueOnce({
-        sessionId: 'retry-session',
-        connectorId: 'retry-connector',
-        expiresAt: '2026-07-13T10:10:00.000Z',
-      })
+  it('reuses an unexpired backend session after a later proof trigger', async () => {
+    harness.startZkTls.mockResolvedValueOnce({
+      sessionId: 'failed-session',
+      connectorId: 'failed-connector',
+      expiresAt: '2026-07-13T10:10:00.000Z',
+    })
     harness.proveZkTls
       .mockImplementationOnce(async (input) => ({
         type: 'zktls-prove-result',
@@ -1330,9 +1324,9 @@ describe('ProductExperienceController zkTLS authority queue', () => {
       expect(harness.storage.session?.zkTlsQueue[0]).toEqual({
         ruleId: 'rule-a',
         status: 'queued',
-        sessionId: null,
-        connectorId: null,
-        expiresAt: null,
+        sessionId: 'failed-session',
+        connectorId: 'failed-connector',
+        expiresAt: '2026-07-13T10:10:00.000Z',
       }),
     )
     await flushAsync()
@@ -1343,16 +1337,46 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     ])
     await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
 
-    expect(harness.startZkTls).toHaveBeenNthCalledWith(2, {
-      campaignId: 'campaign-product-001',
-      ruleId: 'rule-a',
-      ticketKind: 'PARTICIPANT',
-    })
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
     expect(harness.proveZkTls).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        sessionId: 'retry-session',
-        connectorId: 'retry-connector',
+        sessionId: 'failed-session',
+        connectorId: 'failed-connector',
+      }),
+    )
+  })
+
+  it('reuses an unexpired backend session after a thrown prover error', async () => {
+    harness.startZkTls.mockResolvedValueOnce({
+      sessionId: 'failed-session',
+      connectorId: 'failed-connector',
+      expiresAt: '2026-07-13T10:10:00.000Z',
+    })
+    harness.proveZkTls
+      .mockRejectedValueOnce(new Error('prover failed'))
+      .mockImplementationOnce(async (input) => ({
+        type: 'zktls-prove-result',
+        correlationId: input.correlationId,
+        status: 'submitted',
+      }))
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.error).toBe('VERIFICATION_FAILED'),
+    )
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: 'failed-session',
+        connectorId: 'failed-connector',
       }),
     )
   })
@@ -1415,9 +1439,9 @@ describe('ProductExperienceController zkTLS authority queue', () => {
       {
         ruleId: 'rule-a',
         status: 'queued',
-        sessionId: null,
-        connectorId: null,
-        expiresAt: null,
+        sessionId: failureStage === 'start' ? null : 'zktls-session-1',
+        connectorId: failureStage === 'start' ? null : 'trusted-connector-1',
+        expiresAt: failureStage === 'start' ? null : '2026-07-13T10:10:00.000Z',
       },
       {
         ruleId: 'rule-b',
@@ -1430,11 +1454,12 @@ describe('ProductExperienceController zkTLS authority queue', () => {
   })
 
   it.each([
-    ['pending_login', undefined, 'AUTHORIZATION_REQUIRED', true],
-    ['error', 'PERMISSION_DENIED', 'AUTHORIZATION_REQUIRED', true],
-    ['error', 'REQUEST_NOT_CAPTURED', 'VERIFICATION_FAILED', false],
-    ['unsupported', undefined, 'VERIFICATION_FAILED', false],
-  ] as const)('leaves %s/%s failures retryable without claiming completion', async (status, code, error, authorizationRequired) => {
+    ['pending_login', undefined, 'AUTHORIZATION_REQUIRED', true, false],
+    ['error', 'PERMISSION_DENIED', 'AUTHORIZATION_REQUIRED', true, false],
+    ['error', 'REQUEST_NOT_CAPTURED', 'VERIFICATION_FAILED', false, false],
+    ['unsupported', undefined, 'VERIFICATION_FAILED', false, false],
+    ['error', 'SESSION_EXPIRED', 'SESSION_EXPIRED', false, true],
+  ] as const)('leaves %s/%s failures retryable without claiming completion', async (status, code, error, authorizationRequired, clearsSession) => {
     harness.proveZkTls.mockImplementationOnce(async (input) => ({
       type: 'zktls-prove-result',
       correlationId: input.correlationId,
@@ -1450,9 +1475,9 @@ describe('ProductExperienceController zkTLS authority queue', () => {
         {
           ruleId: 'rule-a',
           status: 'queued',
-          sessionId: null,
-          connectorId: null,
-          expiresAt: null,
+          sessionId: clearsSession ? null : 'zktls-session-1',
+          connectorId: clearsSession ? null : 'trusted-connector-1',
+          expiresAt: clearsSession ? null : '2026-07-13T10:10:00.000Z',
         },
       ])
       expect(harness.storage.session?.error).toBe(error)
@@ -1686,7 +1711,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     })
   })
 
-  it('starts a new session when a failed proof is triggered again', async () => {
+  it('reuses an unexpired backend session when start resumes a failed proof', async () => {
     harness.proveZkTls
       .mockImplementationOnce(async (input) => ({
         type: 'zktls-prove-result',
@@ -1699,17 +1724,11 @@ describe('ProductExperienceController zkTLS authority queue', () => {
         correlationId: input.correlationId,
         status: 'submitted',
       }))
-    harness.startZkTls
-      .mockResolvedValueOnce({
-        sessionId: 'failed-session',
-        connectorId: 'trusted-connector-1',
-        expiresAt: '2026-07-13T10:10:00.000Z',
-      })
-      .mockResolvedValueOnce({
-        sessionId: 'retry-session',
-        connectorId: 'trusted-connector-1',
-        expiresAt: '2026-07-13T10:10:00.000Z',
-      })
+    harness.startZkTls.mockResolvedValueOnce({
+      sessionId: 'failed-session',
+      connectorId: 'trusted-connector-1',
+      expiresAt: '2026-07-13T10:10:00.000Z',
+    })
 
     await harness.controller.handleEvidence(sender(), 'session-12345678', [
       match('rule-a'),
@@ -1720,9 +1739,9 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     await harness.controller.start()
     await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
 
-    expect(harness.startZkTls).toHaveBeenCalledTimes(2)
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
     expect(harness.proveZkTls).toHaveBeenLastCalledWith(
-      expect.objectContaining({ sessionId: 'retry-session' }),
+      expect.objectContaining({ sessionId: 'failed-session' }),
     )
   })
 
@@ -1954,7 +1973,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     )
   })
 
-  it('resumes submitted session IDs after restart but replaces interrupted proving sessions', async () => {
+  it('resumes submitted and unexpired proving session IDs after restart', async () => {
     const session = await harness.storage.getSession()
     if (!session) throw new Error('missing session')
     session.zkTlsQueue = [
@@ -1992,12 +2011,6 @@ describe('ProductExperienceController zkTLS authority queue', () => {
         unit: null,
       },
     ])
-    harness.startZkTls.mockResolvedValueOnce({
-      sessionId: 'replacement-session',
-      connectorId: 'replacement-connector',
-      expiresAt: '2026-07-13T10:10:00.000Z',
-    })
-
     const restarted = new ProductExperienceController(harness.dependencies)
     const resumed = restarted.resumePendingSubmit()
     await flushAsync()
@@ -2010,11 +2023,37 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     expect(harness.startZkTls).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1_000)
     await flushAsync()
-    expect(harness.startZkTls).toHaveBeenCalledWith(
-      expect.objectContaining({ ruleId: 'rule-b' }),
-    )
+    expect(harness.startZkTls).not.toHaveBeenCalled()
     expect(harness.proveZkTls).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'replacement-session' }),
+      expect.objectContaining({ sessionId: 'interrupted-session' }),
+    )
+  })
+
+  it.each([
+    ['expired', 'old-session', 'old-connector', '2026-07-13T09:59:59.000Z'],
+    ['invalid expiry', 'old-session', 'old-connector', 'not-a-date'],
+    ['missing connector', 'old-session', null, '2026-07-13T10:10:00.000Z'],
+  ] as const)('starts a fresh backend session for %s proving metadata', async (_label, sessionId, connectorId, expiresAt) => {
+    const session = await harness.storage.getSession()
+    if (!session) throw new Error('missing session')
+    session.zkTlsQueue = [
+      {
+        ruleId: 'rule-a',
+        status: 'proving',
+        sessionId,
+        connectorId,
+        expiresAt,
+      },
+    ]
+    await harness.storage.setSession(session)
+
+    const restarted = new ProductExperienceController(harness.dependencies)
+    await restarted.resumePendingSubmit()
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(1))
+
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'zktls-session-1' }),
     )
   })
 })
