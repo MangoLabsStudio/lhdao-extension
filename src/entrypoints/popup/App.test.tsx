@@ -325,6 +325,60 @@ describe('product experience popup', () => {
     )
   })
 
+  it('continues a backend PARTIAL proof through the existing start action', async () => {
+    const harness = await renderPopup(
+      productState('observing', {
+        totalRuleCount: 1,
+        zkTlsProgress: [
+          {
+            ruleId: 'gzip-proof',
+            title: '验证 gzip 响应',
+            status: 'PARTIAL',
+            current: true,
+            target: true,
+            unit: null,
+          },
+        ],
+      }),
+    )
+
+    const button = findButton(harness.container, '继续证明')
+    await act(async () => button.click())
+
+    await vi.waitFor(() => {
+      expect(
+        harness.requests.filter(
+          (request) =>
+            request &&
+            typeof request === 'object' &&
+            'type' in request &&
+            request.type === 'start-product-experience',
+        ),
+      ).toEqual([{ type: 'start-product-experience' }])
+    })
+    expect(harness.container.textContent).not.toContain('重试证明')
+  })
+
+  it('does not offer continue before the backend reports PARTIAL', async () => {
+    const { container } = await renderPopup(
+      productState('observing', {
+        zkTlsProgress: [
+          {
+            ruleId: 'gzip-proof',
+            title: '验证 gzip 响应',
+            status: 'PENDING',
+            current: null,
+            target: true,
+            unit: null,
+          },
+        ],
+      }),
+    )
+
+    await vi.waitFor(() => expect(container.textContent).toContain('等待证明'))
+    expect(container.textContent).not.toContain('继续证明')
+  })
+
   it('shows verified only for the authoritative verified state', async () => {
     const harness = await renderPopup(
       productState('submitting', {

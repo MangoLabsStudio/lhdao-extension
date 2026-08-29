@@ -73,6 +73,7 @@ function actionLabel(state: ProductExperienceControllerState): string | null {
   }
   if (status === 'reauthorize') return '重新授权'
   if (isRetryableProofState(state)) return '重试证明'
+  if (isContinuablePartialProofState(state)) return '继续证明'
   if (status === 'ready') return '开始验证'
   return null
 }
@@ -84,6 +85,17 @@ function isRetryableProofState(
     state.status === 'observing' &&
     state.zkTlsProgress !== undefined &&
     (state.error === 'VERIFICATION_FAILED' || state.error === 'SESSION_EXPIRED')
+  )
+}
+
+function isContinuablePartialProofState(
+  state: ProductExperienceControllerState,
+): boolean {
+  return (
+    state.status === 'observing' &&
+    state.error === null &&
+    state.currentOriginAllowed &&
+    state.zkTlsProgress?.some((entry) => entry.status === 'PARTIAL') === true
   )
 }
 
