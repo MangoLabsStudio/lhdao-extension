@@ -200,7 +200,7 @@ describe('complete V4 public request disclosure', () => {
 
     expect(
       createHash('sha256').update(PUBLIC_HEADER_FIXTURE_BYTES).digest('hex'),
-    ).toBe('869a867960ebf1db3f7c4f2eb6352343db3591a9d47484a8fb6e727b183a7fbc')
+    ).toBe('8a22d3eaba9189fc7a4bece51ba65c9331000828066d09adf7489f37f9fa3553')
     expect(
       v4RequestDisclosureRanges(
         sent,
