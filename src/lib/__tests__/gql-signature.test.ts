@@ -142,4 +142,19 @@ describe('quoted promote operation signatures', () => {
     expect(source).not.toMatch(/const PRICE|FEE_RATE|actionCost/u)
     expect(source).not.toMatch(/totalCost\s*=|unitPrice\s*\*/u)
   })
+
+  it('contains no public future-price fields in buyer production sources', () => {
+    const source = [
+      'src/lib/queries.ts',
+      'src/lib/plugin-operations.ts',
+      'src/types/messages.ts',
+      'src/entrypoints/background.ts',
+      'src/components/promote/PromoteDialog.tsx',
+    ]
+      .map((path) => readFileSync(resolve(process.cwd(), path), 'utf8'))
+      .join('\n')
+
+    expect(source).not.toMatch(/todayPrice|tomorrowExpectedPrice/u)
+    expect(source).not.toMatch(/明日预计|价格日程/u)
+  })
 })
