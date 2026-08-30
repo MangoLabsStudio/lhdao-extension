@@ -243,6 +243,33 @@ describe('complete V4 public request disclosure', () => {
     expect(disclosed(sent, ranges)).toEqual([sent])
   })
 
+  test('derives and discloses an exact signed public request header', () => {
+    const signed = connector()
+    signed.request.public_headers = { 'x-client-type': 'public' }
+    const sent = request('POST', {
+      headers: [
+        'Host: api.example.com',
+        'Connection: close',
+        'X-Client-Type: public',
+        'Content-Type: application/json',
+        `Content-Length: ${encoder.encode(body).length}`,
+      ],
+    })
+    const details = v4PublicRequestDetails({
+      origin: signed.origin,
+      method: 'POST',
+      path,
+      body,
+      contentType: 'application/json',
+      publicHeaders: signed.request.public_headers,
+    })
+
+    expect(details.sentByteLength).toBe(sent.length)
+    expect(v4RequestDisclosureRanges(sent, signed, capture())).toEqual([
+      { start: 0, end: sent.length },
+    ])
+  })
+
   test.each([
     'GET',
     'POST',
