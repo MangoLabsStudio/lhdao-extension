@@ -22,6 +22,37 @@ import type { ZkTlsRunRequest, ZkTlsRunResult } from './zktls/runtime'
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 const PATH_HASH_PATTERN = /^[a-f0-9]{64}$/
 
+export type ProductZkTlsFailureCode =
+  | 'PROVER_BUSY'
+  | 'PROVER_FAILED'
+  | 'PROVER_TIMEOUT'
+  | 'REQUEST_NOT_CAPTURED'
+  | 'UNSUPPORTED_CONNECTOR'
+  | 'ZKTLS_BUSY'
+  | 'ZKTLS_CAPTURE_FAILED'
+  | 'ZKTLS_SETUP_FAILED'
+  | 'ZKTLS_UNKNOWN_FAILURE'
+
+const PRODUCT_ZKTLS_FAILURE_CODES = new Set<ProductZkTlsFailureCode>([
+  'PROVER_BUSY',
+  'PROVER_FAILED',
+  'PROVER_TIMEOUT',
+  'REQUEST_NOT_CAPTURED',
+  'UNSUPPORTED_CONNECTOR',
+  'ZKTLS_BUSY',
+  'ZKTLS_CAPTURE_FAILED',
+  'ZKTLS_SETUP_FAILED',
+])
+
+function safeZkTlsFailureCode(
+  code: string | undefined,
+): ProductZkTlsFailureCode {
+  return code &&
+    PRODUCT_ZKTLS_FAILURE_CODES.has(code as ProductZkTlsFailureCode)
+    ? (code as ProductZkTlsFailureCode)
+    : 'ZKTLS_UNKNOWN_FAILURE'
+}
+
 export interface ProductExperienceControllerState {
   campaignId: string | null
   title: string | null
@@ -31,6 +62,7 @@ export interface ProductExperienceControllerState {
   authorizationRequired: boolean
   currentOriginAllowed: boolean
   error: ProductExperiencePublicError | null
+  zkTlsFailureCode?: ProductZkTlsFailureCode | null
   zkTlsProgress?: ProductZkTlsRuleProgress[]
 }
 
@@ -79,6 +111,7 @@ export interface ProductExperienceSession {
   zkTlsProgress: ProductZkTlsRuleProgress[]
   status: 'observing' | 'reauthorize' | 'submitting'
   error: ProductExperiencePublicError | null
+  zkTlsFailureCode?: ProductZkTlsFailureCode | null
 }
 
 export interface ProductExperienceControllerStorage {
@@ -525,6 +558,7 @@ export class ProductExperienceController {
         zkTlsProgress: [],
         status: 'observing',
         error: null,
+        zkTlsFailureCode: null,
         ...(minted.verificationMode === 'LEGACY_DOM'
           ? {
               ticket: minted.ticket,
@@ -623,6 +657,7 @@ export class ProductExperienceController {
     const sessionGeneration = this.advanceGeneration()
     session.status = 'observing'
     session.error = null
+    session.zkTlsFailureCode = null
     await this.dependencies.storage.setSession(session)
     if (this.generation !== sessionGeneration) {
       return this.getStateWithoutRetry()
@@ -696,6 +731,7 @@ export class ProductExperienceController {
         : hasVisibleUrl
           ? 'ORIGIN_NOT_ALLOWED'
           : 'AUTHORIZATION_REQUIRED'
+      session.zkTlsFailureCode = null
       await this.dependencies.storage.setSession(session)
       if (this.generation !== sessionGeneration) {
         return this.getStateWithoutRetry()
@@ -846,6 +882,7 @@ export class ProductExperienceController {
           }
           if (!added) return false
           current.error = null
+          current.zkTlsFailureCode = null
           return true
         },
       )
@@ -1086,6 +1123,7 @@ export class ProductExperienceController {
           queued.expiresAt = started.expiresAt
           current.status = 'submitting'
           current.error = null
+          current.zkTlsFailureCode = null
         },
       )
       const provingItem = proving?.zkTlsQueue.find(
@@ -1108,6 +1146,7 @@ export class ProductExperienceController {
           item.ruleId,
           'VERIFICATION_FAILED',
           false,
+          'ZKTLS_UNKNOWN_FAILURE',
         )
         this.zkTlsDrainRequested = false
         return
@@ -1115,16 +1154,21 @@ export class ProductExperienceController {
 
       if (result.status !== 'submitted') {
         this.zkTlsDrainRequested = false
-        await this.resetZkTlsItem(
-          session.sessionId,
-          item.ruleId,
+        const publicError =
           result.status === 'pending_login' ||
-            result.code === 'PERMISSION_DENIED'
+          result.code === 'PERMISSION_DENIED'
             ? 'AUTHORIZATION_REQUIRED'
             : result.code === 'SESSION_EXPIRED'
               ? 'SESSION_EXPIRED'
-              : 'VERIFICATION_FAILED',
+              : 'VERIFICATION_FAILED'
+        await this.resetZkTlsItem(
+          session.sessionId,
+          item.ruleId,
+          publicError,
           result.code === 'SESSION_EXPIRED',
+          publicError === 'VERIFICATION_FAILED'
+            ? safeZkTlsFailureCode(result.code)
+            : null,
         )
         this.zkTlsDrainRequested = false
         return
@@ -1146,6 +1190,7 @@ export class ProductExperienceController {
           provingEntry.status = 'submitted'
           current.status = 'submitting'
           current.error = null
+          current.zkTlsFailureCode = null
         },
       )
       if (!submitted) return
@@ -1157,6 +1202,7 @@ export class ProductExperienceController {
     ruleId: string,
     error: ProductExperiencePublicError = 'VERIFICATION_FAILED',
     clearSession = true,
+    failureCode: ProductZkTlsFailureCode | null = null,
   ): Promise<void> {
     const reset = await this.mutateZkTlsSession(sessionId, (current) => {
       const item = current.zkTlsQueue.find((entry) => entry.ruleId === ruleId)
@@ -1176,6 +1222,10 @@ export class ProductExperienceController {
           ? 'reauthorize'
           : 'observing'
       current.error = authorizationRequired ? 'AUTHORIZATION_REQUIRED' : error
+      current.zkTlsFailureCode =
+        !authorizationRequired && error === 'VERIFICATION_FAILED'
+          ? (failureCode ?? 'ZKTLS_UNKNOWN_FAILURE')
+          : null
     })
     if (reset) await this.notify()
   }
@@ -1251,6 +1301,7 @@ export class ProductExperienceController {
               ? 'submitting'
               : 'observing'
             current.error = null
+            current.zkTlsFailureCode = null
           }
         }
       })
@@ -1544,6 +1595,7 @@ export class ProductExperienceController {
     session.error = session.currentOriginAllowed
       ? 'AUTHORIZATION_REQUIRED'
       : 'ORIGIN_NOT_ALLOWED'
+    session.zkTlsFailureCode = null
     const sessionGeneration = this.advanceGeneration()
     await this.dependencies.storage.setSession(session)
     if (this.generation !== sessionGeneration) return
@@ -1610,6 +1662,7 @@ export class ProductExperienceController {
         const sessionGeneration = this.advanceGeneration()
         session.status = 'reauthorize'
         session.error = 'AUTHORIZATION_REQUIRED'
+        session.zkTlsFailureCode = null
         await this.dependencies.storage.setSession(session)
         if (this.generation !== sessionGeneration) {
           return this.getStateWithoutRetry()
@@ -1648,6 +1701,9 @@ export class ProductExperienceController {
       authorizationRequired,
       currentOriginAllowed: session.currentOriginAllowed,
       error: session.error,
+      zkTlsFailureCode: isZkTlsSession(session)
+        ? (session.zkTlsFailureCode ?? null)
+        : null,
       ...(isZkTlsSession(session)
         ? { zkTlsProgress: clone(session.zkTlsProgress) }
         : {}),
