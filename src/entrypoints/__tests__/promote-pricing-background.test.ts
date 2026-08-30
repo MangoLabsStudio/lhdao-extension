@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing'
 
@@ -108,6 +110,37 @@ describe('plugin promote pricing background handlers', () => {
     expect(gqlMock).toHaveBeenCalledWith(
       CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
       { input: { actions: requestedCurrentActions } },
+    )
+  })
+
+  it('drives the background handler with the shared current-price fixture', async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          'src/lib/__tests__/fixtures/pilot-current-price-channel-parity.json',
+        ),
+        'utf8',
+      ),
+    ) as {
+      input: { actions: string[] }
+      response: typeof currentPrices
+    }
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    gqlMock.mockResolvedValue({
+      currentEngagementMarketPrices: fixture.response,
+    })
+
+    await expect(
+      currentEngagementMarketPricesHandler(fixture.input),
+    ).resolves.toEqual({
+      type: 'current-engagement-prices-result',
+      ok: true,
+      prices: fixture.response,
+    })
+    expect(gqlMock).toHaveBeenCalledWith(
+      CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
+      { input: fixture.input },
     )
   })
 
@@ -401,6 +434,3 @@ describe('plugin promote pricing background handlers', () => {
     })
   })
 })
-
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
