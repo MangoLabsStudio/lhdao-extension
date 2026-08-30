@@ -105,4 +105,3 @@ is `https://service.lhdaobeta.top/graphql`. Do not use the production defaults.
 Reload the unpacked extension, start a new proof, and trigger the signed Nado
 operation during the capture window. Record the actual next stage; do not call
 the E2E successful until Backend reports the proof result.
-

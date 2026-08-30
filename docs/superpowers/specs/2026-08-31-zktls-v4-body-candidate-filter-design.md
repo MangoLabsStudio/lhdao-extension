@@ -45,4 +45,3 @@ proof disclosure.
 2. A later same-path POST with the exact signed body is captured normally.
 3. The returned capture contains only the later request and its variables.
 4. Existing malformed-body, duplicate-candidate, V1, and V3 tests remain green.
-
