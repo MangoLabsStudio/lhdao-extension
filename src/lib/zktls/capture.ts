@@ -807,8 +807,10 @@ export class CaptureSession {
     if (
       v4 &&
       details.requestHeaders!.some((header) => !v4PublicHeader(header.name))
-    )
-      fail('captured request contains an unsupported header')
+    ) {
+      this.#discardCandidate()
+      return
+    }
     const secrets: Partial<Record<SecretHeader, string>> = {}
     if (!v4) {
       for (const header of details.requestHeaders ?? []) {
@@ -1035,6 +1037,13 @@ export class CaptureSession {
     this.#requestBody = undefined
     this.#requestId = null
     this.#redirected.clear()
+  }
+
+  #discardCandidate(): void {
+    if (this.#candidate) clearCapturedRequest(this.#candidate)
+    this.#candidate = null
+    this.#requestBody = undefined
+    this.#requestId = null
   }
 
   #fail(reason: string): void {

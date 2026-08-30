@@ -917,7 +917,7 @@ describe('zkTLS v4 capture', () => {
     ).toThrow('initiator')
   })
 
-  test('rejects credential and custom headers without reading values', () => {
+  test('discards credential and custom header candidates without reading values', () => {
     for (const name of [
       'Cookie',
       'Authorization',
@@ -967,9 +967,63 @@ describe('zkTLS v4 capture', () => {
             credential,
           ],
         }),
-      ).toThrow('unsupported header')
+      ).not.toThrow()
       expect(valueReads).toBe(0)
+      expect(() => capture.take()).toThrow('no provider request was captured')
     }
+  })
+
+  test('captures a later safe request after discarding an unsafe candidate', () => {
+    const capture = v4Session()
+    capture.observeBody({
+      requestId: 'unsafe',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    })
+    let valueReads = 0
+    const forbidden = { name: 'X-App-Client-Type' } as {
+      name: string
+      value?: string
+    }
+    Object.defineProperty(forbidden, 'value', {
+      get() {
+        valueReads += 1
+        return 'private'
+      },
+    })
+    expect(() =>
+      capture.observe({
+        requestId: 'unsafe',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestHeaders: [
+          { name: 'Content-Type', value: 'application/json' },
+          forbidden,
+        ],
+      }),
+    ).not.toThrow()
+    expect(valueReads).toBe(0)
+    expect(() => capture.take()).toThrow('no provider request was captured')
+
+    observePost(capture, 'safe')
+
+    expect(capture.take()).toMatchObject({
+      method: 'POST',
+      path: url.slice('https://api.example.com'.length),
+      body: '{"operation":"account","input":{"account":"acct-body","day":"2026-08-21"}}',
+      secrets: {},
+    })
   })
 
   test.each([
@@ -977,7 +1031,7 @@ describe('zkTLS v4 capture', () => {
     'Sec-Fetch-Unknown',
     'Sec-CH-Api-Key',
     'Sec-CH-UA-Full-Version-List',
-  ])('rejects unsupported client metadata header %s without reading it', (name) => {
+  ])('discards unsupported client metadata header %s without reading it', (name) => {
     const capture = v4Session()
     capture.observeBody({
       requestId: name,
@@ -1013,8 +1067,9 @@ describe('zkTLS v4 capture', () => {
           header,
         ],
       }),
-    ).toThrow('unsupported header')
+    ).not.toThrow()
     expect(valueReads).toBe(0)
+    expect(() => capture.take()).toThrow('no provider request was captured')
   })
 
   test.each([
