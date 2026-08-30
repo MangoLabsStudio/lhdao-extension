@@ -23,11 +23,13 @@ vi.mock('@/lib/gql', () => {
 
 import { GqlError } from '@/lib/gql'
 import {
+  CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
   PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
   PROMOTE_TWEET_MUTATION,
 } from '@/lib/queries'
 import { localStore } from '@/lib/storage'
 import {
+  currentEngagementMarketPricesHandler,
   previewPromoteTweetPricingHandler,
   promoteTweetHandler,
 } from '../background'
@@ -44,13 +46,94 @@ const quote = {
   feeRate: '0.10000000',
   promotionFee: '0.20000000',
   totalCost: '2.20000000',
-  lines: [],
+  lines: [
+    {
+      campaignIndex: 0,
+      actionType: 'LIKE',
+      tier: 'A',
+      quantity: 5,
+      pricingSource: 'PILOT',
+      unitPrice: '0.40000000',
+      principal: '2.00000000',
+    },
+  ],
+}
+
+const currentPrices = {
+  asOf: '2026-08-30T06:32:00.000Z',
+  currency: 'LUX' as const,
+  precision: 8,
+  lines: [
+    {
+      actionType: 'LIKE',
+      tier: 'A',
+      pricingSource: 'PILOT',
+      unitPrice: '0.39000000',
+    },
+    {
+      actionType: 'RT',
+      tier: 'B',
+      pricingSource: 'PILOT',
+      unitPrice: '14.62500000',
+    },
+  ],
 }
 
 describe('plugin promote pricing background handlers', () => {
   beforeEach(() => {
     fakeBrowser.reset()
     gqlMock.mockReset()
+  })
+
+  it('uses the signed current-price operation with a closed action input', async () => {
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    gqlMock.mockResolvedValue({ currentEngagementMarketPrices: currentPrices })
+    await expect(
+      currentEngagementMarketPricesHandler({
+        actions: ['LIKE', 'RT', 'COMMENT'],
+      }),
+    ).resolves.toEqual({
+      type: 'current-engagement-prices-result',
+      ok: true,
+      prices: currentPrices,
+    })
+    expect(gqlMock).toHaveBeenCalledWith(
+      CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
+      { input: { actions: ['LIKE', 'RT', 'COMMENT'] } },
+    )
+  })
+
+  it.each([
+    ['extra root field', { ...currentPrices, tomorrow: [] }],
+    ['empty lines', { ...currentPrices, lines: [] }],
+    ['loose date', { ...currentPrices, asOf: '2026-08-30' }],
+    [
+      'non-fixed money',
+      {
+        ...currentPrices,
+        lines: [{ ...currentPrices.lines[0], unitPrice: '0.39' }],
+      },
+    ],
+    [
+      'future line field',
+      {
+        ...currentPrices,
+        lines: [
+          { ...currentPrices.lines[0], tomorrowExpectedPrice: '0.38000000' },
+        ],
+      },
+    ],
+  ])('rejects current prices with %s without fallback', async (_label, value) => {
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    gqlMock.mockResolvedValue({ currentEngagementMarketPrices: value })
+    await expect(
+      currentEngagementMarketPricesHandler({ actions: ['LIKE'] }),
+    ).resolves.toEqual({
+      type: 'current-engagement-prices-result',
+      ok: false,
+      code: 'PLUGIN_CURRENT_PRICES_RESPONSE_INVALID',
+      message: '当前价格响应无效，请稍后重试。',
+    })
   })
 
   it('requires plugin auth before requesting a quote', async () => {
@@ -137,9 +220,13 @@ describe('plugin promote pricing background handlers', () => {
   it.each([
     ['invalid expiry', { ...quote, expiresAt: 'not-a-date' }],
     ['non-array lines', { ...quote, lines: {} }],
+    ['empty lines', { ...quote, lines: [] }],
+    ['wrong precision', { ...quote, precision: 7 }],
     ['non-string money', { ...quote, totalCost: 2.2 }],
+    ['loose money', { ...quote, totalCost: '2.2' }],
+    ['future root field', { ...quote, tomorrowExpectedPrice: '2.10000000' }],
     [
-      'non-array schedule',
+      'future line field',
       {
         ...quote,
         lines: [
@@ -151,9 +238,7 @@ describe('plugin promote pricing background handlers', () => {
             pricingSource: 'PILOT',
             unitPrice: '0.40000000',
             principal: '2.00000000',
-            todayPrice: '0.40000000',
             tomorrowExpectedPrice: '0.39000000',
-            schedule: {},
           },
         ],
       },

@@ -13,7 +13,11 @@ import type {
 } from '@/lib/binance-square-probe'
 import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
 import type { PublicProductExperienceState } from '@/lib/product-experience-task-bridge'
-import type { LighthouseMember, PromoteTweetPricingQuote } from '@/lib/queries'
+import type {
+  EngagementCurrentMarketPrices,
+  LighthouseMember,
+  PromoteTweetPricingQuote,
+} from '@/lib/queries'
 import type {
   ActiveCampaignSummary,
   CampaignTaskCache,
@@ -89,6 +93,10 @@ export type MsgRequest =
   /** [legacy] reserve + verify 一锅炖 — 兼容老调用,新代码用 reserve / verify 分两步 */
   | { type: 'submit-task'; campaignId: string }
   /** 一键推广:先取服务端冻结报价,再显式确认 promoteTweet。 */
+  | {
+      type: 'get-current-engagement-prices'
+      actions: PromoteAction[]
+    }
   | {
       type: 'preview-promote-tweet-pricing'
       tweetUrl: string
@@ -283,6 +291,17 @@ export type MsgResponse =
   | { type: 'verify-result'; ok: false; code: SubmitErrorCode; message: string }
   | { type: 'submit-result'; ok: true; reward: number }
   | { type: 'submit-result'; ok: false; code: SubmitErrorCode; message: string }
+  | {
+      type: 'current-engagement-prices-result'
+      ok: true
+      prices: EngagementCurrentMarketPrices
+    }
+  | {
+      type: 'current-engagement-prices-result'
+      ok: false
+      code: string
+      message: string
+    }
   | {
       type: 'promote-pricing-result'
       ok: true

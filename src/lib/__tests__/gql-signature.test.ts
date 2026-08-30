@@ -29,9 +29,9 @@ const variables: PromoteTweetVars = {
 }
 
 describe('quoted promote operation signatures', () => {
-  it('allowlists the full pricing evidence query as a signed read', async () => {
+  it('allowlists the frozen pricing query as a v2 signed read', async () => {
     expect(await sha256Hex(PREVIEW_PROMOTE_TWEET_PRICING_QUERY)).toBe(
-      '890c5e721d87d1dda193d0e354aeeffde72d4a7613769df2853e1189f1b470ec',
+      'd71bdd5a31703929fc61a7408b167668f558c16840c340ce8073248b8190e934',
     )
     expect(
       getPluginOperationByDocument(
@@ -39,7 +39,7 @@ describe('quoted promote operation signatures', () => {
         'PreviewPromoteTweetPricing',
       ),
     ).toMatchObject({
-      id: 'read.promote-pricing.v1',
+      id: 'read.promote-pricing.v2',
       permission: 'read',
     })
 
@@ -68,7 +68,7 @@ describe('quoted promote operation signatures', () => {
       nonce: 'nonce-test-123456',
     })
     expect(signed.headers).toMatchObject({
-      'x-plugin-operation-id': 'read.promote-pricing.v1',
+      'x-plugin-operation-id': 'read.promote-pricing.v2',
       'x-device-id': 'device-test-1',
     })
   })

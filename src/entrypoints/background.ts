@@ -45,6 +45,9 @@ import {
   type CreateAutoReinvestVars,
   type CreateExtensionPairingResult,
   type CreateExtensionPairingVars,
+  CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
+  type CurrentEngagementMarketPricesResult,
+  type CurrentEngagementMarketPricesVars,
   LIGHTHOUSE_MEMBERS_QUERY,
   type LighthouseMember,
   type LighthouseMembersResult,
@@ -118,6 +121,7 @@ import type {
   MsgRequest,
   MsgResponse,
   PairingState,
+  PromoteAction,
   SubmitErrorCode,
 } from '@/types/messages'
 
@@ -616,6 +620,9 @@ export default defineBackground(() => {
     }
     if (req.type === 'promote-tweet') {
       return promoteTweetHandler(req)
+    }
+    if (req.type === 'get-current-engagement-prices') {
+      return currentEngagementMarketPricesHandler(req)
     }
     if (req.type === 'preview-promote-tweet-pricing') {
       return previewPromoteTweetPricingHandler(req)
@@ -1215,10 +1222,89 @@ export async function previewPromoteTweetPricingHandler(req: {
   }
 }
 
-const MONEY_STRING = /^\d+(?:\.\d+)?$/
+const PROMOTE_ACTIONS = new Set<PromoteAction>(['LIKE', 'RT', 'COMMENT'])
+const CURRENT_PRICE_TIERS = new Set(['S', 'A', 'B', 'C', 'D'])
+const QUOTE_TIERS = new Set(['A', 'B', 'C', 'D'])
+const MONEY_STRING = /^(?:0|[1-9]\d{0,15})\.\d{8}$/
+
+export async function currentEngagementMarketPricesHandler(req: {
+  actions: unknown
+}): Promise<MsgResponse> {
+  if (!isClosedPromoteActions(req.actions)) {
+    return {
+      type: 'current-engagement-prices-result',
+      ok: false,
+      code: 'PLUGIN_CURRENT_PRICES_REQUEST_INVALID',
+      message: '当前价格请求无效。',
+    }
+  }
+  const token = await localStore.get('apiToken')
+  if (!token) {
+    return {
+      type: 'current-engagement-prices-result',
+      ok: false,
+      code: 'NO_TOKEN',
+      message: '请先在插件 options 配置 plugin token',
+    }
+  }
+  const variables: CurrentEngagementMarketPricesVars = {
+    input: { actions: req.actions },
+  }
+  try {
+    const data = await gql<
+      CurrentEngagementMarketPricesResult,
+      CurrentEngagementMarketPricesVars
+    >(CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY, variables)
+    if (!isCurrentEngagementMarketPrices(data.currentEngagementMarketPrices)) {
+      return {
+        type: 'current-engagement-prices-result',
+        ok: false,
+        code: 'PLUGIN_CURRENT_PRICES_RESPONSE_INVALID',
+        message: '当前价格响应无效，请稍后重试。',
+      }
+    }
+    return {
+      type: 'current-engagement-prices-result',
+      ok: true,
+      prices: data.currentEngagementMarketPrices,
+    }
+  } catch (error) {
+    return {
+      type: 'current-engagement-prices-result',
+      ok: false,
+      code: pluginPricingErrorCode(error),
+      message: '当前价格暂不可用，请稍后重试。',
+    }
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value)
+  return (
+    actual.length === expected.length &&
+    actual.every((key) => expected.includes(key))
+  )
+}
+
+function isClosedPromoteActions(value: unknown): value is PromoteAction[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= PROMOTE_ACTIONS.size &&
+    value.every(
+      (action): action is PromoteAction =>
+        typeof action === 'string' &&
+        PROMOTE_ACTIONS.has(action as PromoteAction),
+    ) &&
+    new Set(value).size === value.length
+  )
 }
 
 function isMoneyString(value: unknown): value is string {
@@ -1226,7 +1312,42 @@ function isMoneyString(value: unknown): value is string {
 }
 
 function isValidDateString(value: unknown): value is string {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value))
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
+    return false
+  }
+  return new Date(value).toISOString() === value
+}
+
+function isCurrentEngagementMarketPrices(
+  value: unknown,
+): value is CurrentEngagementMarketPricesResult['currentEngagementMarketPrices'] {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['asOf', 'currency', 'precision', 'lines']) ||
+    !isValidDateString(value.asOf) ||
+    value.currency !== 'LUX' ||
+    value.precision !== 8 ||
+    !Array.isArray(value.lines) ||
+    value.lines.length === 0
+  ) {
+    return false
+  }
+  return value.lines.every(
+    (line) =>
+      isRecord(line) &&
+      hasExactKeys(line, [
+        'actionType',
+        'tier',
+        'pricingSource',
+        'unitPrice',
+      ]) &&
+      typeof line.actionType === 'string' &&
+      PROMOTE_ACTIONS.has(line.actionType as PromoteAction) &&
+      typeof line.tier === 'string' &&
+      CURRENT_PRICE_TIERS.has(line.tier) &&
+      (line.pricingSource === 'PILOT' || line.pricingSource === 'LEGACY') &&
+      isMoneyString(line.unitPrice),
+  )
 }
 
 function isPromoteTweetPricingQuote(
@@ -1234,53 +1355,63 @@ function isPromoteTweetPricingQuote(
 ): value is PromoteTweetPricingQuote {
   if (
     !isRecord(value) ||
+    !hasExactKeys(value, [
+      'quoteId',
+      'priceVersion',
+      'currency',
+      'precision',
+      'quotedAt',
+      'expiresAt',
+      'principal',
+      'feeRate',
+      'promotionFee',
+      'totalCost',
+      'lines',
+    ]) ||
     typeof value.quoteId !== 'string' ||
     value.quoteId.length === 0 ||
     typeof value.priceVersion !== 'string' ||
     value.priceVersion.length === 0 ||
     value.currency !== 'LUX' ||
-    !Number.isInteger(value.precision) ||
-    (value.precision as number) < 0 ||
+    value.precision !== 8 ||
     !isValidDateString(value.quotedAt) ||
     !isValidDateString(value.expiresAt) ||
     !isMoneyString(value.principal) ||
     !isMoneyString(value.feeRate) ||
     !isMoneyString(value.promotionFee) ||
     !isMoneyString(value.totalCost) ||
-    !Array.isArray(value.lines)
+    !Array.isArray(value.lines) ||
+    value.lines.length === 0
   ) {
     return false
   }
   return value.lines.every((line) => {
     if (
       !isRecord(line) ||
+      !hasExactKeys(line, [
+        'campaignIndex',
+        'actionType',
+        'tier',
+        'quantity',
+        'pricingSource',
+        'unitPrice',
+        'principal',
+      ]) ||
       !Number.isInteger(line.campaignIndex) ||
       (line.campaignIndex as number) < 0 ||
       typeof line.actionType !== 'string' ||
-      line.actionType.length === 0 ||
+      !PROMOTE_ACTIONS.has(line.actionType as PromoteAction) ||
       typeof line.tier !== 'string' ||
-      line.tier.length === 0 ||
+      !QUOTE_TIERS.has(line.tier) ||
       !Number.isInteger(line.quantity) ||
       (line.quantity as number) <= 0 ||
       (line.pricingSource !== 'PILOT' && line.pricingSource !== 'LEGACY') ||
       !isMoneyString(line.unitPrice) ||
-      !isMoneyString(line.principal) ||
-      !isMoneyString(line.todayPrice) ||
-      !isMoneyString(line.tomorrowExpectedPrice) ||
-      (line.schedule !== null && !Array.isArray(line.schedule))
+      !isMoneyString(line.principal)
     ) {
       return false
     }
-    return (
-      line.schedule === null ||
-      line.schedule.every(
-        (point) =>
-          isRecord(point) &&
-          Number.isInteger(point.dayIndex) &&
-          (point.dayIndex as number) >= 0 &&
-          isMoneyString(point.unitPrice),
-      )
-    )
+    return true
   })
 }
 
