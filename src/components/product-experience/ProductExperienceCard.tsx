@@ -73,6 +73,7 @@ function actionLabel(state: ProductExperienceControllerState): string | null {
   }
   if (status === 'reauthorize') return '重新授权'
   if (isRetryableProofState(state)) return '重试证明'
+  if (isContinuableZkTlsProofState(state)) return '继续证明'
   if (status === 'ready') return '开始验证'
   return null
 }
@@ -84,6 +85,17 @@ function isRetryableProofState(
     state.status === 'observing' &&
     state.zkTlsProgress !== undefined &&
     (state.error === 'VERIFICATION_FAILED' || state.error === 'SESSION_EXPIRED')
+  )
+}
+
+function isContinuableZkTlsProofState(
+  state: ProductExperienceControllerState,
+): boolean {
+  return (
+    state.status === 'observing' &&
+    state.error === null &&
+    state.currentOriginAllowed &&
+    state.zkTlsProgress !== undefined
   )
 }
 
@@ -110,6 +122,13 @@ function projectCopy(
 
   const progress = state.zkTlsProgress
   if (progress) {
+    if (progress.some((entry) => entry.status === 'INSUFFICIENT_DATA')) {
+      return {
+        label: '数据范围不足',
+        detail: '当前返回的数据还没覆盖完整周期，请在页面加载更多记录后重试。',
+        tone: 'bg-amber-300',
+      }
+    }
     if (progress.some((entry) => entry.status === 'SUBMITTED')) {
       return {
         label: '证明已提交',
@@ -173,6 +192,7 @@ function progressValue(progress: ProductZkTlsRuleProgress): string | null {
 function progressLabel(progress: ProductZkTlsRuleProgress): string {
   if (progress.status === 'PENDING') return '等待证明'
   if (progress.status === 'SUBMITTED') return '已提交，等待后端确认'
+  if (progress.status === 'INSUFFICIENT_DATA') return '数据范围不足'
   const value = progressValue(progress)
   const detail = value ? `（${value}）` : ''
   return progress.status === 'VERIFIED'

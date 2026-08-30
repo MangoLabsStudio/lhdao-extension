@@ -129,6 +129,8 @@ export type V4ScalarType =
   | 'BOOLEAN'
   | 'UTC_TIMESTAMP'
 
+export type V4PipelineCast = V4ScalarType | 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
+
 export type V4TemplateValue =
   | null
   | boolean
@@ -195,7 +197,14 @@ export type V4Pipeline = {
   orderBy?: { path: string; direction: 'ASC' | 'DESC' }
   groupBy?: { path: string; interval: 'UTC_DAY' }
   valuePath?: string
-  cast: V4ScalarType
+  cast: V4PipelineCast
+  fixedDecimals?: number
+  absolute?: boolean
+  timestamp?: {
+    path: string
+    format: 'ISO_8601' | 'UNIX_SECONDS' | 'UNIX_MILLISECONDS'
+  }
+  coverage?: { kind: 'DESCENDING_WINDOW'; requestLimit: number }
   reduce?:
     | 'SUM'
     | 'COUNT'
@@ -218,6 +227,7 @@ export type V4Connector = {
   revision: 1
   disabled: false
   expires_at: string
+  period_days?: number
   page_origin: string
   origin: string
   request: {
@@ -243,6 +253,7 @@ export type V4Connector = {
   resolved_variables: Record<string, V4ResolvedVariable>
   response_format: 'json'
   response_status: 200
+  response_transfer_encoding?: 'chunked'
   response_content_encoding?: 'gzip'
   max_decoded_data?: number
   disclosure: {
@@ -874,6 +885,10 @@ const V4_SCALAR_TYPES = new Set<V4ScalarType>([
   'INTEGER',
   'BOOLEAN',
   'UTC_TIMESTAMP',
+])
+const V4_PIPELINE_CASTS = new Set<V4PipelineCast>([
+  ...V4_SCALAR_TYPES,
+  'EVM_ADDRESS_FROM_BYTES32_PREFIX',
 ])
 const V4_COUNT_UNITS = new Set(['count', 'days', 'items'])
 const V4_DECIMAL_SCALE = 100_000_000n
@@ -1670,6 +1685,10 @@ function v4ReducerType(reducer: string, input: V4ScalarType): V4ScalarType {
   return input
 }
 
+function v4PipelineCastType(cast: V4PipelineCast): V4ScalarType {
+  return cast === 'EVM_ADDRESS_FROM_BYTES32_PREFIX' ? 'STRING' : cast
+}
+
 function v4ReducerSupports(reducer: string, input: V4ScalarType): boolean {
   if (['COUNT', 'DISTINCT_COUNT', 'FIRST', 'LAST'].includes(reducer))
     return true
@@ -1697,6 +1716,10 @@ function v4Pipelines(
         'groupBy',
         'valuePath',
         'cast',
+        'fixedDecimals',
+        'absolute',
+        'timestamp',
+        'coverage',
         'reduce',
         'postFilter',
         'finalReduce',
@@ -1709,13 +1732,15 @@ function v4Pipelines(
     const output = v4Identifier(input.output, 'pipeline.output')
     if (previous && previous >= output) fail('connector.pipelines is invalid.')
     previous = output
-    if (!V4_SCALAR_TYPES.has(input.cast as V4ScalarType))
+    if (!V4_PIPELINE_CASTS.has(input.cast as V4PipelineCast))
       fail('pipeline.cast is invalid.')
-    const cast = input.cast as V4ScalarType
+    const cast = input.cast as V4PipelineCast
     const source = v4JsonPath(input.sourcePath)
     const collection = source.some((segment) => segment.kind === 'COLLECTION')
     const reduce = input.reduce as string | undefined
     const finalReduce = input.finalReduce as string | undefined
+    const addressCast = cast === 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
+    const numericCast = cast === 'DECIMAL' || cast === 'INTEGER'
     if (
       reduce !== undefined &&
       ![
@@ -1737,6 +1762,24 @@ function v4Pipelines(
     )
       fail('pipeline.finalReduce is invalid.')
     if (
+      (input.fixedDecimals !== undefined &&
+        (!numericCast ||
+          !Number.isInteger(input.fixedDecimals) ||
+          (input.fixedDecimals as number) < 0 ||
+          (input.fixedDecimals as number) > 18)) ||
+      (input.absolute !== undefined &&
+        (!numericCast || typeof input.absolute !== 'boolean')) ||
+      (addressCast &&
+        (collection ||
+          input.filter !== undefined ||
+          input.orderBy !== undefined ||
+          input.groupBy !== undefined ||
+          input.valuePath !== undefined ||
+          reduce !== undefined ||
+          input.postFilter !== undefined ||
+          finalReduce !== undefined ||
+          input.valueUnit !== undefined ||
+          input.outputUnit !== undefined)) ||
       ((input.filter !== undefined ||
         input.orderBy !== undefined ||
         input.groupBy !== undefined ||
@@ -1776,6 +1819,39 @@ function v4Pipelines(
       if (group.interval !== 'UTC_DAY') fail('pipeline.groupBy is invalid.')
     }
     if (input.valuePath !== undefined) v4JsonPath(input.valuePath)
+    if (input.timestamp !== undefined) {
+      const timestamp = v4Exact(
+        input.timestamp,
+        ['path', 'format'],
+        'pipeline.timestamp',
+      )
+      v4JsonPath(timestamp.path)
+      if (
+        timestamp.format !== 'ISO_8601' &&
+        timestamp.format !== 'UNIX_SECONDS' &&
+        timestamp.format !== 'UNIX_MILLISECONDS'
+      )
+        fail('pipeline.timestamp is invalid.')
+    }
+    if (input.coverage !== undefined) {
+      const coverage = v4Exact(
+        input.coverage,
+        ['kind', 'requestLimit'],
+        'pipeline.coverage',
+      )
+      if (
+        coverage.kind !== 'DESCENDING_WINDOW' ||
+        !Number.isInteger(coverage.requestLimit) ||
+        (coverage.requestLimit as number) < 1 ||
+        (coverage.requestLimit as number) > 200 ||
+        input.timestamp === undefined ||
+        input.orderBy === undefined ||
+        (input.orderBy as V4Record).direction !== 'DESC' ||
+        (input.orderBy as V4Record).path !== (input.timestamp as V4Record).path
+      )
+        fail('pipeline.coverage is invalid.')
+      references.set('periodStart', (references.get('periodStart') ?? 0) + 1)
+    }
     const valueUnit = v4Unit(input.valueUnit, 'pipeline.valueUnit')
     const outputUnit = v4Unit(input.outputUnit, 'pipeline.outputUnit')
     if (
@@ -1788,7 +1864,7 @@ function v4Pipelines(
       (finalReduce === 'COUNT' && !V4_COUNT_UNITS.has(outputUnit ?? ''))
     )
       fail('pipeline units are invalid.')
-    let stageType = cast
+    let stageType = v4PipelineCastType(cast)
     let cardinality: 'SCALAR' | 'COLLECTION' = collection
       ? 'COLLECTION'
       : 'SCALAR'
@@ -1901,6 +1977,7 @@ function v4DisclosurePlan(pipelines: readonly V4Pipeline[]) {
     if (pipeline.orderBy) dependency(source, pipeline.orderBy.path)
     if (pipeline.groupBy) dependency(source, pipeline.groupBy.path)
     if (pipeline.valuePath) dependency(source, pipeline.valuePath)
+    if (pipeline.timestamp) dependency(source, pipeline.timestamp.path)
   }
   return {
     key_paths: [...keys].sort(),
@@ -1931,20 +2008,40 @@ function v4TemplateAtPath(
   return current
 }
 
+function v4CountRequestValue(value: unknown, expected: number): number {
+  if (value === expected) return 1
+  if (Array.isArray(value))
+    return value.reduce(
+      (count, item) => count + v4CountRequestValue(item, expected),
+      0,
+    )
+  if (!value || typeof value !== 'object') return 0
+  return Object.values(value).reduce(
+    (count, item) => count + v4CountRequestValue(item, expected),
+    0,
+  )
+}
+
 function validateV4Connector(value: unknown): V4Connector {
   v4PlainData(value)
+  let copied: unknown
   try {
-    structuredClone(value)
+    copied = structuredClone(value)
   } catch {
     fail('V4 connector is invalid.')
   }
-  const initial = v4Record(value, 'connector')
+  const initial = v4Record(copied, 'connector')
   const purpose = initial.purpose
+  const hasResponseTransferEncoding = Object.hasOwn(
+    initial,
+    'response_transfer_encoding',
+  )
   const hasResponseContentEncoding = Object.hasOwn(
     initial,
     'response_content_encoding',
   )
   const hasMaxDecodedData = Object.hasOwn(initial, 'max_decoded_data')
+  const hasPeriodDays = Object.hasOwn(initial, 'period_days')
   if (hasResponseContentEncoding !== hasMaxDecodedData)
     fail('V4 response encoding is invalid.')
   const fields = [
@@ -1955,6 +2052,7 @@ function validateV4Connector(value: unknown): V4Connector {
     'purpose',
     ...(purpose === 'ACCOUNT_BINDING' ? ['account_binding'] : []),
     'expires_at',
+    ...(hasPeriodDays ? ['period_days'] : []),
     'page_origin',
     'origin',
     'request',
@@ -1962,6 +2060,7 @@ function validateV4Connector(value: unknown): V4Connector {
     'resolved_variables',
     'response_format',
     'response_status',
+    ...(hasResponseTransferEncoding ? ['response_transfer_encoding'] : []),
     ...(hasResponseContentEncoding
       ? ['response_content_encoding', 'max_decoded_data']
       : []),
@@ -1979,6 +2078,19 @@ function validateV4Connector(value: unknown): V4Connector {
     input.response_status !== 200
   )
     fail('V4 connector constants are invalid.')
+  if (
+    hasPeriodDays &&
+    (purpose !== 'METRIC' ||
+      !Number.isInteger(input.period_days) ||
+      (input.period_days as number) < 1 ||
+      (input.period_days as number) > 365)
+  )
+    fail('period_days is invalid.')
+  if (
+    hasResponseTransferEncoding &&
+    input.response_transfer_encoding !== 'chunked'
+  )
+    fail('V4 response framing is invalid.')
   if (
     hasResponseContentEncoding &&
     (input.response_content_encoding !== 'gzip' ||
@@ -2071,6 +2183,26 @@ function validateV4Connector(value: unknown): V4Connector {
   }
 
   const pipelines = v4Pipelines(input.pipelines, variables, references)
+  const coveragePipelines = pipelines.filter((pipeline) => pipeline.coverage)
+  if (
+    coveragePipelines.some(
+      (pipeline) =>
+        !hasPeriodDays ||
+        v4CountRequestValue(
+          { requiredQuery, body: request.body },
+          pipeline.coverage!.requestLimit,
+        ) !== 1,
+    ) ||
+    (coveragePipelines.length > 0 &&
+      ![...variables.values()].some(
+        (variable) =>
+          variable.name === 'periodStart' &&
+          variable.scalarType === 'UTC_TIMESTAMP' &&
+          variable.source.kind === 'SESSION' &&
+          variable.source.field === 'periodStart',
+      ))
+  )
+    fail('pipeline.coverage is invalid.')
   v4ResolvedVariables(input.resolved_variables, variables)
   const binding =
     purpose === 'ACCOUNT_BINDING'
@@ -2096,7 +2228,7 @@ function validateV4Connector(value: unknown): V4Connector {
       (item) => item.output === walletOutput,
     )
     const pipeline = walletPipelines[0]
-    let outputType = pipeline?.cast
+    let outputType = pipeline ? v4PipelineCastType(pipeline.cast) : undefined
     if (pipeline?.reduce)
       outputType = v4ReducerType(pipeline.reduce, outputType!)
     if (pipeline?.finalReduce)
@@ -2166,8 +2298,8 @@ function validateV4Connector(value: unknown): V4Connector {
     !same(disclosure.collection_paths, expected.collection_paths)
   )
     fail('disclosure is invalid.')
-  if (bytes(canonicalJson(value)) > 65_536) fail('V4 connector is too large.')
-  return v4DeepFreeze(value as V4Connector)
+  if (bytes(canonicalJson(copied)) > 65_536) fail('V4 connector is too large.')
+  return v4DeepFreeze(copied as V4Connector)
 }
 
 export function validateConnector(value: unknown): Connector {

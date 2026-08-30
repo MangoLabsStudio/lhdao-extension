@@ -325,6 +325,95 @@ describe('product experience popup', () => {
     )
   })
 
+  it('continues a backend PARTIAL proof through the existing start action', async () => {
+    const harness = await renderPopup(
+      productState('observing', {
+        totalRuleCount: 1,
+        zkTlsProgress: [
+          {
+            ruleId: 'gzip-proof',
+            title: '验证 gzip 响应',
+            status: 'PARTIAL',
+            current: true,
+            target: true,
+            unit: null,
+          },
+        ],
+      }),
+    )
+
+    const button = findButton(harness.container, '继续证明')
+    await act(async () => button.click())
+
+    await vi.waitFor(() => {
+      expect(
+        harness.requests.filter(
+          (request) =>
+            request &&
+            typeof request === 'object' &&
+            'type' in request &&
+            request.type === 'start-product-experience',
+        ),
+      ).toEqual([{ type: 'start-product-experience' }])
+    })
+    expect(harness.container.textContent).not.toContain('重试证明')
+  })
+
+  it('continues a backend PENDING next-stage proof through the existing start action', async () => {
+    const harness = await renderPopup(
+      productState('observing', {
+        zkTlsProgress: [
+          {
+            ruleId: 'gzip-proof',
+            title: '验证 gzip 响应',
+            status: 'PENDING',
+            current: null,
+            target: true,
+            unit: null,
+          },
+        ],
+      }),
+    )
+
+    await vi.waitFor(() =>
+      expect(harness.container.textContent).toContain('等待证明'),
+    )
+    const button = findButton(harness.container, '继续证明')
+    await act(async () => button.click())
+
+    await vi.waitFor(() => {
+      expect(
+        harness.requests.filter(
+          (request) =>
+            request &&
+            typeof request === 'object' &&
+            'type' in request &&
+            request.type === 'start-product-experience',
+        ),
+      ).toEqual([{ type: 'start-product-experience' }])
+    })
+  })
+
+  it('continues an observing zkTLS session before progress is loaded', async () => {
+    const harness = await renderPopup(
+      productState('observing', { zkTlsProgress: [] }),
+    )
+
+    await act(async () => findButton(harness.container, '继续证明').click())
+
+    await vi.waitFor(() => {
+      expect(
+        harness.requests.filter(
+          (request) =>
+            request &&
+            typeof request === 'object' &&
+            'type' in request &&
+            request.type === 'start-product-experience',
+        ),
+      ).toEqual([{ type: 'start-product-experience' }])
+    })
+  })
+
   it('shows verified only for the authoritative verified state', async () => {
     const harness = await renderPopup(
       productState('submitting', {
@@ -451,6 +540,14 @@ describe('product experience popup', () => {
             unit: null,
           },
           {
+            ruleId: 'window',
+            title: '完整周期',
+            status: 'INSUFFICIENT_DATA',
+            current: null,
+            target: null,
+            unit: null,
+          },
+          {
             ruleId: 'pending',
             title: '账户状态',
             status: 'PENDING',
@@ -465,6 +562,7 @@ describe('product experience popup', () => {
     await vi.waitFor(() => {
       expect(container.textContent).toContain('已完成（120 / 100 USDT）')
       expect(container.textContent).toContain('部分完成（2 / 3）')
+      expect(container.textContent).toContain('数据范围不足')
       expect(container.textContent).toContain('已提交，等待后端确认')
       expect(container.textContent).toContain('等待证明')
     })

@@ -192,6 +192,20 @@ function isExpired(session: ProductExperienceSession, now: number): boolean {
   return !Number.isFinite(expiresAt) || expiresAt <= now
 }
 
+function reusableZkTlsSession(
+  item: ProductZkTlsQueueItem,
+  now: number,
+): ProductZkTlsSession | null {
+  if (!item.sessionId || !item.connectorId || !item.expiresAt) return null
+  const expiresAt = Date.parse(item.expiresAt)
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return null
+  return {
+    sessionId: item.sessionId,
+    connectorId: item.connectorId,
+    expiresAt: item.expiresAt,
+  }
+}
+
 function isTicketExpired(
   ticket: ProductExperienceTicket,
   now: number,
@@ -742,9 +756,11 @@ export class ProductExperienceController {
         for (const item of current.zkTlsQueue) {
           if (item.status !== 'proving') continue
           item.status = 'queued'
-          item.sessionId = null
-          item.connectorId = null
-          item.expiresAt = null
+          if (!reusableZkTlsSession(item, this.dependencies.now())) {
+            item.sessionId = null
+            item.connectorId = null
+            item.expiresAt = null
+          }
         }
         current.status = current.zkTlsQueue.some(
           (item) => item.status === 'submitted',
@@ -1031,26 +1047,30 @@ export class ProductExperienceController {
             )
             if (!interrupted || interrupted.status !== 'proving') return
             interrupted.status = 'queued'
-            interrupted.sessionId = null
-            interrupted.connectorId = null
-            interrupted.expiresAt = null
+            if (!reusableZkTlsSession(interrupted, this.dependencies.now())) {
+              interrupted.sessionId = null
+              interrupted.connectorId = null
+              interrupted.expiresAt = null
+            }
           },
         )
         if (!reset) return
       }
 
-      let started: ProductZkTlsSession
-      try {
-        started = await this.dependencies.startZkTls({
-          campaignId: session.campaignId,
-          ruleId: item.ruleId,
-          ticketKind: session.ticketKind,
-        })
-      } catch {
-        this.zkTlsDrainRequested = false
-        await this.resetZkTlsItem(session.sessionId, item.ruleId)
-        this.zkTlsDrainRequested = false
-        return
+      let started = reusableZkTlsSession(item, this.dependencies.now())
+      if (!started) {
+        try {
+          started = await this.dependencies.startZkTls({
+            campaignId: session.campaignId,
+            ruleId: item.ruleId,
+            ticketKind: session.ticketKind,
+          })
+        } catch {
+          this.zkTlsDrainRequested = false
+          await this.resetZkTlsItem(session.sessionId, item.ruleId)
+          this.zkTlsDrainRequested = false
+          return
+        }
       }
 
       const proving = await this.mutateZkTlsSession(
@@ -1083,7 +1103,12 @@ export class ProductExperienceController {
         })
       } catch {
         this.zkTlsDrainRequested = false
-        await this.resetZkTlsItem(session.sessionId, item.ruleId)
+        await this.resetZkTlsItem(
+          session.sessionId,
+          item.ruleId,
+          'VERIFICATION_FAILED',
+          false,
+        )
         this.zkTlsDrainRequested = false
         return
       }
@@ -1099,6 +1124,7 @@ export class ProductExperienceController {
             : result.code === 'SESSION_EXPIRED'
               ? 'SESSION_EXPIRED'
               : 'VERIFICATION_FAILED',
+          result.code === 'SESSION_EXPIRED',
         )
         this.zkTlsDrainRequested = false
         return
@@ -1130,6 +1156,7 @@ export class ProductExperienceController {
     sessionId: string,
     ruleId: string,
     error: ProductExperiencePublicError = 'VERIFICATION_FAILED',
+    clearSession = true,
   ): Promise<void> {
     const reset = await this.mutateZkTlsSession(sessionId, (current) => {
       const item = current.zkTlsQueue.find((entry) => entry.ruleId === ruleId)
@@ -1139,9 +1166,11 @@ export class ProductExperienceController {
         !current.currentOriginAllowed ||
         current.error === 'AUTHORIZATION_REQUIRED'
       item.status = 'queued'
-      item.sessionId = null
-      item.connectorId = null
-      item.expiresAt = null
+      if (clearSession) {
+        item.sessionId = null
+        item.connectorId = null
+        item.expiresAt = null
+      }
       current.status =
         authorizationRequired || error === 'AUTHORIZATION_REQUIRED'
           ? 'reauthorize'
@@ -1191,6 +1220,9 @@ export class ProductExperienceController {
       const activeProgress = progress.find(
         (entry) => entry.ruleId === activeRuleId,
       )
+      const attemptFinishedWithoutVerification =
+        activeProgress?.status === 'PARTIAL' ||
+        activeProgress?.status === 'INSUFFICIENT_DATA'
       const updated = await this.mutateZkTlsSession(sessionId, (current) => {
         const authorizationRequired =
           current.status === 'reauthorize' ||
@@ -1207,7 +1239,7 @@ export class ProductExperienceController {
         current.zkTlsQueue = current.zkTlsQueue.filter(
           (item) => !durableVerified.has(item.ruleId),
         )
-        if (activeProgress?.status === 'PARTIAL') {
+        if (attemptFinishedWithoutVerification) {
           current.zkTlsQueue = current.zkTlsQueue.filter(
             (item) => item.ruleId !== activeRuleId,
           )
@@ -1245,7 +1277,7 @@ export class ProductExperienceController {
         await this.notify()
         return false
       }
-      if (activeProgress?.status === 'PARTIAL') {
+      if (attemptFinishedWithoutVerification) {
         await this.notify()
         return true
       }

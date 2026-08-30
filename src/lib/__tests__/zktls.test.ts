@@ -243,6 +243,12 @@ const GZIP_INTEGRATION_FIXTURE = JSON.parse(
   configDigest: string
   identityConfigDigest: string
 }
+const EVM_PREFIX_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-evm-prefix.json', 'utf8'),
+) as { cast: string }
+const WINDOW_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-window.json', 'utf8'),
+) as { connector: Record<string, unknown>; hashes: { connector: string } }
 
 function gzipIntegrationConnector(): Record<string, unknown> {
   return structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
@@ -854,6 +860,16 @@ describe('zkTLS strict boundaries', () => {
     )
   })
 
+  test('matches the shared generic window connector and digest', async () => {
+    const normalized = validateConnector(
+      structuredClone(WINDOW_INTEGRATION_FIXTURE.connector),
+    )
+
+    await expect(configDigest(normalized)).resolves.toBe(
+      WINDOW_INTEGRATION_FIXTURE.hashes.connector,
+    )
+  })
+
   test.each([
     1, 65_536,
   ])('parses and freezes the signed V4 gzip response contract at %i bytes', async (maxDecodedData) => {
@@ -894,6 +910,91 @@ describe('zkTLS strict boundaries', () => {
 
     expect(Object.hasOwn(result, 'response_content_encoding')).toBe(false)
     expect(Object.hasOwn(result, 'max_decoded_data')).toBe(false)
+  })
+
+  test('parses, copies, and deeply freezes the signed V4 chunked framing contract', async () => {
+    const config = {
+      ...v4Connector(),
+      response_transfer_encoding: 'chunked',
+    }
+    const direct = validateConnector(config)
+    expect(direct).not.toBe(config)
+    config.response_transfer_encoding = 'identity'
+    expect(direct).toMatchObject({ response_transfer_encoding: 'chunked' })
+    config.response_transfer_encoding = 'chunked'
+    const payload = await signedV4Envelopes(config)
+    const { publicKeys, signTicket: _signTicket, ...response } = payload
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+
+    try {
+      const result = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        },
+      )
+
+      expect(result.config).toMatchObject({
+        response_transfer_encoding: 'chunked',
+      })
+      expect(Object.isFrozen(result.config)).toBe(true)
+      expect(() => {
+        ;(result.config as Record<string, unknown>).response_transfer_encoding =
+          'fixed'
+      }).toThrow()
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('keeps fixed-length V4 connectors free of a transfer-encoding field', () => {
+    const result = validateConnector(v4Connector())
+
+    expect(Object.hasOwn(result, 'response_transfer_encoding')).toBe(false)
+  })
+
+  test.each([
+    'identity',
+    'CHUNKED',
+    'br',
+  ])('rejects invalid V4 response framing %s', (response_transfer_encoding) => {
+    expect(() =>
+      validateConnector({ ...v4Connector(), response_transfer_encoding }),
+    ).toThrow()
+  })
+
+  test('rejects accessor-backed, hidden, and proxied V4 response framing', () => {
+    const accessor = v4Connector()
+    let reads = 0
+    Object.defineProperty(accessor, 'response_transfer_encoding', {
+      enumerable: true,
+      get() {
+        reads += 1
+        return 'chunked'
+      },
+    })
+    expect(() => validateConnector(accessor)).toThrow()
+    expect(reads).toBe(0)
+
+    const hidden = v4Connector()
+    Object.defineProperty(hidden, 'response_transfer_encoding', {
+      enumerable: false,
+      value: 'chunked',
+    })
+    expect(() => validateConnector(hidden)).toThrow()
+
+    expect(() =>
+      validateConnector(
+        new Proxy(
+          { ...v4Connector(), response_transfer_encoding: 'chunked' },
+          {},
+        ),
+      ),
+    ).toThrow()
   })
 
   test.each([
@@ -952,6 +1053,110 @@ describe('zkTLS strict boundaries', () => {
     expect(Object.isFrozen(result.request)).toBe(true)
     expect(Object.isFrozen((result as MutableV4).request.matcher)).toBe(true)
     expect(() => validateConnector(new Proxy(config, {}))).toThrow()
+  })
+
+  test('accepts signed generic rolling-window transforms', () => {
+    const config = cloneV4()
+    config.period_days = 7
+    config.variables.push({
+      name: 'periodStart',
+      scalarType: 'UTC_TIMESTAMP',
+      source: { kind: 'SESSION', field: 'periodStart' },
+    })
+    config.resolved_variables.periodStart = {
+      type: 'UTC_TIMESTAMP',
+      value: '2026-08-14T00:00:00.000Z',
+    }
+    testRecord(testRecord(config.request.body).input).limit = 3
+    config.pipelines = [
+      {
+        output: 'qualifyingDays',
+        sourcePath: '$.orders[*]',
+        orderBy: { path: '$.time', direction: 'DESC' },
+        groupBy: { path: '$.time', interval: 'UTC_DAY' },
+        valuePath: '$.amount',
+        cast: 'DECIMAL',
+        fixedDecimals: 18,
+        absolute: true,
+        timestamp: { path: '$.time', format: 'UNIX_SECONDS' },
+        coverage: { kind: 'DESCENDING_WINDOW', requestLimit: 3 },
+        reduce: 'SUM',
+        postFilter: { op: 'GTE', value: 6000, unit: 'USDT' },
+        finalReduce: 'COUNT',
+        valueUnit: 'USDT',
+        outputUnit: 'days',
+      },
+    ]
+    config.disclosure = {
+      key_paths: ['$.orders', '$.orders[*].amount', '$.orders[*].time'],
+      scalar_paths: ['$.orders[*].amount', '$.orders[*].time'],
+      collection_paths: ['$.orders'],
+      max_elements: 200,
+    }
+
+    expect(validateConnector(config)).toMatchObject({
+      period_days: 7,
+      pipelines: [
+        expect.objectContaining({
+          fixedDecimals: 18,
+          absolute: true,
+          timestamp: { path: '$.time', format: 'UNIX_SECONDS' },
+          coverage: { kind: 'DESCENDING_WINDOW', requestLimit: 3 },
+        }),
+      ],
+    })
+  })
+
+  test.each([
+    { period_days: 0 },
+    { period_days: 366 },
+    {
+      period_days: 7,
+      coverage: { kind: 'DESCENDING_WINDOW', requestLimit: 4 },
+    },
+    { period_days: 7, timestamp: { path: '$.time', format: 'AUTO' } },
+    { period_days: 7, fixedDecimals: 19 },
+  ])('rejects invalid rolling-window contract %#', (patch) => {
+    const config = cloneV4()
+    Object.assign(
+      config,
+      { period_days: 7 },
+      patch.period_days === undefined ? {} : { period_days: patch.period_days },
+    )
+    config.variables.push({
+      name: 'periodStart',
+      scalarType: 'UTC_TIMESTAMP',
+      source: { kind: 'SESSION', field: 'periodStart' },
+    })
+    config.resolved_variables.periodStart = {
+      type: 'UTC_TIMESTAMP',
+      value: '2026-08-14T00:00:00.000Z',
+    }
+    testRecord(testRecord(config.request.body).input).limit = 3
+    config.pipelines[0] = {
+      output: 'balance',
+      sourcePath: '$.items[*]',
+      orderBy: { path: '$.time', direction: 'DESC' },
+      valuePath: '$.amount',
+      cast: 'DECIMAL',
+      fixedDecimals: patch.fixedDecimals ?? 18,
+      timestamp: patch.timestamp ?? { path: '$.time', format: 'UNIX_SECONDS' },
+      coverage: patch.coverage ?? {
+        kind: 'DESCENDING_WINDOW',
+        requestLimit: 3,
+      },
+      reduce: 'SUM',
+      valueUnit: 'USDT',
+      outputUnit: 'USDT',
+    }
+    config.disclosure = {
+      key_paths: ['$.items', '$.items[*].amount', '$.items[*].time'],
+      scalar_paths: ['$.items[*].amount', '$.items[*].time'],
+      collection_paths: ['$.items'],
+      max_elements: 200,
+    }
+
+    expect(() => validateConnector(config)).toThrow()
   })
 
   test.each([
@@ -1046,6 +1251,100 @@ describe('zkTLS strict boundaries', () => {
     ).toThrow()
     delete missingAccountBinding.account_binding
     expect(() => validateConnector(missingAccountBinding)).toThrow()
+  })
+
+  test('parses a signed bytes32-prefix wallet cast as a scalar string output', () => {
+    const binding = cloneV4()
+    binding.purpose = 'ACCOUNT_BINDING'
+    binding.account_binding = {
+      providerKey: 'example',
+      accountVariable: 'accountId',
+      walletOutput: 'wallet',
+      addressType: 'EVM',
+    }
+    binding.variables = [
+      {
+        name: 'accountId',
+        scalarType: 'STRING',
+        source: {
+          kind: 'CAPTURED_REQUEST',
+          location: 'BODY_JSON',
+          selector: '$.input.account',
+        },
+      },
+    ]
+    binding.resolved_variables = {}
+    binding.request.matcher.query.required = {}
+    binding.request.body = { input: { account: { $var: 'accountId' } } }
+    binding.pipelines = [
+      {
+        output: 'wallet',
+        sourcePath: '$.subaccount',
+        cast: EVM_PREFIX_INTEGRATION_FIXTURE.cast as never,
+      },
+    ]
+    binding.disclosure = {
+      key_paths: ['$.subaccount'],
+      scalar_paths: ['$.subaccount'],
+      collection_paths: [],
+      max_elements: 200,
+    }
+
+    const result = validateConnector(binding)
+
+    expect(result).toMatchObject({
+      pipelines: [
+        {
+          output: 'wallet',
+          cast: 'EVM_ADDRESS_FROM_BYTES32_PREFIX',
+        },
+      ],
+    })
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(Object.isFrozen((result as typeof binding).pipelines[0])).toBe(true)
+  })
+
+  test.each([
+    { valueUnit: 'address', outputUnit: 'address' },
+    {
+      sourcePath: '$.rows[*]',
+      reduce: 'COUNT',
+      valueUnit: 'count',
+      outputUnit: 'count',
+    },
+  ])('rejects invalid bytes32-prefix wallet pipeline stages: %p', (patch) => {
+    const binding = cloneV4()
+    binding.purpose = 'ACCOUNT_BINDING'
+    binding.account_binding = {
+      providerKey: 'example',
+      accountVariable: 'accountId',
+      walletOutput: 'wallet',
+      addressType: 'EVM',
+    }
+    binding.variables = [
+      {
+        name: 'accountId',
+        scalarType: 'STRING',
+        source: {
+          kind: 'CAPTURED_REQUEST',
+          location: 'BODY_JSON',
+          selector: '$.input.account',
+        },
+      },
+    ]
+    binding.resolved_variables = {}
+    binding.request.matcher.query.required = {}
+    binding.request.body = { input: { account: { $var: 'accountId' } } }
+    binding.pipelines = [
+      {
+        output: 'wallet',
+        sourcePath: '$.subaccount',
+        cast: 'EVM_ADDRESS_FROM_BYTES32_PREFIX' as never,
+        ...patch,
+      },
+    ]
+
+    expect(() => validateConnector(binding)).toThrow()
   })
 
   test('accepts V4 DNS origins with punycode on the default HTTPS port', () => {
@@ -1397,6 +1696,18 @@ describe('zkTLS strict boundaries', () => {
     expect(() =>
       assertTicketAvailable(ticket, '2031-01-01T00:00:00.000Z'),
     ).toThrow('ticket is unavailable')
+  })
+
+  test('allows five seconds of issuer clock skew but keeps expiry strict', () => {
+    expect(() =>
+      assertTicketAvailable(ticket, '2026-08-14T23:59:55.000Z'),
+    ).not.toThrow()
+    expect(() =>
+      assertTicketAvailable(ticket, '2026-08-14T23:59:54.999Z'),
+    ).toThrow('ticket is unavailable')
+    expect(() => assertTicketAvailable(ticket, ticket.expires_at)).toThrow(
+      'ticket is unavailable',
+    )
   })
 
   test('retains only the original envelopes after schema and binding checks', async () => {
@@ -1919,8 +2230,14 @@ describe('zkTLS strict boundaries', () => {
     })
   })
 
-  test('passes only complete half-open V4 ranges to the prover', async () => {
-    const config = validateConnector(v4Connector())
+  test.each([
+    ['fixed', false],
+    ['chunked', true],
+  ] as const)('passes only complete half-open V4 ranges to the prover for %s framing', async (_, chunked) => {
+    const config = validateConnector({
+      ...v4Connector(),
+      ...(chunked ? { response_transfer_encoding: 'chunked' } : {}),
+    })
     if (config.interpreter_version !== 4) throw new Error('wrong connector')
     const captured = {
       path: '/v1/volume?day=2026-08-20',
@@ -1951,13 +2268,19 @@ describe('zkTLS strict boundaries', () => {
         `Content-Length: ${bodyBytes.length}\r\n\r\n${captured.body}`,
     )
     const responseBody = '{"data":{"balance":100}}'
+    const responseLength = new TextEncoder().encode(responseBody).length
     const received = new TextEncoder().encode(
       'HTTP/1.1 200 OK\r\n' +
         'Content-Type: application/json\r\n' +
-        `Content-Length: ${new TextEncoder().encode(responseBody).length}\r\n` +
+        (chunked
+          ? 'Transfer-Encoding: chunked\r\n'
+          : `Content-Length: ${responseLength}\r\n`) +
         'Connection: close\r\n\r\n' +
-        responseBody,
+        (chunked
+          ? `${responseLength.toString(16)}\r\n${responseBody}\r\n0\r\n\r\n`
+          : responseBody),
     )
+    const rawReceived = received.slice()
 
     const reveal = await transcriptRevealRanges(message, sent, received)
 
@@ -1967,6 +2290,7 @@ describe('zkTLS strict boundaries', () => {
     })
     const prover = { reveal: vi.fn().mockResolvedValue(undefined) }
     await revealTranscript(prover, reveal)
+    expect(received).toEqual(rawReceived)
     expect(prover.reveal).toHaveBeenCalledWith(
       {
         sent: [{ start: 0, end: sent.length }],
