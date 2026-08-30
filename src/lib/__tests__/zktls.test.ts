@@ -249,6 +249,9 @@ const EVM_PREFIX_INTEGRATION_FIXTURE = JSON.parse(
 const WINDOW_INTEGRATION_FIXTURE = JSON.parse(
   readFileSync('test/fixtures/product-zktls-v4-window.json', 'utf8'),
 ) as { connector: Record<string, unknown>; hashes: { connector: string } }
+const PUBLIC_HEADER_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-public-headers.json', 'utf8'),
+) as { connector: Record<string, unknown>; hashes: { connector: string } }
 
 function gzipIntegrationConnector(): Record<string, unknown> {
   return structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
@@ -898,6 +901,21 @@ describe('zkTLS strict boundaries', () => {
     await expect(configDigest(normalized)).resolves.toBe(
       WINDOW_INTEGRATION_FIXTURE.hashes.connector,
     )
+  })
+
+  test('matches the shared signed public-header connector and digest', async () => {
+    const normalized = validateConnector(
+      structuredClone(PUBLIC_HEADER_INTEGRATION_FIXTURE.connector),
+    )
+
+    await expect(configDigest(normalized)).resolves.toBe(
+      PUBLIC_HEADER_INTEGRATION_FIXTURE.hashes.connector,
+    )
+    expect(
+      normalized.interpreter_version === 4
+        ? normalized.request.public_headers
+        : undefined,
+    ).toEqual({ 'x-client-type': 'public' })
   })
 
   test.each([

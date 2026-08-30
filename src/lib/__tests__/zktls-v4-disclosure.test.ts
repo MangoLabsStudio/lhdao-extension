@@ -50,6 +50,16 @@ const WINDOW_FIXTURE = JSON.parse(WINDOW_FIXTURE_BYTES.toString('utf8')) as {
   responseBase64url: string
   hashes: { connector: string }
 }
+const PUBLIC_HEADER_FIXTURE_BYTES = readFileSync(
+  'test/fixtures/product-zktls-v4-public-headers.json',
+)
+const PUBLIC_HEADER_FIXTURE = JSON.parse(
+  PUBLIC_HEADER_FIXTURE_BYTES.toString('utf8'),
+) as {
+  connector: V4Connector
+  requestBase64url: string
+  hashes: { connector: string; request: string }
+}
 
 function integrationConnector(
   mode: keyof typeof INTEGRATION_FIXTURE.modes,
@@ -176,6 +186,30 @@ function disclosed(
 }
 
 describe('complete V4 public request disclosure', () => {
+  test('matches the shared signed public-header request bytes', () => {
+    const sent = fixedBytes(PUBLIC_HEADER_FIXTURE.requestBase64url)
+    const captured: CapturedRequest = {
+      path: '/v1/history?account=acct-1',
+      method: 'POST',
+      body: '{"account":"acct-1"}',
+      content_type: 'application/json',
+      secrets: {},
+      resource_type: 'fetch',
+      capturedVariables: {},
+    }
+
+    expect(
+      createHash('sha256').update(PUBLIC_HEADER_FIXTURE_BYTES).digest('hex'),
+    ).toBe('869a867960ebf1db3f7c4f2eb6352343db3591a9d47484a8fb6e727b183a7fbc')
+    expect(
+      v4RequestDisclosureRanges(
+        sent,
+        PUBLIC_HEADER_FIXTURE.connector,
+        captured,
+      ),
+    ).toEqual([{ start: 0, end: sent.length }])
+  })
+
   test('matches the fixed provider-neutral gzip request bytes', () => {
     const config = integrationConnector('fixedGzip')
     const sent = fixedBytes(INTEGRATION_FIXTURE.requestBase64)
