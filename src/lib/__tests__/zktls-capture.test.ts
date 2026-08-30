@@ -1029,6 +1029,45 @@ describe('zkTLS v4 capture', () => {
     })
   })
 
+  test('ignores a mismatched V4 body and captures a later exact request', () => {
+    const capture = v4Session()
+    const unrelated = new TextEncoder().encode(
+      '{"operation":"background","input":{"account":"acct-body","day":"2026-08-21"}}',
+    )
+    capture.observeBody({
+      requestId: 'unrelated-body',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: { raw: [{ bytes: unrelated.buffer }] },
+    })
+    expect(() =>
+      capture.observe({
+        requestId: 'unrelated-body',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+      }),
+    ).not.toThrow()
+
+    expect(() => capture.take()).toThrow('no provider request was captured')
+
+    observePost(capture, 'exact-body')
+
+    expect(capture.take()).toMatchObject({
+      method: 'POST',
+      body: '{"operation":"account","input":{"account":"acct-body","day":"2026-08-21"}}',
+      secrets: {},
+    })
+  })
+
   test('captures an exact signed public request header', () => {
     const capture = v4Session({ 'x-client-type': 'public' })
     capture.observeBody({

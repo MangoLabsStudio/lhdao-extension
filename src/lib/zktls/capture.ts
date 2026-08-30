@@ -968,12 +968,29 @@ export class CaptureSession {
           : null
     if (querySlots === null) return
     if (v4) requireV4Initiator(details, binding)
+    const requestBody =
+      binding.method === 'POST' ? details.requestBody : undefined
+    if (binding.method === 'POST' && !requestBody)
+      fail('captured POST body is invalid')
+    if (v4 && requestBody) {
+      const bodyVariables = binding.variables.filter(
+        (variable) =>
+          variable.source.kind === 'CAPTURED_REQUEST' &&
+          variable.source.location !== 'QUERY',
+      )
+      const bodyMatch = matchV4Body(
+        joinedRawBody(requestBody),
+        binding.contentType!,
+        binding.template!,
+        binding.resolvedVariables,
+        bodyVariables,
+      )
+      if (bodyMatch === null) return
+    }
     if (this.#used || this.#failed || this.#candidate || this.#captured)
       fail('capture already completed')
     if (binding.method === 'POST') {
-      const requestBody = details.requestBody
-      if (!requestBody) fail('captured POST body is invalid')
-      this.#requestBody = requestBody
+      this.#requestBody = requestBody!
     } else if (details.requestBody) {
       fail('GET request body is unsupported')
     }
