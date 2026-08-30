@@ -59,24 +59,32 @@ const quote = {
   ],
 }
 
+const requestedCurrentActions = ['LIKE', 'RT', 'COMMENT'] as const
+const currentPriceTiers = ['S', 'A', 'B', 'C', 'D'] as const
+const currentUnitPrices = {
+  LIKE: ['0.00000000', '0.39000000', '0.29250000', '0.20000000', '0.10000000'],
+  RT: ['0.00000000', '19.50000000', '14.62500000', '10.00000000', '5.00000000'],
+  COMMENT: [
+    '0.00000000',
+    '7.80000000',
+    '5.85000000',
+    '4.00000000',
+    '2.00000000',
+  ],
+} as const
 const currentPrices = {
   asOf: '2026-08-30T06:32:00.000Z',
   currency: 'LUX' as const,
   precision: 8,
-  lines: [
-    {
-      actionType: 'LIKE',
-      tier: 'A',
-      pricingSource: 'PILOT',
-      unitPrice: '0.39000000',
-    },
-    {
-      actionType: 'RT',
-      tier: 'B',
-      pricingSource: 'PILOT',
-      unitPrice: '14.62500000',
-    },
-  ],
+  lines: requestedCurrentActions.flatMap((actionType) =>
+    currentPriceTiers.map((tier, index) => ({
+      actionType,
+      tier,
+      pricingSource:
+        tier === 'A' || tier === 'B' ? ('PILOT' as const) : ('LEGACY' as const),
+      unitPrice: currentUnitPrices[actionType][index],
+    })),
+  ),
 }
 
 describe('plugin promote pricing background handlers', () => {
@@ -90,7 +98,7 @@ describe('plugin promote pricing background handlers', () => {
     gqlMock.mockResolvedValue({ currentEngagementMarketPrices: currentPrices })
     await expect(
       currentEngagementMarketPricesHandler({
-        actions: ['LIKE', 'RT', 'COMMENT'],
+        actions: requestedCurrentActions,
       }),
     ).resolves.toEqual({
       type: 'current-engagement-prices-result',
@@ -99,8 +107,70 @@ describe('plugin promote pricing background handlers', () => {
     })
     expect(gqlMock).toHaveBeenCalledWith(
       CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
-      { input: { actions: ['LIKE', 'RT', 'COMMENT'] } },
+      { input: { actions: requestedCurrentActions } },
     )
+  })
+
+  it.each([
+    [
+      'a missing line',
+      requestedCurrentActions,
+      { ...currentPrices, lines: currentPrices.lines.slice(0, -1) },
+    ],
+    [
+      'a duplicate line',
+      requestedCurrentActions,
+      {
+        ...currentPrices,
+        lines: [...currentPrices.lines.slice(0, -1), currentPrices.lines[0]],
+      },
+    ],
+    [
+      'reordered action blocks',
+      requestedCurrentActions,
+      {
+        ...currentPrices,
+        lines: [
+          ...currentPrices.lines.slice(5, 10),
+          ...currentPrices.lines.slice(0, 5),
+          ...currentPrices.lines.slice(10),
+        ],
+      },
+    ],
+    [
+      'an unrequested action',
+      ['LIKE', 'RT'] as const,
+      {
+        ...currentPrices,
+        lines: currentPrices.lines
+          .slice(0, 10)
+          .map((line, index) =>
+            index === 0 ? { ...line, actionType: 'COMMENT' as const } : line,
+          ),
+      },
+    ],
+    [
+      'a tier outside its canonical slot',
+      requestedCurrentActions,
+      {
+        ...currentPrices,
+        lines: currentPrices.lines.map((line, index) =>
+          index === 0 ? { ...line, tier: 'D' as const } : line,
+        ),
+      },
+    ],
+  ])('rejects a current-price matrix with %s', async (_label, requestedActions, value) => {
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    gqlMock.mockResolvedValue({ currentEngagementMarketPrices: value })
+
+    await expect(
+      currentEngagementMarketPricesHandler({ actions: requestedActions }),
+    ).resolves.toEqual({
+      type: 'current-engagement-prices-result',
+      ok: false,
+      code: 'PLUGIN_CURRENT_PRICES_RESPONSE_INVALID',
+      message: '当前价格响应无效，请稍后重试。',
+    })
   })
 
   it.each([
@@ -111,23 +181,27 @@ describe('plugin promote pricing background handlers', () => {
       'non-fixed money',
       {
         ...currentPrices,
-        lines: [{ ...currentPrices.lines[0], unitPrice: '0.39' }],
+        lines: currentPrices.lines.map((line, index) =>
+          index === 0 ? { ...line, unitPrice: '0.39' } : line,
+        ),
       },
     ],
     [
       'future line field',
       {
         ...currentPrices,
-        lines: [
-          { ...currentPrices.lines[0], tomorrowExpectedPrice: '0.38000000' },
-        ],
+        lines: currentPrices.lines.map((line, index) =>
+          index === 0 ? { ...line, tomorrowExpectedPrice: '0.38000000' } : line,
+        ),
       },
     ],
   ])('rejects current prices with %s without fallback', async (_label, value) => {
     await localStore.set('apiToken', 'lhdao_pk_test')
     gqlMock.mockResolvedValue({ currentEngagementMarketPrices: value })
     await expect(
-      currentEngagementMarketPricesHandler({ actions: ['LIKE'] }),
+      currentEngagementMarketPricesHandler({
+        actions: requestedCurrentActions,
+      }),
     ).resolves.toEqual({
       type: 'current-engagement-prices-result',
       ok: false,

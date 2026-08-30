@@ -1223,7 +1223,7 @@ export async function previewPromoteTweetPricingHandler(req: {
 }
 
 const PROMOTE_ACTIONS = new Set<PromoteAction>(['LIKE', 'RT', 'COMMENT'])
-const CURRENT_PRICE_TIERS = new Set(['S', 'A', 'B', 'C', 'D'])
+const CURRENT_PRICE_TIERS = ['S', 'A', 'B', 'C', 'D'] as const
 const QUOTE_TIERS = new Set(['A', 'B', 'C', 'D'])
 const MONEY_STRING = /^(?:0|[1-9]\d{0,15})\.\d{8}$/
 
@@ -1255,7 +1255,12 @@ export async function currentEngagementMarketPricesHandler(req: {
       CurrentEngagementMarketPricesResult,
       CurrentEngagementMarketPricesVars
     >(CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY, variables)
-    if (!isCurrentEngagementMarketPrices(data.currentEngagementMarketPrices)) {
+    if (
+      !isCurrentEngagementMarketPrices(
+        data.currentEngagementMarketPrices,
+        req.actions,
+      )
+    ) {
       return {
         type: 'current-engagement-prices-result',
         ok: false,
@@ -1320,6 +1325,7 @@ function isValidDateString(value: unknown): value is string {
 
 function isCurrentEngagementMarketPrices(
   value: unknown,
+  requestedActions: readonly PromoteAction[],
 ): value is CurrentEngagementMarketPricesResult['currentEngagementMarketPrices'] {
   if (
     !isRecord(value) ||
@@ -1328,12 +1334,12 @@ function isCurrentEngagementMarketPrices(
     value.currency !== 'LUX' ||
     value.precision !== 8 ||
     !Array.isArray(value.lines) ||
-    value.lines.length === 0
+    value.lines.length !== requestedActions.length * CURRENT_PRICE_TIERS.length
   ) {
     return false
   }
   return value.lines.every(
-    (line) =>
+    (line, index) =>
       isRecord(line) &&
       hasExactKeys(line, [
         'actionType',
@@ -1341,10 +1347,9 @@ function isCurrentEngagementMarketPrices(
         'pricingSource',
         'unitPrice',
       ]) &&
-      typeof line.actionType === 'string' &&
-      PROMOTE_ACTIONS.has(line.actionType as PromoteAction) &&
-      typeof line.tier === 'string' &&
-      CURRENT_PRICE_TIERS.has(line.tier) &&
+      line.actionType ===
+        requestedActions[Math.floor(index / CURRENT_PRICE_TIERS.length)] &&
+      line.tier === CURRENT_PRICE_TIERS[index % CURRENT_PRICE_TIERS.length] &&
       (line.pricingSource === 'PILOT' || line.pricingSource === 'LEGACY') &&
       isMoneyString(line.unitPrice),
   )
