@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "pipeline": {
+    "output": "depositAmount",
+    "sourcePath": "$.events[*]",
+    "difference": {
+      "leftPath": "$.post_balance.spot.balance.amount",
+      "rightPath": "$.pre_balance.spot.balance.amount"
+    },
+    "cast": "DECIMAL",
+    "fixedDecimals": 18,
+    "reduce": "MAX",
+    "valueUnit": "USDT",
+    "outputUnit": "USDT"
+  },
+  "expected": {
+    "value": "193.425610999999999999",
+    "unit": "USDT",
+    "compare": { "op": "GTE", "value": "100", "unit": "USDT", "result": true }
+  },
+  "decodedBase64url": "eyJldmVudHMiOlt7ImV2ZW50X3R5cGUiOiJkZXBvc2l0IiwicG9zdF9iYWxhbmNlIjp7InNwb3QiOnsiYmFsYW5jZSI6eyJhbW91bnQiOiIzMDEwMjI2OTEwNzEzMzE5MTIxODAifX19LCJwcmVfYmFsYW5jZSI6eyJzcG90Ijp7ImJhbGFuY2UiOnsiYW1vdW50IjoiMTA3NTk3MDgwMDcxMzMxOTEyMTgxIn19fX1dfQ",
+  "connector": {
+    "interpreter_version": 4,
+    "connector_id": "balance-delta-metric",
+    "revision": 1,
+    "disabled": false,
+    "purpose": "METRIC",
+    "page_origin": "https://app.example.com",
+    "origin": "https://api.example.com",
+    "request": {
+      "method": "GET",
+      "matcher": {
+        "path": { "kind": "exact", "value": "/v1/events" },
+        "query": {
+          "required": { "account": { "$var": "accountId" } },
+          "optional": {},
+          "capture": {}
+        },
+        "resource_types": ["main_frame", "xmlhttprequest", "fetch"]
+      },
+      "replay": "EXACT_CAPTURE",
+      "semantics": "READ_ONLY_QUERY",
+      "secret_headers": [],
+      "max_sent_data": 8192,
+      "max_recv_data": 65536
+    },
+    "variables": [
+      {
+        "name": "accountId",
+        "scalarType": "STRING",
+        "source": { "kind": "BOUND_ACCOUNT", "bindingKey": "example" },
+        "constraints": {
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "ACCOUNT_ID"
+        }
+      }
+    ],
+    "resolved_variables": {
+      "accountId": { "type": "STRING", "value": "acct-1" }
+    },
+    "response_format": "json",
+    "response_status": 200,
+    "disclosure": {
+      "key_paths": [
+        "$.events",
+        "$.events[*].post_balance",
+        "$.events[*].post_balance.spot",
+        "$.events[*].post_balance.spot.balance",
+        "$.events[*].post_balance.spot.balance.amount",
+        "$.events[*].pre_balance",
+        "$.events[*].pre_balance.spot",
+        "$.events[*].pre_balance.spot.balance",
+        "$.events[*].pre_balance.spot.balance.amount"
+      ],
+      "scalar_paths": [
+        "$.events[*].post_balance.spot.balance.amount",
+        "$.events[*].pre_balance.spot.balance.amount"
+      ],
+      "collection_paths": ["$.events"],
+      "max_elements": 200
+    },
+    "pipelines": [
+      {
+        "output": "depositAmount",
+        "sourcePath": "$.events[*]",
+        "difference": {
+          "leftPath": "$.post_balance.spot.balance.amount",
+          "rightPath": "$.pre_balance.spot.balance.amount"
+        },
+        "cast": "DECIMAL",
+        "fixedDecimals": 18,
+        "reduce": "MAX",
+        "valueUnit": "USDT",
+        "outputUnit": "USDT"
+      }
+    ],
+    "expires_at": "2030-01-01T00:00:00.000Z",
+    "verifier_profile_id": "lighthouse-v1"
+  },
+  "connectorCanonicalJson": "{\"connector_id\":\"balance-delta-metric\",\"disabled\":false,\"disclosure\":{\"collection_paths\":[\"$.events\"],\"key_paths\":[\"$.events\",\"$.events[*].post_balance\",\"$.events[*].post_balance.spot\",\"$.events[*].post_balance.spot.balance\",\"$.events[*].post_balance.spot.balance.amount\",\"$.events[*].pre_balance\",\"$.events[*].pre_balance.spot\",\"$.events[*].pre_balance.spot.balance\",\"$.events[*].pre_balance.spot.balance.amount\"],\"max_elements\":200,\"scalar_paths\":[\"$.events[*].post_balance.spot.balance.amount\",\"$.events[*].pre_balance.spot.balance.amount\"]},\"expires_at\":\"2030-01-01T00:00:00.000Z\",\"interpreter_version\":4,\"origin\":\"https://api.example.com\",\"page_origin\":\"https://app.example.com\",\"pipelines\":[{\"cast\":\"DECIMAL\",\"difference\":{\"leftPath\":\"$.post_balance.spot.balance.amount\",\"rightPath\":\"$.pre_balance.spot.balance.amount\"},\"fixedDecimals\":18,\"output\":\"depositAmount\",\"outputUnit\":\"USDT\",\"reduce\":\"MAX\",\"sourcePath\":\"$.events[*]\",\"valueUnit\":\"USDT\"}],\"purpose\":\"METRIC\",\"request\":{\"matcher\":{\"path\":{\"kind\":\"exact\",\"value\":\"/v1/events\"},\"query\":{\"capture\":{},\"optional\":{},\"required\":{\"account\":{\"$var\":\"accountId\"}}},\"resource_types\":[\"main_frame\",\"xmlhttprequest\",\"fetch\"]},\"max_recv_data\":65536,\"max_sent_data\":8192,\"method\":\"GET\",\"replay\":\"EXACT_CAPTURE\",\"secret_headers\":[],\"semantics\":\"READ_ONLY_QUERY\"},\"resolved_variables\":{\"accountId\":{\"type\":\"STRING\",\"value\":\"acct-1\"}},\"response_format\":\"json\",\"response_status\":200,\"revision\":1,\"variables\":[{\"constraints\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"ACCOUNT_ID\"},\"name\":\"accountId\",\"scalarType\":\"STRING\",\"source\":{\"bindingKey\":\"example\",\"kind\":\"BOUND_ACCOUNT\"}}],\"verifier_profile_id\":\"lighthouse-v1\"}",
+  "configDigest": "82c46ee536457caacddab8ddc289a702ab736a4eae50535c1daebdab0cbfd61c",
+  "requestBase64url": "R0VUIC92MS9ldmVudHM_YWNjb3VudD1hY2N0LTEgSFRUUC8xLjENCkhvc3Q6IGFwaS5leGFtcGxlLmNvbQ0KQ29ubmVjdGlvbjogY2xvc2UNCg0K",
+  "responseBase64url": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24NCkNvbnRlbnQtTGVuZ3RoOiAxNzgNCg0KeyJldmVudHMiOlt7ImV2ZW50X3R5cGUiOiJkZXBvc2l0IiwicG9zdF9iYWxhbmNlIjp7InNwb3QiOnsiYmFsYW5jZSI6eyJhbW91bnQiOiIzMDEwMjI2OTEwNzEzMzE5MTIxODAifX19LCJwcmVfYmFsYW5jZSI6eyJzcG90Ijp7ImJhbGFuY2UiOnsiYW1vdW50IjoiMTA3NTk3MDgwMDcxMzMxOTEyMTgxIn19fX1dfQ",
+  "hashes": {
+    "decoded": "fd59f91042f65e78957302db827d976441c4541eb2a68e2c2bd2000f441dcee3",
+    "request": "35d2175318ef00782977eb8ac02917bd061dd8376068a31e3c947a5669d678b0",
+    "response": "284fac0a69b3580443bdbaf4219980c6405975148c8c0691eeec0dd66904accb"
+  },
+  "registration": {
+    "keyId": "field-difference-key",
+    "publicKeyBase64url": "Zr5-Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo",
+    "configSignature": "3fPO5xUHGHNgAviSTcGxfGYpkhUZaw7eOtzsEzTl6nHfu8znqiNjZJuI1iLqiJwjdkwCyOEM17mxOiJIwQwqDA",
+    "ticket": {
+      "schema": 1,
+      "session_id": "dddddddddddddddddddddddddddddddd",
+      "connector_id": "balance-delta-metric",
+      "revision": 1,
+      "interpreter_version": 4,
+      "config_digest": "82c46ee536457caacddab8ddc289a702ab736a4eae50535c1daebdab0cbfd61c",
+      "issued_at": "2029-12-31T23:50:00Z",
+      "expires_at": "2030-01-01T00:00:00Z",
+      "nonce": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "ticketSignature": "r-apFQyhcp2ri3lheiMw7h_gFXmA3F1CfNfRGP-maxpA5dGnDeDAyN2lDM3z_WV3X9zrLzyU9YhOhORVjs22AQ",
+    "sessionData": {
+      "session_id": "dddddddddddddddddddddddddddddddd",
+      "connector_id": "balance-delta-metric",
+      "revision": "1",
+      "interpreter_version": "4",
+      "config_digest": "82c46ee536457caacddab8ddc289a702ab736a4eae50535c1daebdab0cbfd61c",
+      "nonce": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  },
+  "callback": {
+    "completionId": "96629ba83b8cefcb9a96acf377e4e8a50a1384d850f04ce2e5c840e412ce65f3",
+    "rawBodyBase64url": "eyJ2ZXJpZmllcl9jb21wbGV0aW9uX2lkIjoiOTY2MjliYTgzYjhjZWZjYjlhOTZhY2YzNzdlNGU4YTUwYTEzODRkODUwZjA0Y2UyZTVjODQwZTQxMmNlNjVmMyIsInNlc3Npb25faWQiOiJkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZCIsImNvbm5lY3Rvcl9pZCI6ImJhbGFuY2UtZGVsdGEtbWV0cmljIiwicmV2aXNpb24iOjEsImludGVycHJldGVyX3ZlcnNpb24iOjQsImNvbmZpZ19kaWdlc3QiOiI4MmM0NmVlNTM2NDU3Y2FhY2RkYWI4ZGRjMjg5YTcwMmFiNzM2YTRlYWU1MDUzNWMxZGFlYmRhYjBjYmZkNjFjIiwibm9uY2UiOiJlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZSIsInN0YXR1cyI6InZlcmlmaWVkIiwiZXZpZGVuY2UiOnsic2VudCI6IlIwVlVJQzkyTVM5bGRtVnVkSE1fWVdOamIzVnVkRDFoWTJOMExURWdTRlJVVUM4eExqRU5Da2h2YzNRNklHRndhUzVsZUdGdGNHeGxMbU52YlEwS1EyOXVibVZqZEdsdmJqb2dZMnh2YzJVTkNnMEsiLCJyZWN2IjoiU0ZSVVVDOHhMakVnTWpBd0lFOUxEUXBEYjI1MFpXNTBMVlI1Y0dVNklHRndjR3hwWTJGMGFXOXVMMnB6YjI0TkNrTnZiblJsYm5RdFRHVnVaM1JvT2lBeE56Z05DZzBLZXlKbGRtVnVkSE1pT2x0N0ltVjJaVzUwWDNSNWNHVWlPaUprWlhCdmMybDBJaXdpY0c5emRGOWlZV3hoYm1ObElqcDdJbk53YjNRaU9uc2lZbUZzWVc1alpTSTZleUpoYlc5MWJuUWlPaUl6TURFd01qSTJPVEV3TnpFek16RTVNVEl4T0RBaWZYMTlMQ0p3Y21WZlltRnNZVzVqWlNJNmV5SnpjRzkwSWpwN0ltSmhiR0Z1WTJVaU9uc2lZVzF2ZFc1MElqb2lNVEEzTlRrM01EZ3dNRGN4TXpNeE9URXlNVGd4SW4xOWZYMWRmUSIsInNlbnRfbGVuZ3RoIjo4NCwicmVjdl9sZW5ndGgiOjI1MH19",
+    "signature": "db9ebfb288b76d7469e41170a3e8b112657ac1786b083ee5312642db1035f0b2"
+  },
+  "rejectedCallbacks": {
+    "swappedPaths": null,
+    "equalPaths": null,
+    "valuePathConflict": null,
+    "nonNumeric": null,
+    "tooManyDecimals": null,
+    "crossOutputForgery": null,
+    "badConfigSignature": null,
+    "badTicketDigest": null,
+    "badHmac": null
+  }
+}

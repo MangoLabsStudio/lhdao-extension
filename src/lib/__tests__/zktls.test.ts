@@ -252,6 +252,16 @@ const WINDOW_INTEGRATION_FIXTURE = JSON.parse(
 const PUBLIC_HEADER_INTEGRATION_FIXTURE = JSON.parse(
   readFileSync('test/fixtures/product-zktls-v4-public-headers.json', 'utf8'),
 ) as { connector: Record<string, unknown>; hashes: { connector: string } }
+const FIELD_DIFFERENCE_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-field-difference.json', 'utf8'),
+) as {
+  connector: Record<string, unknown>
+  configDigest: string
+  pipeline: {
+    difference: { leftPath: string; rightPath: string }
+    fixedDecimals: number
+  }
+}
 
 function gzipIntegrationConnector(): Record<string, unknown> {
   return structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
@@ -940,6 +950,26 @@ describe('zkTLS strict boundaries', () => {
         ? normalized.request.public_headers
         : undefined,
     ).toEqual({ 'x-client-type': 'public' })
+  })
+
+  test('parses and freezes the shared signed field-difference connector', async () => {
+    const normalized = validateConnector(
+      structuredClone(FIELD_DIFFERENCE_INTEGRATION_FIXTURE.connector),
+    )
+    if (normalized.interpreter_version !== 4) throw new Error('wrong connector')
+
+    expect(normalized.pipelines[0]?.difference).toEqual(
+      FIELD_DIFFERENCE_INTEGRATION_FIXTURE.pipeline.difference,
+    )
+    expect(normalized.pipelines[0]?.fixedDecimals).toBe(18)
+    expect(Object.isFrozen(normalized.pipelines[0]?.difference)).toBe(true)
+    expect(normalized.disclosure.scalar_paths).toEqual([
+      '$.events[*].post_balance.spot.balance.amount',
+      '$.events[*].pre_balance.spot.balance.amount',
+    ])
+    await expect(configDigest(normalized)).resolves.toBe(
+      FIELD_DIFFERENCE_INTEGRATION_FIXTURE.configDigest,
+    )
   })
 
   test.each([
