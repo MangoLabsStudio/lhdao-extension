@@ -249,6 +249,9 @@ const EVM_PREFIX_INTEGRATION_FIXTURE = JSON.parse(
 const WINDOW_INTEGRATION_FIXTURE = JSON.parse(
   readFileSync('test/fixtures/product-zktls-v4-window.json', 'utf8'),
 ) as { connector: Record<string, unknown>; hashes: { connector: string } }
+const PUBLIC_HEADER_INTEGRATION_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-v4-public-headers.json', 'utf8'),
+) as { connector: Record<string, unknown>; hashes: { connector: string } }
 
 function gzipIntegrationConnector(): Record<string, unknown> {
   return structuredClone(GZIP_INTEGRATION_FIXTURE.connector)
@@ -843,6 +846,36 @@ describe('zkTLS strict boundaries', () => {
     await expect(configDigest(config)).resolves.toMatch(/^[a-f0-9]{64}$/)
   })
 
+  test('parses and freezes signed public request headers', () => {
+    const config = cloneV4()
+    config.request.public_headers = {
+      'x-z-client': 'public-z',
+      'x-a-client': 'public-a',
+    }
+
+    const normalized = validateConnector(config)
+    if (normalized.interpreter_version !== 4) throw new Error('wrong connector')
+
+    expect(normalized.request.public_headers).toEqual({
+      'x-a-client': 'public-a',
+      'x-z-client': 'public-z',
+    })
+    expect(Object.isFrozen(normalized.request.public_headers)).toBe(true)
+  })
+
+  test.each([
+    { authorization: 'public' },
+    { 'content-type': 'application/json' },
+    { origin: 'https://app.example.com' },
+    { 'X-Client-Type': 'public' },
+    { 'x-client-type': '' },
+    { 'x-client-type': ' public ' },
+  ])('rejects invalid signed public request headers %#', (public_headers) => {
+    const config = cloneV4()
+    config.request.public_headers = public_headers
+    expect(() => validateConnector(config)).toThrow()
+  })
+
   test('matches the backend gzip integration connector bytes and digest', async () => {
     const normalized = validateConnector(gzipIntegrationConnector())
     const canonical = canonicalJson(normalized)
@@ -868,6 +901,21 @@ describe('zkTLS strict boundaries', () => {
     await expect(configDigest(normalized)).resolves.toBe(
       WINDOW_INTEGRATION_FIXTURE.hashes.connector,
     )
+  })
+
+  test('matches the shared signed public-header connector and digest', async () => {
+    const normalized = validateConnector(
+      structuredClone(PUBLIC_HEADER_INTEGRATION_FIXTURE.connector),
+    )
+
+    await expect(configDigest(normalized)).resolves.toBe(
+      PUBLIC_HEADER_INTEGRATION_FIXTURE.hashes.connector,
+    )
+    expect(
+      normalized.interpreter_version === 4
+        ? normalized.request.public_headers
+        : undefined,
+    ).toEqual({ 'x-client-type': 'public' })
   })
 
   test.each([
@@ -2056,7 +2104,9 @@ describe('zkTLS strict boundaries', () => {
   })
 
   test('replays an immutable V4 capture with only complete public headers', () => {
-    const config = validateConnector(v4Connector())
+    const raw = v4Connector()
+    testRecord(raw.request).public_headers = { 'x-client-type': 'public' }
+    const config = validateConnector(raw)
     if (config.interpreter_version !== 4) throw new Error('wrong connector')
     const captured = {
       path: '/v1/volume?day=2026-08-20',
@@ -2090,6 +2140,7 @@ describe('zkTLS strict boundaries', () => {
     expect([...request.headers.keys()]).toEqual([
       'host',
       'connection',
+      'x-client-type',
       'content-type',
       'content-length',
     ])
@@ -2098,6 +2149,11 @@ describe('zkTLS strict boundaries', () => {
         new Uint8Array(request.headers.get('content-length')!),
       ),
     ).toBe(String(request.body!.length))
+    expect(
+      new TextDecoder().decode(
+        new Uint8Array(request.headers.get('x-client-type')!),
+      ),
+    ).toBe('public')
   })
 
   test('derives the exact gzip V4 POST header from the signed config', async () => {

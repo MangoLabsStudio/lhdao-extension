@@ -24,6 +24,7 @@ type V4PublicRequestInput = Readonly<{
   body?: string
   contentType?: string
   contentEncoding?: 'gzip'
+  publicHeaders?: Readonly<Record<string, string>>
 }>
 
 export type V4PublicRequestDetails = Readonly<{
@@ -31,6 +32,7 @@ export type V4PublicRequestDetails = Readonly<{
   body: Uint8Array | undefined
   sentByteLength: number
   contentEncoding?: 'gzip'
+  publicHeaders: Readonly<Record<string, string>>
 }>
 
 function fail(): never {
@@ -377,10 +379,14 @@ export function v4PublicRequestDetails(
     return fail()
   const host = new URL(input.origin).host
   const body = input.method === 'POST' ? encoder.encode(input.body!) : undefined
+  const publicHeaders = input.publicHeaders ?? {}
   const head =
     `${input.method} ${input.path} HTTP/1.1\r\n` +
     `host: ${host}\r\n` +
     'connection: close\r\n' +
+    Object.entries(publicHeaders)
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join('') +
     (input.contentEncoding === 'gzip' ? 'accept-encoding: gzip\r\n' : '') +
     (body
       ? `content-type: application/json\r\ncontent-length: ${body.length}\r\n`
@@ -389,6 +395,7 @@ export function v4PublicRequestDetails(
   return {
     host,
     body,
+    publicHeaders,
     sentByteLength: encoder.encode(head).length + (body?.length ?? 0),
     ...(input.contentEncoding === 'gzip'
       ? { contentEncoding: input.contentEncoding }
@@ -408,6 +415,7 @@ export function v4RequestDisclosureRanges(
     body: captured.body,
     contentType: captured.content_type,
     contentEncoding: connector.response_content_encoding,
+    publicHeaders: connector.request.public_headers,
   })
   if (
     !(sent instanceof Uint8Array) ||
@@ -455,6 +463,12 @@ export function v4RequestDisclosureRanges(
       : new Set(['host', 'connection', 'content-type', 'content-length'])
   if (connector.response_content_encoding === 'gzip')
     allowed.add('accept-encoding')
+  for (const [name, expected] of Object.entries(
+    connector.request.public_headers ?? {},
+  )) {
+    allowed.add(name)
+    if (headers.get(name) !== expected) return fail()
+  }
   if (
     headers.size !== allowed.size ||
     [...headers.keys()].some((name) => !allowed.has(name)) ||

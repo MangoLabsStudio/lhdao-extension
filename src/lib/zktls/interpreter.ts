@@ -243,6 +243,7 @@ export type V4Connector = {
     }
     body?: V4TemplateValue
     content_type?: 'application/json'
+    public_headers?: Record<string, string>
     replay: 'EXACT_CAPTURE'
     semantics: 'READ_ONLY_QUERY'
     secret_headers: []
@@ -2008,6 +2009,56 @@ function v4TemplateAtPath(
   return current
 }
 
+const V4_PUBLIC_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9a-z]+$/
+const V4_SENSITIVE_PUBLIC_HEADER =
+  /(?:^|-)(?:auth|authorization|cookie|csrf|xsrf|session|token|signature|api-?key|apikey)(?:-|$)/
+const V4_RESERVED_PUBLIC_HEADERS = new Set([
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'cache-control',
+  'connection',
+  'content-encoding',
+  'content-length',
+  'content-type',
+  'dnt',
+  'host',
+  'origin',
+  'pragma',
+  'priority',
+  'referer',
+  'transfer-encoding',
+  'upgrade-insecure-requests',
+  'user-agent',
+])
+
+function v4PublicHeaders(value: unknown): Record<string, string> {
+  const input = v4Record(value, 'request.public_headers')
+  const keys = Object.keys(input)
+  if (keys.length < 1 || keys.length > 8)
+    fail('request.public_headers is invalid.')
+  const result: Record<string, string> = {}
+  for (const name of keys.sort()) {
+    const headerValue = input[name]
+    if (
+      bytes(name) < 1 ||
+      bytes(name) > 64 ||
+      !V4_PUBLIC_HEADER_NAME.test(name) ||
+      name.startsWith('sec-') ||
+      V4_RESERVED_PUBLIC_HEADERS.has(name) ||
+      V4_SENSITIVE_PUBLIC_HEADER.test(name) ||
+      typeof headerValue !== 'string' ||
+      bytes(headerValue) < 1 ||
+      bytes(headerValue) > 256 ||
+      headerValue.trim() !== headerValue ||
+      !/^[\x20-\x7e]+$/.test(headerValue)
+    )
+      fail('request.public_headers is invalid.')
+    result[name] = headerValue
+  }
+  return result
+}
+
 function v4CountRequestValue(value: unknown, expected: number): number {
   if (value === expected) return 1
   if (Array.isArray(value))
@@ -2114,10 +2165,12 @@ function validateV4Connector(value: unknown): V4Connector {
   const references = new Map<string, number>()
   const requestInput = v4Record(input.request, 'request')
   const method = requestInput.method
+  const hasPublicHeaders = Object.hasOwn(requestInput, 'public_headers')
   const requestFields = [
     'method',
     'matcher',
     ...(method === 'POST' ? ['body', 'content_type'] : []),
+    ...(hasPublicHeaders ? ['public_headers'] : []),
     'replay',
     'semantics',
     'secret_headers',
@@ -2125,6 +2178,8 @@ function validateV4Connector(value: unknown): V4Connector {
     'max_recv_data',
   ]
   const request = v4Exact(requestInput, requestFields, 'request')
+  if (hasPublicHeaders)
+    request.public_headers = v4PublicHeaders(request.public_headers)
   if (method === 'POST' && request.content_type !== 'application/json')
     fail('request.content_type is invalid.')
   if (

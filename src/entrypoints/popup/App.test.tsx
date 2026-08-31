@@ -464,6 +464,7 @@ describe('product experience popup', () => {
     const { container } = await renderPopup(
       productState('observing', {
         error: 'VERIFICATION_FAILED',
+        zkTlsFailureCode: 'PROVER_TIMEOUT',
         zkTlsProgress: [
           {
             ruleId: 'deposit',
@@ -480,6 +481,13 @@ describe('product experience popup', () => {
     await vi.waitFor(() =>
       expect(findButton(container, '重试证明')).toBeTruthy(),
     )
+    expect(container.textContent).toContain('错误码：PROVER_TIMEOUT')
+  })
+
+  it('does not invent a zkTLS diagnostic for unrelated failures', async () => {
+    const { container } = await renderPopup(PERMISSION_DENIED_SESSION_STATE)
+    await vi.waitFor(() => expect(container.textContent).toContain('需要授权'))
+    expect(container.textContent).not.toContain('错误码：')
   })
 
   it.each([

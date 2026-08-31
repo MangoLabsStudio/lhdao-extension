@@ -285,6 +285,7 @@ describe('ProductExperienceController authorization and lifecycle', () => {
       authorizationRequired: status === 'ready' || status === 'reauthorize',
       currentOriginAllowed: status === 'observing',
       error: status === 'error' ? ('EXTENSION_ERROR' as const) : null,
+      zkTlsFailureCode: 'PROVER_TIMEOUT' as const,
     }
 
     expect(controllerStateToPublicSource(popupState)).toEqual({
@@ -298,6 +299,9 @@ describe('ProductExperienceController authorization and lifecycle', () => {
     })
     expect(controllerStateToPublicSource(popupState)).not.toHaveProperty(
       'title',
+    )
+    expect(controllerStateToPublicSource(popupState)).not.toHaveProperty(
+      'zkTlsFailureCode',
     )
   })
 
@@ -1299,6 +1303,73 @@ describe('ProductExperienceController zkTLS authority queue', () => {
 
     expect(harness.startZkTls).toHaveBeenCalledTimes(1)
     expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['PROVER_TIMEOUT', 'PROVER_TIMEOUT'],
+    ['native error: secret details', 'ZKTLS_UNKNOWN_FAILURE'],
+  ] as const)('keeps only the safe zkTLS failure code for %s', async (code, expected) => {
+    harness.proveZkTls.mockImplementationOnce(async (input) => ({
+      type: 'zktls-prove-result',
+      correlationId: input.correlationId,
+      status: 'error',
+      code,
+    }))
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.error).toBe('VERIFICATION_FAILED'),
+    )
+
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'observing',
+      error: 'VERIFICATION_FAILED',
+      zkTlsFailureCode: expected,
+    })
+    expect(harness.storage.session?.zkTlsFailureCode).toBe(expected)
+    if (expected === 'ZKTLS_UNKNOWN_FAILURE') {
+      expect(JSON.stringify(harness.storage.session)).not.toContain(code)
+    }
+  })
+
+  it('clears a stale zkTLS failure code when retry submits', async () => {
+    harness.proveZkTls
+      .mockImplementationOnce(async (input) => ({
+        type: 'zktls-prove-result',
+        correlationId: input.correlationId,
+        status: 'error',
+        code: 'PROVER_FAILED',
+      }))
+      .mockImplementationOnce(async (input) => ({
+        type: 'zktls-prove-result',
+        correlationId: input.correlationId,
+        status: 'submitted',
+      }))
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.error).toBe('VERIFICATION_FAILED'),
+    )
+    expect(await harness.controller.getState()).toMatchObject({
+      zkTlsFailureCode: 'PROVER_FAILED',
+    })
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted'),
+    )
+
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'submitting',
+      error: null,
+      zkTlsFailureCode: null,
+    })
   })
 
   it('reuses an unexpired backend session after a later proof trigger', async () => {

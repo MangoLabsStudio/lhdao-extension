@@ -140,6 +140,7 @@ export type V4CaptureBinding = {
   }
   template?: V4TemplateValue
   contentType?: 'application/json'
+  publicHeaders?: Readonly<Record<string, string>>
   variables: readonly V4VariableDeclaration[]
   resolvedVariables: Readonly<Record<string, V4ResolvedVariable>>
 }
@@ -392,8 +393,12 @@ function exactV4RequestTemplate(value: unknown): boolean {
   return true
 }
 
-function v4PublicHeader(name: string): boolean {
-  return V4_PUBLIC_HEADER_NAMES.has(name.toLowerCase())
+function v4PublicHeader(name: string, binding: V4CaptureBinding): boolean {
+  const normalized = name.toLowerCase()
+  return (
+    V4_PUBLIC_HEADER_NAMES.has(normalized) ||
+    Object.hasOwn(binding.publicHeaders ?? {}, normalized)
+  )
 }
 
 function requireV4Initiator(
@@ -806,9 +811,26 @@ export class CaptureSession {
       fail('captured request headers are invalid')
     if (
       v4 &&
-      details.requestHeaders!.some((header) => !v4PublicHeader(header.name))
-    )
-      fail('captured request contains an unsupported header')
+      details.requestHeaders!.some(
+        (header) => !v4PublicHeader(header.name, binding),
+      )
+    ) {
+      this.#discardCandidate()
+      return
+    }
+    if (v4) {
+      for (const [name, expected] of Object.entries(
+        binding.publicHeaders ?? {},
+      )) {
+        const matches = details.requestHeaders!.filter(
+          (header) => header.name.toLowerCase() === name,
+        )
+        if (matches.length !== 1 || matches[0]?.value !== expected) {
+          this.#discardCandidate()
+          return
+        }
+      }
+    }
     const secrets: Partial<Record<SecretHeader, string>> = {}
     if (!v4) {
       for (const header of details.requestHeaders ?? []) {
@@ -912,6 +934,7 @@ export class CaptureSession {
         path: complete.path,
         body: complete.body,
         contentType: complete.content_type,
+        publicHeaders: binding.publicHeaders,
       }).sentByteLength > binding.maxSentData
     )
       fail('captured request exceeds the signed sent limit')
@@ -1035,6 +1058,13 @@ export class CaptureSession {
     this.#requestBody = undefined
     this.#requestId = null
     this.#redirected.clear()
+  }
+
+  #discardCandidate(): void {
+    if (this.#candidate) clearCapturedRequest(this.#candidate)
+    this.#candidate = null
+    this.#requestBody = undefined
+    this.#requestId = null
   }
 
   #fail(reason: string): void {

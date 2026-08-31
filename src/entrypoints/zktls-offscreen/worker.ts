@@ -106,6 +106,7 @@ export function proofHttpRequest(
       body: message.captured.body,
       contentType: message.captured.content_type,
       contentEncoding: message.config.response_content_encoding,
+      publicHeaders: message.config.request.public_headers,
     })
     if (replay.sentByteLength > message.config.request.max_sent_data)
       throw new Error('captured request did not match the signed provider')
@@ -116,6 +117,9 @@ export function proofHttpRequest(
       headers: new Map([
         ['host', header(replay.host)],
         ['connection', header('close')],
+        ...Object.entries(replay.publicHeaders).map(
+          ([name, value]) => [name, header(value)] as [string, number[]],
+        ),
         ...(replay.contentEncoding === 'gzip'
           ? [
               ['accept-encoding', header(replay.contentEncoding)] as [

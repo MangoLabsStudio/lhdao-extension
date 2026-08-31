@@ -50,6 +50,16 @@ const WINDOW_FIXTURE = JSON.parse(WINDOW_FIXTURE_BYTES.toString('utf8')) as {
   responseBase64url: string
   hashes: { connector: string }
 }
+const PUBLIC_HEADER_FIXTURE_BYTES = readFileSync(
+  'test/fixtures/product-zktls-v4-public-headers.json',
+)
+const PUBLIC_HEADER_FIXTURE = JSON.parse(
+  PUBLIC_HEADER_FIXTURE_BYTES.toString('utf8'),
+) as {
+  connector: V4Connector
+  requestBase64url: string
+  hashes: { connector: string; request: string }
+}
 
 function integrationConnector(
   mode: keyof typeof INTEGRATION_FIXTURE.modes,
@@ -176,6 +186,30 @@ function disclosed(
 }
 
 describe('complete V4 public request disclosure', () => {
+  test('matches the shared signed public-header request bytes', () => {
+    const sent = fixedBytes(PUBLIC_HEADER_FIXTURE.requestBase64url)
+    const captured: CapturedRequest = {
+      path: '/v1/history?account=acct-1',
+      method: 'POST',
+      body: '{"account":"acct-1"}',
+      content_type: 'application/json',
+      secrets: {},
+      resource_type: 'fetch',
+      capturedVariables: {},
+    }
+
+    expect(
+      createHash('sha256').update(PUBLIC_HEADER_FIXTURE_BYTES).digest('hex'),
+    ).toBe('8a22d3eaba9189fc7a4bece51ba65c9331000828066d09adf7489f37f9fa3553')
+    expect(
+      v4RequestDisclosureRanges(
+        sent,
+        PUBLIC_HEADER_FIXTURE.connector,
+        captured,
+      ),
+    ).toEqual([{ start: 0, end: sent.length }])
+  })
+
   test('matches the fixed provider-neutral gzip request bytes', () => {
     const config = integrationConnector('fixedGzip')
     const sent = fixedBytes(INTEGRATION_FIXTURE.requestBase64)
@@ -241,6 +275,33 @@ describe('complete V4 public request disclosure', () => {
 
     expect(ranges).toEqual([{ start: 0, end: sent.length }])
     expect(disclosed(sent, ranges)).toEqual([sent])
+  })
+
+  test('derives and discloses an exact signed public request header', () => {
+    const signed = connector()
+    signed.request.public_headers = { 'x-client-type': 'public' }
+    const sent = request('POST', {
+      headers: [
+        'Host: api.example.com',
+        'Connection: close',
+        'X-Client-Type: public',
+        'Content-Type: application/json',
+        `Content-Length: ${encoder.encode(body).length}`,
+      ],
+    })
+    const details = v4PublicRequestDetails({
+      origin: signed.origin,
+      method: 'POST',
+      path,
+      body,
+      contentType: 'application/json',
+      publicHeaders: signed.request.public_headers,
+    })
+
+    expect(details.sentByteLength).toBe(sent.length)
+    expect(v4RequestDisclosureRanges(sent, signed, capture())).toEqual([
+      { start: 0, end: sent.length },
+    ])
   })
 
   test.each([

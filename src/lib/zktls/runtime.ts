@@ -430,6 +430,7 @@ async function proveCapturedRequest(
                   contentType: config.request.content_type,
                 }
               : {}),
+            publicHeaders: config.request.public_headers,
             variables: config.variables,
             resolvedVariables: config.resolved_variables,
           })

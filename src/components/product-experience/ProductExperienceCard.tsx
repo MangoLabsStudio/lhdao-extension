@@ -295,6 +295,15 @@ export function ProductExperienceCard({
           {copy.detail}
         </p>
 
+        {isRetryableProofState(state) && state.zkTlsFailureCode && (
+          <p
+            data-testid="zktls-failure-code"
+            className="mt-1 font-mono text-[9.5px] text-rose-200"
+          >
+            错误码：{state.zkTlsFailureCode}
+          </p>
+        )}
+
         {state.zkTlsProgress && state.zkTlsProgress.length > 0 && (
           <ul className="mt-3 space-y-1.5 border-t border-white/8 pt-3">
             {state.zkTlsProgress.map((entry) => {

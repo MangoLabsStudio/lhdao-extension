@@ -231,7 +231,9 @@ const v4BindingConnector = {
   verifier_profile_id: 'lighthouse-v1',
 } as const satisfies V4Connector
 
-function v4Session(): CaptureSession {
+function v4Session(
+  publicHeaders?: Readonly<Record<string, string>>,
+): CaptureSession {
   return new CaptureSession(
     createCaptureBinding({
       interpreterVersion: 4,
@@ -247,6 +249,7 @@ function v4Session(): CaptureSession {
       matcher: v4BindingConnector.request.matcher,
       template: v4BindingConnector.request.body,
       contentType: v4BindingConnector.request.content_type,
+      publicHeaders,
       variables: v4BindingConnector.variables,
       resolvedVariables: v4BindingConnector.resolved_variables,
     }),
@@ -917,7 +920,7 @@ describe('zkTLS v4 capture', () => {
     ).toThrow('initiator')
   })
 
-  test('rejects credential and custom headers without reading values', () => {
+  test('discards credential and custom header candidates without reading values', () => {
     for (const name of [
       'Cookie',
       'Authorization',
@@ -967,9 +970,130 @@ describe('zkTLS v4 capture', () => {
             credential,
           ],
         }),
-      ).toThrow('unsupported header')
+      ).not.toThrow()
       expect(valueReads).toBe(0)
+      expect(() => capture.take()).toThrow('no provider request was captured')
     }
+  })
+
+  test('captures a later safe request after discarding an unsafe candidate', () => {
+    const capture = v4Session()
+    capture.observeBody({
+      requestId: 'unsafe',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    })
+    let valueReads = 0
+    const forbidden = { name: 'X-App-Client-Type' } as {
+      name: string
+      value?: string
+    }
+    Object.defineProperty(forbidden, 'value', {
+      get() {
+        valueReads += 1
+        return 'private'
+      },
+    })
+    expect(() =>
+      capture.observe({
+        requestId: 'unsafe',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestHeaders: [
+          { name: 'Content-Type', value: 'application/json' },
+          forbidden,
+        ],
+      }),
+    ).not.toThrow()
+    expect(valueReads).toBe(0)
+    expect(() => capture.take()).toThrow('no provider request was captured')
+
+    observePost(capture, 'safe')
+
+    expect(capture.take()).toMatchObject({
+      method: 'POST',
+      path: url.slice('https://api.example.com'.length),
+      body: '{"operation":"account","input":{"account":"acct-body","day":"2026-08-21"}}',
+      secrets: {},
+    })
+  })
+
+  test('captures an exact signed public request header', () => {
+    const capture = v4Session({ 'x-client-type': 'public' })
+    capture.observeBody({
+      requestId: 'public-header',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    })
+    capture.observe({
+      requestId: 'public-header',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestHeaders: [
+        { name: 'Content-Type', value: 'application/json' },
+        { name: 'X-Client-Type', value: 'public' },
+      ],
+    })
+
+    expect(capture.take()).toMatchObject({ method: 'POST' })
+  })
+
+  test.each([
+    null,
+    'other',
+    'PUBLIC',
+  ])('rejects signed public request header value %s', (value) => {
+    const capture = v4Session({ 'x-client-type': 'public' })
+    capture.observeBody({
+      requestId: 'bad-public-header',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    })
+    expect(() =>
+      capture.observe({
+        requestId: 'bad-public-header',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestHeaders: [
+          { name: 'Content-Type', value: 'application/json' },
+          ...(value === null ? [] : [{ name: 'X-Client-Type', value }]),
+        ],
+      }),
+    ).not.toThrow()
+    expect(() => capture.take()).toThrow('no provider request was captured')
   })
 
   test.each([
@@ -977,7 +1101,7 @@ describe('zkTLS v4 capture', () => {
     'Sec-Fetch-Unknown',
     'Sec-CH-Api-Key',
     'Sec-CH-UA-Full-Version-List',
-  ])('rejects unsupported client metadata header %s without reading it', (name) => {
+  ])('discards unsupported client metadata header %s without reading it', (name) => {
     const capture = v4Session()
     capture.observeBody({
       requestId: name,
@@ -1013,8 +1137,9 @@ describe('zkTLS v4 capture', () => {
           header,
         ],
       }),
-    ).toThrow('unsupported header')
+    ).not.toThrow()
     expect(valueReads).toBe(0)
+    expect(() => capture.take()).toThrow('no provider request was captured')
   })
 
   test.each([
