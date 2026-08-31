@@ -396,6 +396,7 @@ function exactV4RequestTemplate(value: unknown): boolean {
 function v4PublicHeader(name: string, binding: V4CaptureBinding): boolean {
   const normalized = name.toLowerCase()
   return (
+    normalized === 'cookie' ||
     V4_PUBLIC_HEADER_NAMES.has(normalized) ||
     Object.hasOwn(binding.publicHeaders ?? {}, normalized)
   )

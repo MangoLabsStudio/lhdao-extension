@@ -920,9 +920,51 @@ describe('zkTLS v4 capture', () => {
     ).toThrow('initiator')
   })
 
+  test('ignores an ambient V4 Cookie without reading or capturing its value', () => {
+    const capture = v4Session()
+    capture.observeBody({
+      requestId: 'ambient-cookie',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    })
+    let valueReads = 0
+    const cookie = { name: 'Cookie' } as { name: string; value?: string }
+    Object.defineProperty(cookie, 'value', {
+      get() {
+        valueReads += 1
+        return 'private'
+      },
+    })
+    capture.observe({
+      requestId: 'ambient-cookie',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestHeaders: [
+        { name: 'Content-Type', value: 'application/json' },
+        cookie,
+      ],
+    })
+    expect(valueReads).toBe(0)
+    expect(capture.take()).toMatchObject({
+      method: 'POST',
+      body: '{"operation":"account","input":{"account":"acct-body","day":"2026-08-21"}}',
+      secrets: {},
+    })
+  })
+
   test('discards credential and custom header candidates without reading values', () => {
     for (const name of [
-      'Cookie',
       'Authorization',
       'Proxy-Authorization',
       'X-Api-Key',
