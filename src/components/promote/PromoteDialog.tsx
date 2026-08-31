@@ -1,7 +1,10 @@
 import * as React from 'react'
 import { sendMessage } from '@/lib/messaging'
 import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
-import type { PromoteTweetPricingQuote } from '@/lib/queries'
+import type {
+  EngagementCurrentMarketPrices,
+  PromoteTweetPricingQuote,
+} from '@/lib/queries'
 import type { MsgResponse, PromoteAction } from '@/types/messages'
 
 /**
@@ -202,6 +205,9 @@ export function PromoteDialog({
   const [quote, setQuote] = React.useState<PromoteTweetPricingQuote | null>(
     null,
   )
+  const [currentPrices, setCurrentPrices] =
+    React.useState<EngagementCurrentMarketPrices | null>(null)
+  const [currentPricesError, setCurrentPricesError] = React.useState('')
   const [previewState, setPreviewState] = React.useState<PreviewState>('idle')
   const [previewError, setPreviewError] = React.useState('')
   const [refreshKey, setRefreshKey] = React.useState(0)
@@ -224,6 +230,32 @@ export function PromoteDialog({
     void sendMessage({ type: 'get-balance' }).then((r) => {
       if (r.type === 'balance-result') setBalance(r.balance)
     })
+  }, [])
+
+  React.useEffect(() => {
+    let active = true
+    void sendMessage({
+      type: 'get-current-engagement-prices',
+      actions: ALL_ACTIONS.map((action) => action.key),
+    })
+      .then((response) => {
+        if (!active) return
+        if (response.type === 'current-engagement-prices-result') {
+          if (response.ok) {
+            setCurrentPrices(response.prices)
+            return
+          }
+          setCurrentPricesError(response.message)
+          return
+        }
+        setCurrentPricesError('当前价格暂不可用，请稍后重试。')
+      })
+      .catch(() => {
+        if (active) setCurrentPricesError('当前价格暂不可用，请稍后重试。')
+      })
+    return () => {
+      active = false
+    }
   }, [])
 
   React.useEffect(() => {
@@ -512,6 +544,38 @@ export function PromoteDialog({
               </button>
             )}
 
+            <section
+              className="lh-current"
+              aria-labelledby="lh-promote-current-title"
+            >
+              <div id="lh-promote-current-title" className="lh-label">
+                当前报价
+              </div>
+              {currentPrices ? (
+                <div className="lh-current-grid">
+                  {currentPrices.lines
+                    .filter((line) => ALL_TIERS.includes(line.tier))
+                    .map((line) => (
+                      <div
+                        className="lh-current-line"
+                        key={`${line.actionType}:${line.tier}`}
+                      >
+                        <b>
+                          {line.actionType}/{line.tier}
+                        </b>
+                        <span>{line.unitPrice} LUX</span>
+                      </div>
+                    ))}
+                </div>
+              ) : currentPricesError ? (
+                <div className="lh-warn">{currentPricesError}</div>
+              ) : (
+                <div className="lh-quote-status" role="status">
+                  正在获取当前报价…
+                </div>
+              )}
+            </section>
+
             <div className="lh-label">互动动作(每个动作单独建单)</div>
             <div className="lh-chips">
               {ALL_ACTIONS.map((a) => (
@@ -619,10 +683,9 @@ export function PromoteDialog({
                     <thead>
                       <tr>
                         <th scope="col">动作/档</th>
-                        <th scope="col">来源</th>
-                        <th scope="col">今日</th>
-                        <th scope="col">明日预计</th>
+                        <th scope="col">单价</th>
                         <th scope="col">数量</th>
+                        <th scope="col">小计</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -633,37 +696,14 @@ export function PromoteDialog({
                           <td>
                             {line.actionType}/{line.tier}
                           </td>
-                          <td>
-                            {line.pricingSource === 'PILOT' ? '试点' : '正式价'}
-                          </td>
-                          <td>今日 {line.todayPrice}</td>
-                          <td>明日预计 {line.tomorrowExpectedPrice}</td>
-                          <td>{line.quantity}</td>
+                          <td>单价 {line.unitPrice}</td>
+                          <td>数量 {line.quantity}</td>
+                          <td>小计 {line.principal}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                {quote.lines
-                  .filter((line) => line.schedule?.length)
-                  .map((line) => (
-                    <section
-                      key={`schedule:${line.campaignIndex}:${line.actionType}:${line.tier}`}
-                      className="lh-schedule-wrap"
-                      aria-label={`${line.actionType}/${line.tier} 价格日程`}
-                    >
-                      <b>
-                        {line.actionType}/{line.tier} 价格日程
-                      </b>
-                      <div className="lh-schedule">
-                        {line.schedule!.map((point) => (
-                          <span key={point.dayIndex}>
-                            第 {point.dayIndex} 日 {point.unitPrice}
-                          </span>
-                        ))}
-                      </div>
-                    </section>
-                  ))}
               </section>
             )}
             {previewError && <div className="lh-warn">{previewError}</div>}
@@ -821,6 +861,12 @@ export const promoteDialogCss = `
   .lh-reinvest { display: flex; align-items: center; gap: 9px; margin-top: 16px; font-size: 13px; font-weight: 700; color: #c4ccd6; cursor: pointer; }
   .lh-reinvest input[type=checkbox] { width: 17px; height: 17px; accent-color: #0EA5A4; cursor: pointer; }
   .lh-quote-status { margin-top: 14px; font-size: 12px; color: #7dd3fc; }
+  .lh-current { margin-top: 14px; }
+  .lh-current .lh-label { margin-top: 0; }
+  .lh-current-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .lh-current-line { display: flex; justify-content: space-between; gap: 6px; padding: 7px 8px; border-radius: 9px; background: rgba(255,255,255,0.04); color: #aeb9c6; font-size: 10.5px; }
+  .lh-current-line b { color: #dbeafe; }
+  .lh-current-line span { white-space: nowrap; }
   .lh-quote {
     margin-top: 14px; padding: 12px; min-width: 0; overflow: hidden;
     border: 1px solid rgba(45,212,191,0.22); border-radius: 14px;
@@ -830,13 +876,9 @@ export const promoteDialogCss = `
   .lh-quote-head b { color: #f0fdfa; font-size: 16px; white-space: nowrap; }
   .lh-quote-meta, .lh-quote-expiry { margin-top: 5px; color: #8ea0b3; font-size: 10.5px; line-height: 1.45; }
   .lh-quote-scroll { margin-top: 10px; max-width: 100%; overflow-x: auto; }
-  .lh-quote-table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 10.5px; text-align: left; }
+  .lh-quote-table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 10.5px; text-align: left; }
   .lh-quote-table th { padding: 6px; color: #64748b; font-weight: 700; white-space: nowrap; border-bottom: 1px solid rgba(255,255,255,0.08); }
   .lh-quote-table td { padding: 7px 6px; color: #cbd5e1; white-space: nowrap; border-bottom: 1px solid rgba(255,255,255,0.05); }
-  .lh-schedule { display: flex; gap: 6px; margin-top: 9px; padding-bottom: 2px; overflow-x: auto; }
-  .lh-schedule span { flex: 0 0 auto; padding: 5px 7px; border-radius: 7px; background: rgba(15,23,42,0.65); color: #94a3b8; font-size: 10px; }
-  .lh-schedule-wrap { margin-top: 9px; min-width: 0; }
-  .lh-schedule-wrap > b { color: #a5f3fc; font-size: 10.5px; }
   .lh-bal { color: #7c8a9a; font-weight: 600; }
   .lh-warn { margin-top: 8px; font-size: 12.5px; font-weight: 700; color: #f87171; }
   .lh-primary {

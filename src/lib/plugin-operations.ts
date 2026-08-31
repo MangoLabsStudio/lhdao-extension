@@ -3,6 +3,7 @@ import {
   AVAILABLE_TWEETS_QUERY,
   CREATE_AUTO_REINVEST_MUTATION,
   CREATE_EXTENSION_PAIRING_MUTATION,
+  CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
   LIGHTHOUSE_MEMBERS_QUERY,
   ME_QUERY,
   MINT_ENGAGEMENT_TICKET_MUTATION,
@@ -120,10 +121,17 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'verify',
   ),
   operation(
-    'read.promote-pricing.v1',
+    'read.engagement-current-prices.v1',
+    'CurrentEngagementMarketPrices',
+    CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
+    'a6db29afa57f31cacc46403504c8c43f0ac10ac5fabfce5fe89f6ee269d1b312',
+    'read',
+  ),
+  operation(
+    'read.promote-pricing.v2',
     'PreviewPromoteTweetPricing',
     PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
-    '890c5e721d87d1dda193d0e354aeeffde72d4a7613769df2853e1189f1b470ec',
+    'd71bdd5a31703929fc61a7408b167668f558c16840c340ce8073248b8190e934',
     'read',
   ),
   operation(

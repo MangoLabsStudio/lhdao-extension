@@ -12,6 +12,7 @@ let root: Root | null = null
 let container: HTMLElement
 let requests: unknown[]
 let promoteFailure: { code: string; message: string }
+let currentPricesResponse: () => unknown | Promise<unknown>
 let previewResponse: () => unknown | Promise<unknown>
 let promoteResponse: () => unknown | Promise<unknown>
 
@@ -35,12 +36,38 @@ const quote = {
       pricingSource: 'PILOT',
       unitPrice: '0.40000000',
       principal: '2.00000000',
-      todayPrice: '0.40000000',
-      tomorrowExpectedPrice: '0.39000000',
-      schedule: [
-        { dayIndex: 0, unitPrice: '0.40000000' },
-        { dayIndex: 1, unitPrice: '0.39000000' },
-      ],
+    },
+  ],
+}
+
+const currentPrices = {
+  asOf: '2026-08-30T06:32:00.000Z',
+  currency: 'LUX' as const,
+  precision: 8,
+  lines: [
+    {
+      actionType: 'LIKE',
+      tier: 'A',
+      pricingSource: 'PILOT',
+      unitPrice: '0.39000000',
+    },
+    {
+      actionType: 'LIKE',
+      tier: 'D',
+      pricingSource: 'LEGACY',
+      unitPrice: '0.10000000',
+    },
+    {
+      actionType: 'RT',
+      tier: 'B',
+      pricingSource: 'PILOT',
+      unitPrice: '14.62500000',
+    },
+    {
+      actionType: 'COMMENT',
+      tier: 'C',
+      pricingSource: 'LEGACY',
+      unitPrice: '4.00000000',
     },
   ],
 }
@@ -63,6 +90,11 @@ describe('PromoteDialog device recovery', () => {
       code: 'PLUGIN_DEVICE_DENIED',
       message: 'PLUGIN_DEVICE_DENIED: 你没有权限执行此操作。',
     }
+    currentPricesResponse = () => ({
+      type: 'current-engagement-prices-result',
+      ok: true,
+      prices: currentPrices,
+    })
     previewResponse = () => ({
       type: 'promote-pricing-result',
       ok: true,
@@ -93,6 +125,9 @@ describe('PromoteDialog device recovery', () => {
       }
       if (message.type === 'get-balance') {
         return { type: 'balance-result', balance: 100 }
+      }
+      if (message.type === 'get-current-engagement-prices') {
+        return currentPricesResponse()
       }
       if (message.type === 'preview-promote-tweet-pricing') {
         return previewResponse()
@@ -153,7 +188,7 @@ describe('PromoteDialog device recovery', () => {
     ).toHaveLength(1)
   })
 
-  it('previews authoritative server money before explicit confirmation', async () => {
+  it('shows only returned current prices and frozen money before confirmation', async () => {
     root = createRoot(container)
     await act(async () =>
       root?.render(
@@ -167,17 +202,38 @@ describe('PromoteDialog device recovery', () => {
 
     await vi.waitFor(() => {
       expect(requests).toContainEqual({
+        type: 'get-current-engagement-prices',
+        actions: ['LIKE', 'RT', 'COMMENT'],
+      })
+      expect(requests).toContainEqual({
         type: 'preview-promote-tweet-pricing',
         tweetUrl: 'https://x.com/lighthouse/status/1',
         actions: [{ actionType: 'LIKE', tierSlots: { A: 5 } }],
       })
       expect(container.textContent).toContain('2.20000000 LUX')
       expect(container.textContent).toContain('手续费 0.20000000 LUX')
-      expect(container.textContent).toContain('今日 0.40000000')
-      expect(container.textContent).toContain('明日预计 0.39000000')
-      expect(container.textContent).toContain('第 1 日 0.39000000')
+      expect(container.textContent).toContain('LIKE/A')
+      expect(container.textContent).toContain('0.39000000')
+      expect(container.textContent).toContain('LIKE/D')
+      expect(container.textContent).toContain('0.10000000')
+      expect(container.textContent).toContain('RT/B')
+      expect(container.textContent).toContain('14.62500000')
+      expect(container.textContent).toContain('COMMENT/C')
+      expect(container.textContent).toContain('4.00000000')
+      expect(container.textContent).toContain('单价 0.40000000')
+      expect(container.textContent).toContain('数量 5')
+      expect(container.textContent).toContain('小计 2.00000000')
       expect(container.textContent).toContain('2099-01-02T00:00:00.000Z UTC')
     })
+    expect(container.textContent).not.toContain('试点')
+    expect(container.textContent).not.toContain('LIKE/B')
+    expect(container.textContent).not.toContain('LIKE/C')
+    expect(container.textContent).not.toMatch(/今日|明日|日程/u)
+    expect(
+      Array.from(container.querySelectorAll('[aria-label]')).some((element) =>
+        /今日|明日|日程/u.test(element.getAttribute('aria-label') ?? ''),
+      ),
+    ).toBe(false)
     expect(
       requests.some(
         (request) =>
@@ -530,28 +586,12 @@ describe('PromoteDialog device recovery', () => {
     expect(promoteRequests[1]).toEqual(promoteRequests[0])
   })
 
-  it('labels and renders every returned market schedule', async () => {
-    previewResponse = () => ({
-      type: 'promote-pricing-result',
-      ok: true,
-      quote: {
-        ...quote,
-        lines: [
-          quote.lines[0],
-          {
-            ...quote.lines[0],
-            campaignIndex: 1,
-            actionType: 'RT',
-            tier: 'B',
-            todayPrice: '15.00000000',
-            tomorrowExpectedPrice: '14.62500000',
-            schedule: [
-              { dayIndex: 0, unitPrice: '15.00000000' },
-              { dayIndex: 1, unitPrice: '14.62500000' },
-            ],
-          },
-        ],
-      },
+  it('fails closed when current prices are unavailable', async () => {
+    currentPricesResponse = () => ({
+      type: 'current-engagement-prices-result',
+      ok: false,
+      code: 'PLUGIN_CURRENT_PRICES_RESPONSE_INVALID',
+      message: '当前价格响应无效，请稍后重试。',
     })
     root = createRoot(container)
     await act(async () =>
@@ -562,13 +602,11 @@ describe('PromoteDialog device recovery', () => {
         />,
       ),
     )
-    await act(async () => findButton('按上次配置').click())
     await vi.waitFor(() => {
-      expect(container.textContent).toContain('LIKE/A 价格日程')
-      expect(container.textContent).toContain('第 1 日 0.39000000')
-      expect(container.textContent).toContain('RT/B 价格日程')
-      expect(container.textContent).toContain('第 1 日 14.62500000')
+      expect(container.textContent).toContain('当前价格响应无效，请稍后重试。')
     })
+    expect(container.textContent).not.toContain('20.00000000')
+    expect(container.textContent).not.toMatch(/今日|明日|日程/u)
   })
 
   it('recovers when preview messaging rejects instead of hanging', async () => {

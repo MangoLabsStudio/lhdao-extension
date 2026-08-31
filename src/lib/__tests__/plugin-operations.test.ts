@@ -4,11 +4,14 @@ import {
   getPluginOperationByDocument,
   PLUGIN_OPERATIONS,
 } from '../plugin-operations'
+import * as queries from '../queries'
 import {
   AVAILABLE_ENGAGEMENTS_QUERY,
+  CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
   MintProductExperienceTestTicketOperationName,
   MintProductExperienceTicketOperationName,
   MY_RESERVED_ENGAGEMENTS_QUERY,
+  PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
   ProductZkTlsRuleProgressOperationName,
@@ -56,7 +59,40 @@ const PRODUCT_EXPERIENCE_OPERATIONS = [
 ] as const
 
 describe('PLUGIN_OPERATIONS', () => {
-  it('contains the quote preview and versioned quoted spend operations', () => {
+  it('allowlists only current prices, v2 preview, and quoted spend', async () => {
+    expect('PREVIEW_PROMOTE_TWEET_PRICING_V1_QUERY' in queries).toBe(false)
+    await expect(
+      sha256Hex(CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY),
+    ).resolves.toBe(
+      'a6db29afa57f31cacc46403504c8c43f0ac10ac5fabfce5fe89f6ee269d1b312',
+    )
+    await expect(sha256Hex(PREVIEW_PROMOTE_TWEET_PRICING_QUERY)).resolves.toBe(
+      'd71bdd5a31703929fc61a7408b167668f558c16840c340ce8073248b8190e934',
+    )
+    expect(
+      getPluginOperationByDocument(
+        CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
+        'CurrentEngagementMarketPrices',
+      ),
+    ).toMatchObject({
+      id: 'read.engagement-current-prices.v1',
+      permission: 'read',
+    })
+    expect(
+      getPluginOperationByDocument(
+        PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
+        'PreviewPromoteTweetPricing',
+      ),
+    ).toMatchObject({ id: 'read.promote-pricing.v2', permission: 'read' })
+    expect(PLUGIN_OPERATIONS.map((operation) => operation.id)).not.toContain(
+      'read.promote-pricing.v1',
+    )
+    expect(
+      getPluginOperationByDocument(PROMOTE_TWEET_MUTATION, 'PromoteTweet'),
+    ).toMatchObject({ id: 'spend.promote.v1', permission: 'spend' })
+  })
+
+  it('contains current prices, v2 preview, and quoted spend', () => {
     expect(
       PLUGIN_OPERATIONS.map((operation) => operation.operationName),
     ).toEqual([
@@ -71,6 +107,7 @@ describe('PLUGIN_OPERATIONS', () => {
       'ReportEngagementCapture',
       'MintEngagementTicket',
       'SubmitEngagementProof',
+      'CurrentEngagementMarketPrices',
       'PreviewPromoteTweetPricing',
       'PromoteTweet',
       'CreateAutoReinvestTask',

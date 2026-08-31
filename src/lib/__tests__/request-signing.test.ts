@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getPluginOperationByDocument } from '../plugin-operations'
-import { ME_QUERY } from '../queries'
+import { CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY, ME_QUERY } from '../queries'
 import {
   buildPluginSignatureMessage,
   signPluginRequest,
@@ -95,5 +95,33 @@ describe('plugin request signing', () => {
         new TextEncoder().encode(signed.message),
       ),
     ).resolves.toBe(true)
+  })
+
+  it('binds the current-price actions to the signed read operation', async () => {
+    const operation = getPluginOperationByDocument(
+      CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
+      'CurrentEngagementMarketPrices',
+    )
+    const privateKey = await crypto.subtle.importKey(
+      'jwk',
+      PRIVATE_JWK,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['sign'],
+    )
+
+    const signed = await signPluginRequest({
+      operation: operation!,
+      variables: { input: { actions: ['LIKE', 'RT', 'COMMENT'] } },
+      deviceId: 'device-test-1',
+      privateKey,
+      timestamp: '1783944000000',
+      nonce: 'nonce-test-123456',
+    })
+
+    expect(signed.headers).toMatchObject({
+      'x-plugin-operation-id': 'read.engagement-current-prices.v1',
+      'x-device-id': 'device-test-1',
+    })
   })
 })

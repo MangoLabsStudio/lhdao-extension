@@ -29,9 +29,9 @@ const variables: PromoteTweetVars = {
 }
 
 describe('quoted promote operation signatures', () => {
-  it('allowlists the full pricing evidence query as a signed read', async () => {
+  it('allowlists the frozen pricing query as a v2 signed read', async () => {
     expect(await sha256Hex(PREVIEW_PROMOTE_TWEET_PRICING_QUERY)).toBe(
-      '890c5e721d87d1dda193d0e354aeeffde72d4a7613769df2853e1189f1b470ec',
+      'd71bdd5a31703929fc61a7408b167668f558c16840c340ce8073248b8190e934',
     )
     expect(
       getPluginOperationByDocument(
@@ -39,7 +39,7 @@ describe('quoted promote operation signatures', () => {
         'PreviewPromoteTweetPricing',
       ),
     ).toMatchObject({
-      id: 'read.promote-pricing.v1',
+      id: 'read.promote-pricing.v2',
       permission: 'read',
     })
 
@@ -68,7 +68,7 @@ describe('quoted promote operation signatures', () => {
       nonce: 'nonce-test-123456',
     })
     expect(signed.headers).toMatchObject({
-      'x-plugin-operation-id': 'read.promote-pricing.v1',
+      'x-plugin-operation-id': 'read.promote-pricing.v2',
       'x-device-id': 'device-test-1',
     })
   })
@@ -141,5 +141,20 @@ describe('quoted promote operation signatures', () => {
     )
     expect(source).not.toMatch(/const PRICE|FEE_RATE|actionCost/u)
     expect(source).not.toMatch(/totalCost\s*=|unitPrice\s*\*/u)
+  })
+
+  it('contains no public future-price fields in buyer production sources', () => {
+    const source = [
+      'src/lib/queries.ts',
+      'src/lib/plugin-operations.ts',
+      'src/types/messages.ts',
+      'src/entrypoints/background.ts',
+      'src/components/promote/PromoteDialog.tsx',
+    ]
+      .map((path) => readFileSync(resolve(process.cwd(), path), 'utf8'))
+      .join('\n')
+
+    expect(source).not.toMatch(/todayPrice|tomorrowExpectedPrice/u)
+    expect(source).not.toMatch(/明日预计|价格日程/u)
   })
 })
