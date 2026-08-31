@@ -708,6 +708,21 @@ describe('complete V4 JSON response disclosure', () => {
     ).resolves.toEqual([{ start: 0, end: received.length }])
   })
 
+  test('accepts repeated Vary metadata in a chunked JSON response', async () => {
+    const received = response(chunked(encoder.encode('{"ok":true}')), {
+      headers: [
+        'Content-Type: application/json',
+        'Transfer-Encoding: chunked',
+        'Vary: origin, access-control-request-method',
+        'vary: accept-encoding',
+      ],
+    })
+
+    await expect(
+      v4ResponseDisclosureRanges(received, chunkedConnector()),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
+  })
+
   test('validates the same JSON across all signed framing and encoding combinations', async () => {
     expect(
       createHash('sha256').update(INTEGRATION_FIXTURE_BYTES).digest('hex'),
