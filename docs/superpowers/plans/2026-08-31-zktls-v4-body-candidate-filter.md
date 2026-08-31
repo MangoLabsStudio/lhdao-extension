@@ -4,7 +4,7 @@
 
 **Goal:** Ignore unrelated, well-formed POST bodies on a signed V4 endpoint and capture the later exact request.
 
-**Architecture:** Reuse the existing strict `matchV4Body` matcher before `CaptureSession` claims a POST candidate. A `null` match returns without state changes; parser errors remain terminal. The existing header-stage match is retained as defense in depth.
+**Architecture:** Reuse the existing strict request and body matchers before `CaptureSession` claims a candidate. A mismatch or candidate parse error returns without state changes; the existing header-stage match remains the strict completion boundary. Merge current `origin/dev` before producing the Beta build.
 
 **Tech Stack:** TypeScript, Chrome MV3 `webRequest`, Vitest, Biome, WXT
 
@@ -17,9 +17,9 @@
 
 - [ ] **Step 1: Add the failing regression**
 
-Add a V4 capture test that sends a well-formed same-path JSON body with a wrong
-operation, verifies that no request is available, then sends the existing exact
-body and verifies that it is captured.
+Add V4 capture tests that send same-path bodies which are well-formed but
+mismatched, invalid JSON, oversized, or contain an invalid captured variable.
+Each test then sends the existing exact body and verifies that it is captured.
 
 ```ts
 test('ignores a mismatched V4 body and captures a later exact request', () => {
@@ -55,7 +55,7 @@ pnpm exec vitest run src/lib/__tests__/zktls-capture.test.ts
 ```
 
 Expected: the later exact request fails because the unrelated body already
-occupied the candidate.
+occupied the candidate, or the malformed candidate ended the capture.
 
 ### Task 2: Filter Before Candidate Reservation
 
@@ -64,10 +64,9 @@ occupied the candidate.
 
 - [ ] **Step 1: Add the minimal prefilter**
 
-In the V4 POST branch of `observeBody()`, join the raw body and call the existing
-`matchV4Body` with the signed content type, template, resolved variables, and
-BODY_JSON variable declarations. Return when it yields `null`. Do not catch
-strict-parser errors.
+In the V4 branch of `observeBody()`, treat request/body matcher exceptions as a
+candidate mismatch before reservation. Return without mutating capture state.
+Keep the existing strict matcher in `observe()` unchanged.
 
 - [ ] **Step 2: Confirm GREEN**
 
@@ -95,12 +94,21 @@ pnpm exec biome check src/lib/zktls/capture.ts src/lib/__tests__/zktls-capture.t
 git diff --check
 ```
 
-- [ ] **Step 2: Build with the existing Beta environment**
+- [ ] **Step 2: Merge current dev without force**
+
+```bash
+git fetch origin dev
+git merge --no-edit origin/dev
+```
+
+Run the automated gates again after the merge.
+
+- [ ] **Step 3: Build with the existing Beta environment**
 
 Use the established Beta build command and verify the compiled GraphQL endpoint
 is `https://service.lhdaobeta.top/graphql`. Do not use the production defaults.
 
-- [ ] **Step 3: Re-run the live Nado proof**
+- [ ] **Step 4: Re-run the live Nado proof**
 
 Reload the unpacked extension, start a new proof, and trigger the signed Nado
 operation during the capture window. Record the actual next stage; do not call

@@ -3058,6 +3058,130 @@ describe('zkTLS V4 page and target permissions', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  test('ignores a malformed body event and submits a later exact V4 request', async () => {
+    const rawConfig = v4Connector()
+    const config = validateConnector(rawConfig)
+    const signed = await signedV4Envelopes(rawConfig)
+    vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
+      config,
+      ticket: signed.ticket_envelope.ticket,
+      configEnvelope: { ...signed.config_envelope, config },
+      ticketEnvelope: signed.ticket_envelope,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation(
+      (async () => true) as never,
+    )
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([
+      { id: 7, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
+    ])
+    vi.spyOn(chrome.tabs, 'update').mockImplementation((async () => ({
+      id: 7,
+      url: 'https://app.example.com/dashboard',
+    })) as never)
+    Object.defineProperty(chrome.runtime, 'getContexts', {
+      configurable: true,
+      value: vi
+        .fn()
+        .mockResolvedValue([
+          { documentUrl: chrome.runtime.getURL('zktls-offscreen.html') },
+        ]),
+    })
+    let submittedMessage: unknown
+    const sendMessage = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockImplementation((async (message: unknown) => {
+        submittedMessage = structuredClone(message)
+        return { status: 'submitted' }
+      }) as never)
+    const bodyEvent = vi
+      .spyOn(chrome.webRequest.onBeforeRequest, 'addListener')
+      .mockImplementation((() => undefined) as never)
+    const headerEvent = vi
+      .spyOn(chrome.webRequest.onBeforeSendHeaders, 'addListener')
+      .mockImplementation((() => undefined) as never)
+    const completedEvent = vi
+      .spyOn(chrome.webRequest.onCompleted, 'addListener')
+      .mockImplementation((() => undefined) as never)
+    for (const event of [
+      chrome.webRequest.onBeforeRedirect,
+      chrome.webRequest.onErrorOccurred,
+      chrome.runtime.onMessage,
+    ])
+      vi.spyOn(event, 'addListener').mockImplementation(
+        (() => undefined) as never,
+      )
+    vi.spyOn(chrome.tabs.onUpdated, 'addListener').mockImplementation(
+      (() => undefined) as never,
+    )
+    registerZkTlsRuntime()
+
+    const proving = proveZkTlsSession({
+      correlationId: 'v4-candidate-chain',
+      sessionId: 's1',
+      connectorId: 'product-volume',
+    })
+    await vi.waitFor(() => expect(chrome.tabs.update).toHaveBeenCalled())
+
+    const dispatchBody = bodyEvent.mock.calls[0]?.[0] as (
+      details: unknown,
+    ) => void
+    const dispatchHeaders = headerEvent.mock.calls[0]?.[0] as (
+      details: unknown,
+    ) => void
+    const dispatchCompleted = completedEvent.mock.calls[0]?.[0] as (
+      details: unknown,
+    ) => void
+    const request = {
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: 'https://api.example.com/v1/volume?day=2026-08-20',
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+    }
+    const malformed = new TextEncoder().encode('{"operation":')
+    dispatchBody({
+      ...request,
+      requestId: 'malformed',
+      requestBody: { raw: [{ bytes: malformed.buffer }] },
+    })
+
+    const exact = new TextEncoder().encode(
+      '{"operation":"volume","input":{"account":"acct-1","options":{"day":"2026-08-20"}}}',
+    )
+    dispatchBody({
+      ...request,
+      requestId: 'exact',
+      requestBody: { raw: [{ bytes: exact.buffer }] },
+    })
+    dispatchHeaders({
+      ...request,
+      requestId: 'exact',
+      requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+    })
+    dispatchCompleted({ requestId: 'exact' })
+
+    await expect(proving).resolves.toEqual({
+      type: 'zktls-prove-result',
+      correlationId: 'v4-candidate-chain',
+      status: 'submitted',
+    })
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(submittedMessage).toEqual(
+      expect.objectContaining({
+        type: 'zktls-offscreen-prove',
+        captured: expect.objectContaining({
+          body: new TextDecoder().decode(exact),
+        }),
+      }),
+    )
+  })
+
   test('clears an active V4 capture when its page tab leaves page_origin', async () => {
     const rawConfig = v4Connector()
     const config = validateConnector(rawConfig)

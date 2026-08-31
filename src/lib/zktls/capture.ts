@@ -959,13 +959,20 @@ export class CaptureSession {
       v4 ? binding.targetOrigin : binding.origin,
     )
     if (path === null) return
-    const querySlots = v4
-      ? matchV4Request(path, details.type, binding)
-      : binding.matcher
+    let querySlots: Record<string, string | boolean> | null
+    if (v4) {
+      try {
+        querySlots = matchV4Request(path, details.type, binding)
+      } catch {
+        return
+      }
+    } else {
+      querySlots = binding.matcher
         ? matchRequest(path, details.type, binding.matcher)
         : path === binding.path
           ? {}
           : null
+    }
     if (querySlots === null) return
     if (v4) requireV4Initiator(details, binding)
     const requestBody =
@@ -978,13 +985,18 @@ export class CaptureSession {
           variable.source.kind === 'CAPTURED_REQUEST' &&
           variable.source.location !== 'QUERY',
       )
-      const bodyMatch = matchV4Body(
-        joinedRawBody(requestBody),
-        binding.contentType!,
-        binding.template!,
-        binding.resolvedVariables,
-        bodyVariables,
-      )
+      let bodyMatch: ReturnType<typeof matchV4Body>
+      try {
+        bodyMatch = matchV4Body(
+          joinedRawBody(requestBody),
+          binding.contentType!,
+          binding.template!,
+          binding.resolvedVariables,
+          bodyVariables,
+        )
+      } catch {
+        return
+      }
       if (bodyMatch === null) return
     }
     if (this.#used || this.#failed || this.#candidate || this.#captured)

@@ -1068,6 +1068,155 @@ describe('zkTLS v4 capture', () => {
     })
   })
 
+  test.each([
+    ['invalid JSON', new TextEncoder().encode('{"operation":')],
+    ['invalid UTF-8', new Uint8Array([0xff])],
+    ['an oversized body', new Uint8Array(8193).fill(0x61)],
+  ])('ignores %s before a later exact V4 request', (_, body) => {
+    const capture = v4Session()
+    expect(() =>
+      capture.observeBody({
+        requestId: 'unmatchable-body',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestBody: { raw: [{ bytes: body.buffer }] },
+      }),
+    ).not.toThrow()
+
+    observePost(capture, 'exact-after-unmatchable')
+    expect(capture.take()).toMatchObject({
+      method: 'POST',
+      body: '{"operation":"account","input":{"account":"acct-body","day":"2026-08-21"}}',
+    })
+  })
+
+  test('ignores a body with an invalid captured variable before an exact request', () => {
+    const variables = v4BindingConnector.variables.map((variable) =>
+      variable.name === 'accountId'
+        ? { ...variable, scalarType: 'BOOLEAN' as const }
+        : variable,
+    )
+    const capture = new CaptureSession(
+      createCaptureBinding({
+        interpreterVersion: 4,
+        maxSentData: 8192,
+        tabId: 7,
+        frameId: 0,
+        sessionId: 'session-v4-typed',
+        providerId: v4BindingConnector.connector_id,
+        revision: v4BindingConnector.revision,
+        pageOrigin: v4BindingConnector.page_origin,
+        targetOrigin: v4BindingConnector.origin,
+        method: 'POST',
+        matcher: v4BindingConnector.request.matcher,
+        template: v4BindingConnector.request.body,
+        contentType: v4BindingConnector.request.content_type,
+        variables,
+        resolvedVariables: v4BindingConnector.resolved_variables,
+      }),
+    )
+    const observeBody = (requestId: string, account: string | boolean) => {
+      const body = new TextEncoder().encode(
+        JSON.stringify({
+          operation: 'account',
+          input: { account, day: '2026-08-21' },
+        }),
+      )
+      capture.observeBody({
+        requestId,
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestBody: { raw: [{ bytes: body.buffer }] },
+      })
+    }
+
+    expect(() => observeBody('wrong-type', 'not-boolean')).not.toThrow()
+    observeBody('exact-typed', true)
+    capture.observe({
+      requestId: 'exact-typed',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+    })
+
+    expect(capture.take()).toMatchObject({ method: 'POST' })
+  })
+
+  test('ignores an invalid captured query variable before an exact request', () => {
+    const variables = v4BindingConnector.variables.map((variable) =>
+      variable.name === 'queryAccount'
+        ? { ...variable, scalarType: 'BOOLEAN' as const }
+        : variable,
+    )
+    const capture = new CaptureSession(
+      createCaptureBinding({
+        interpreterVersion: 4,
+        maxSentData: 8192,
+        tabId: 7,
+        frameId: 0,
+        sessionId: 'session-v4-query',
+        providerId: v4BindingConnector.connector_id,
+        revision: v4BindingConnector.revision,
+        pageOrigin: v4BindingConnector.page_origin,
+        targetOrigin: v4BindingConnector.origin,
+        method: 'POST',
+        matcher: v4BindingConnector.request.matcher,
+        template: v4BindingConnector.request.body,
+        contentType: v4BindingConnector.request.content_type,
+        variables,
+        resolvedVariables: v4BindingConnector.resolved_variables,
+      }),
+    )
+    const details = {
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: {
+        raw: chunks.map((chunk) => ({ bytes: chunk.buffer })),
+      },
+    } as const
+
+    expect(() =>
+      capture.observeBody({
+        ...details,
+        requestId: 'invalid-query-variable',
+        url,
+      }),
+    ).not.toThrow()
+    const exactUrl = url.replace('acct-query', 'true')
+    capture.observeBody({
+      ...details,
+      requestId: 'exact-query-variable',
+      url: exactUrl,
+    })
+    capture.observe({
+      requestId: 'exact-query-variable',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url: exactUrl,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+    })
+
+    expect(capture.take()).toMatchObject({ method: 'POST' })
+  })
+
   test('captures an exact signed public request header', () => {
     const capture = v4Session({ 'x-client-type': 'public' })
     capture.observeBody({
