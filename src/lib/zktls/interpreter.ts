@@ -197,6 +197,7 @@ export type V4Pipeline = {
   orderBy?: { path: string; direction: 'ASC' | 'DESC' }
   groupBy?: { path: string; interval: 'UTC_DAY' }
   valuePath?: string
+  difference?: { leftPath: string; rightPath: string }
   cast: V4PipelineCast
   fixedDecimals?: number
   absolute?: boolean
@@ -1716,6 +1717,7 @@ function v4Pipelines(
         'orderBy',
         'groupBy',
         'valuePath',
+        'difference',
         'cast',
         'fixedDecimals',
         'absolute',
@@ -1742,6 +1744,14 @@ function v4Pipelines(
     const finalReduce = input.finalReduce as string | undefined
     const addressCast = cast === 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
     const numericCast = cast === 'DECIMAL' || cast === 'INTEGER'
+    const difference =
+      input.difference === undefined
+        ? undefined
+        : v4Exact(
+            input.difference,
+            ['leftPath', 'rightPath'],
+            'pipeline.difference',
+          )
     if (
       reduce !== undefined &&
       ![
@@ -1776,6 +1786,7 @@ function v4Pipelines(
           input.orderBy !== undefined ||
           input.groupBy !== undefined ||
           input.valuePath !== undefined ||
+          difference !== undefined ||
           reduce !== undefined ||
           input.postFilter !== undefined ||
           finalReduce !== undefined ||
@@ -1790,7 +1801,10 @@ function v4Pipelines(
       (input.groupBy !== undefined && reduce === undefined) ||
       (reduce !== undefined &&
         reduce !== 'COUNT' &&
-        input.valuePath === undefined) ||
+        input.valuePath === undefined &&
+        difference === undefined) ||
+      (difference !== undefined &&
+        (!numericCast || input.valuePath !== undefined)) ||
       (['SUM', 'AVG', 'LAST_MINUS_FIRST'].includes(reduce ?? '') &&
         cast !== 'DECIMAL' &&
         cast !== 'INTEGER') ||
@@ -1798,6 +1812,18 @@ function v4Pipelines(
         input.orderBy === undefined)
     )
       fail('pipeline stages are invalid.')
+    if (difference !== undefined) {
+      const left = v4JsonPath(difference.leftPath)
+      const right = v4JsonPath(difference.rightPath)
+      if (
+        left.some((segment) => segment.kind === 'COLLECTION') ||
+        right.some((segment) => segment.kind === 'COLLECTION') ||
+        difference.leftPath !== v4CanonicalPath(left) ||
+        difference.rightPath !== v4CanonicalPath(right) ||
+        difference.leftPath === difference.rightPath
+      )
+        fail('pipeline.difference is invalid.')
+    }
     if (input.filter !== undefined)
       v4Predicate(input.filter, variables, references, { leaves: 0 })
     if (input.orderBy !== undefined) {
@@ -1971,13 +1997,18 @@ function v4DisclosurePlan(pipelines: readonly V4Pipeline[]) {
     structure(source)
     if (
       !source.some((segment) => segment.kind === 'COLLECTION') &&
-      pipeline.valuePath === undefined
+      pipeline.valuePath === undefined &&
+      pipeline.difference === undefined
     )
       scalars.add(v4CanonicalPath(source))
     if (pipeline.filter) predicateDependencies(source, pipeline.filter)
     if (pipeline.orderBy) dependency(source, pipeline.orderBy.path)
     if (pipeline.groupBy) dependency(source, pipeline.groupBy.path)
     if (pipeline.valuePath) dependency(source, pipeline.valuePath)
+    if (pipeline.difference) {
+      dependency(source, pipeline.difference.leftPath)
+      dependency(source, pipeline.difference.rightPath)
+    }
     if (pipeline.timestamp) dependency(source, pipeline.timestamp.path)
   }
   return {

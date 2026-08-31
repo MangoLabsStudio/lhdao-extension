@@ -277,6 +277,30 @@ function cloneV4(): MutableV4 {
   return structuredClone(v4Connector()) as MutableV4
 }
 
+function differenceConnector(collection = false): MutableV4 {
+  const config = cloneV4()
+  config.pipelines[0] = {
+    output: 'balance',
+    sourcePath: collection ? '$.items[*]' : '$.data',
+    difference: { leftPath: '$.credits', rightPath: '$.debits' },
+    cast: 'DECIMAL',
+    ...(collection ? { reduce: 'SUM' } : {}),
+    valueUnit: 'USDT',
+    outputUnit: 'USDT',
+  }
+  config.disclosure = {
+    key_paths: collection
+      ? ['$.items', '$.items[*].credits', '$.items[*].debits']
+      : ['$.data', '$.data.credits', '$.data.debits'],
+    scalar_paths: collection
+      ? ['$.items[*].credits', '$.items[*].debits']
+      : ['$.data.credits', '$.data.debits'],
+    collection_paths: collection ? ['$.items'] : [],
+    max_elements: 200,
+  }
+  return config
+}
+
 function decimalVariableConnector(value: string): MutableV4 {
   const config = cloneV4()
   config.variables[0] = {
@@ -1153,6 +1177,104 @@ describe('zkTLS strict boundaries', () => {
         }),
       ],
     })
+  })
+
+  test.each([
+    false,
+    true,
+  ])('accepts and binds a signed field difference (collection=%s)', (collection) => {
+    const config = differenceConnector(collection)
+    Object.freeze(config.pipelines[0]?.difference)
+    Object.freeze(config.pipelines[0])
+
+    const result = validateConnector(config) as MutableV4
+    const difference = result.pipelines[0]?.difference
+
+    expect(difference).toEqual({
+      leftPath: '$.credits',
+      rightPath: '$.debits',
+    })
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(Object.isFrozen(result.pipelines[0])).toBe(true)
+    expect(Object.isFrozen(difference)).toBe(true)
+  })
+
+  test.each([
+    ['partial', { leftPath: '$.credits' }],
+    [
+      'extra',
+      { leftPath: '$.credits', rightPath: '$.debits', mode: 'SUBTRACT' },
+    ],
+    ['near-match', { left_path: '$.credits', rightPath: '$.debits' }],
+    ['unknown', { from: '$.credits', to: '$.debits' }],
+    ['same path', { leftPath: '$.credits', rightPath: '$.credits' }],
+    ['noncanonical path', { leftPath: '$["credits"]', rightPath: '$.debits' }],
+    ['collection path', { leftPath: '$.credits[*]', rightPath: '$.debits' }],
+  ])('rejects a %s field difference', (_name, difference) => {
+    const config = differenceConnector()
+    config.pipelines[0].difference = difference
+
+    expect(() => validateConnector(config)).toThrow()
+  })
+
+  test.each([
+    ['valuePath', { valuePath: '$.credits' }],
+    ['nonnumeric cast', { cast: 'STRING' }],
+    ['missing collection reducer', { sourcePath: '$.items[*]' }],
+  ])('rejects a field difference with %s', (_name, patch) => {
+    const config = differenceConnector()
+    Object.assign(config.pipelines[0], patch)
+
+    expect(() => validateConnector(config)).toThrow()
+  })
+
+  test('rejects field-difference accessors without reading them', () => {
+    for (const nested of [false, true]) {
+      const config = differenceConnector()
+      let reads = 0
+      Object.defineProperty(
+        nested ? config.pipelines[0].difference : config.pipelines[0],
+        nested ? 'leftPath' : 'difference',
+        {
+          enumerable: true,
+          get() {
+            reads += 1
+            return nested
+              ? '$.credits'
+              : { leftPath: '$.credits', rightPath: '$.debits' }
+          },
+        },
+      )
+
+      expect(() => validateConnector(config)).toThrow()
+      expect(reads).toBe(0)
+    }
+  })
+
+  test.each([
+    'pipeline',
+    'difference',
+  ] as const)('rejects transparent and revoked %s proxies without value reads', (level) => {
+    for (const revoked of [false, true]) {
+      const config = differenceConnector()
+      const target =
+        level === 'pipeline'
+          ? config.pipelines[0]
+          : testRecord(config.pipelines[0].difference)
+      let reads = 0
+      const revocable = Proxy.revocable(target, {
+        get(inner, property, receiver) {
+          reads += 1
+          return Reflect.get(inner, property, receiver)
+        },
+      })
+      if (revoked) revocable.revoke()
+      if (level === 'pipeline') config.pipelines[0] = revocable.proxy
+      else config.pipelines[0].difference = revocable.proxy
+
+      expect(() => validateConnector(config)).toThrow()
+      expect(reads).toBe(0)
+    }
   })
 
   test.each([
