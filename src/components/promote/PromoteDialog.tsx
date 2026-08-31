@@ -186,6 +186,17 @@ function remainingTime(expiresAt: string, nowMs: number) {
   return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
 }
 
+function formatMoney(value: string) {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(value)
+  if (!match) return '—'
+  const fraction = (match[2] ?? '').padEnd(3, '0')
+  const cents =
+    BigInt(match[1]!) * 100n +
+    BigInt(fraction.slice(0, 2)) +
+    (fraction[2]! >= '5' ? 1n : 0n)
+  return `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`
+}
+
 export function PromoteDialog({
   tweetUrl,
   onClose,
@@ -213,6 +224,7 @@ export function PromoteDialog({
   const [refreshKey, setRefreshKey] = React.useState(0)
   const [nowMs, setNowMs] = React.useState(() => Date.now())
   const previewSequence = React.useRef(0)
+  const automaticRefreshPending = React.useRef(false)
   const submitSequence = React.useRef(0)
   const submittingRef = React.useRef(false)
   const mountedRef = React.useRef(true)
@@ -274,6 +286,7 @@ export function PromoteDialog({
 
   const invalidateQuote = () => {
     if (submittingRef.current) return
+    automaticRefreshPending.current = false
     previewSequence.current += 1
     setQuote(null)
     setPreviewState('idle')
@@ -343,6 +356,9 @@ export function PromoteDialog({
             return
           }
           if (response.type === 'promote-pricing-result' && response.ok) {
+            if (Date.parse(response.quote.expiresAt) > Date.now()) {
+              automaticRefreshPending.current = false
+            }
             setQuote(response.quote)
             setPreviewState('ready')
             return
@@ -357,6 +373,7 @@ export function PromoteDialog({
               : '报价获取失败，请重试。'
           setPreviewError(pricingErrorMessage(code, message))
           setPreviewState('error')
+          automaticRefreshPending.current = false
         })
         .catch(() => {
           if (
@@ -367,6 +384,7 @@ export function PromoteDialog({
           }
           setPreviewError('报价获取失败，请刷新后重试。')
           setPreviewState('error')
+          automaticRefreshPending.current = false
         })
     }, 250)
     return () => {
@@ -380,8 +398,11 @@ export function PromoteDialog({
     previewSequence.current += 1
     setQuote(null)
     setPreviewState('error')
-    setPreviewError('报价已过期，请刷新后重新确认。')
+    setPreviewError('报价已过期，正在获取最新报价…')
     setRetryRequest(null)
+    if (automaticRefreshPending.current) return
+    automaticRefreshPending.current = true
+    setRefreshKey((value) => value + 1)
   }, [nowMs, quote])
 
   const canSubmit =
@@ -392,6 +413,7 @@ export function PromoteDialog({
 
   const refreshQuote = () => {
     if (submittingRef.current) return
+    automaticRefreshPending.current = false
     setPhase('form')
     setErrMsg('')
     setRetryRequest(null)
@@ -401,9 +423,11 @@ export function PromoteDialog({
   const submit = async (sameRequest?: PromoteRequest) => {
     if (submittingRef.current) return
     if (!sameRequest && (!quote || Date.parse(quote.expiresAt) <= Date.now())) {
-      setPreviewError('报价已过期，请刷新后重新确认。')
+      setPreviewError('报价已过期，正在获取最新报价…')
       setQuote(null)
       setPreviewState('error')
+      automaticRefreshPending.current = true
+      setRefreshKey((value) => value + 1)
       return
     }
     const request =
@@ -451,8 +475,12 @@ export function PromoteDialog({
         setPhase('form')
         setQuote(null)
         setPreviewState('error')
-        setPreviewError(pricingErrorMessage(r.code, r.message))
+        setPreviewError(
+          `${pricingErrorMessage(r.code, r.message)}正在获取最新报价…`,
+        )
         setRetryRequest(null)
+        automaticRefreshPending.current = true
+        setRefreshKey((value) => value + 1)
         return
       }
       const denied =
@@ -563,7 +591,7 @@ export function PromoteDialog({
                         <b>
                           {line.actionType}/{line.tier}
                         </b>
-                        <span>{line.unitPrice} LUX</span>
+                        <span>{formatMoney(line.unitPrice)} LUX</span>
                       </div>
                     ))}
                 </div>
@@ -666,10 +694,11 @@ export function PromoteDialog({
               >
                 <div className="lh-quote-head">
                   <span id="lh-promote-quote-title">服务端报价</span>
-                  <b>{quote.totalCost} LUX</b>
+                  <b>{formatMoney(quote.totalCost)} LUX</b>
                 </div>
                 <div className="lh-quote-meta">
-                  本金 {quote.principal} · 手续费 {quote.promotionFee} LUX
+                  本金 {formatMoney(quote.principal)} · 手续费{' '}
+                  {formatMoney(quote.promotionFee)} LUX
                   {balance != null && (
                     <span className="lh-bal"> · 余额 {balance.toFixed(1)}</span>
                   )}
@@ -696,9 +725,9 @@ export function PromoteDialog({
                           <td>
                             {line.actionType}/{line.tier}
                           </td>
-                          <td>单价 {line.unitPrice}</td>
+                          <td>单价 {formatMoney(line.unitPrice)}</td>
                           <td>数量 {line.quantity}</td>
-                          <td>小计 {line.principal}</td>
+                          <td>小计 {formatMoney(line.principal)}</td>
                         </tr>
                       ))}
                     </tbody>

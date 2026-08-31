@@ -159,9 +159,7 @@ describe('PromoteDialog device recovery', () => {
       ),
     )
     await act(async () => findButton('按上次配置').click())
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain('2.20000000 LUX'),
-    )
+    await vi.waitFor(() => expect(container.textContent).toContain('2.20 LUX'))
     await act(async () => {
       const confirm = findButton('确认推广')
       confirm.click()
@@ -210,25 +208,26 @@ describe('PromoteDialog device recovery', () => {
         tweetUrl: 'https://x.com/lighthouse/status/1',
         actions: [{ actionType: 'LIKE', tierSlots: { A: 5 } }],
       })
-      expect(container.textContent).toContain('2.20000000 LUX')
-      expect(container.textContent).toContain('手续费 0.20000000 LUX')
+      expect(container.textContent).toContain('2.20 LUX')
+      expect(container.textContent).toContain('手续费 0.20 LUX')
       expect(container.textContent).toContain('LIKE/A')
-      expect(container.textContent).toContain('0.39000000')
+      expect(container.textContent).toContain('0.39')
       expect(container.textContent).toContain('LIKE/D')
-      expect(container.textContent).toContain('0.10000000')
+      expect(container.textContent).toContain('0.10')
       expect(container.textContent).toContain('RT/B')
-      expect(container.textContent).toContain('14.62500000')
+      expect(container.textContent).toContain('14.63')
       expect(container.textContent).toContain('COMMENT/C')
-      expect(container.textContent).toContain('4.00000000')
-      expect(container.textContent).toContain('单价 0.40000000')
+      expect(container.textContent).toContain('4.00')
+      expect(container.textContent).toContain('单价 0.40')
       expect(container.textContent).toContain('数量 5')
-      expect(container.textContent).toContain('小计 2.00000000')
+      expect(container.textContent).toContain('小计 2.00')
       expect(container.textContent).toContain('2099-01-02T00:00:00.000Z UTC')
     })
     expect(container.textContent).not.toContain('试点')
     expect(container.textContent).not.toContain('LIKE/B')
     expect(container.textContent).not.toContain('LIKE/C')
     expect(container.textContent).not.toMatch(/今日|明日|日程/u)
+    expect(quote.totalCost).toBe('2.20000000')
     expect(
       Array.from(container.querySelectorAll('[aria-label]')).some((element) =>
         /今日|明日|日程/u.test(element.getAttribute('aria-label') ?? ''),
@@ -315,9 +314,7 @@ describe('PromoteDialog device recovery', () => {
       ),
     )
     await act(async () => findButton('按上次配置').click())
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain('2.20000000 LUX'),
-    )
+    await vi.waitFor(() => expect(container.textContent).toContain('2.20 LUX'))
     await act(async () => findButton('确认推广').click())
     await vi.waitFor(() => {
       expect(container.textContent).toContain('请升级后重试')
@@ -333,7 +330,7 @@ describe('PromoteDialog device recovery', () => {
     ).toHaveLength(1)
   })
 
-  it('requires an explicit refresh after a stale submission and never auto-pays', async () => {
+  it('automatically reads a new quote after stale submission and never auto-pays', async () => {
     let previewCount = 0
     previewResponse = () => {
       previewCount += 1
@@ -359,21 +356,6 @@ describe('PromoteDialog device recovery', () => {
     await act(async () => findButton('按上次配置').click())
     await vi.waitFor(() => expect(previewCount).toBe(1))
     await act(async () => findButton('确认推广').click())
-    await vi.waitFor(() => {
-      expect(findButton('刷新报价')).toBeInstanceOf(HTMLButtonElement)
-    })
-    expect(previewCount).toBe(1)
-    expect(
-      requests.filter(
-        (request) =>
-          typeof request === 'object' &&
-          request !== null &&
-          'type' in request &&
-          request.type === 'promote-tweet',
-      ),
-    ).toHaveLength(1)
-
-    await act(async () => findButton('刷新报价').click())
     await vi.waitFor(() => expect(previewCount).toBe(2))
     expect(
       requests.filter(
@@ -384,6 +366,7 @@ describe('PromoteDialog device recovery', () => {
           request.type === 'promote-tweet',
       ),
     ).toHaveLength(1)
+    await vi.waitFor(() => expect(findButton('确认推广').disabled).toBe(false))
   })
 
   it('ignores an older preview response after the inputs change', async () => {
@@ -427,9 +410,7 @@ describe('PromoteDialog device recovery', () => {
       )?.set?.call(element, '6')
       element.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain('3.30000000 LUX'),
-    )
+    await vi.waitFor(() => expect(container.textContent).toContain('3.30 LUX'))
     await act(async () => {
       resolveFirst?.({
         type: 'promote-pricing-result',
@@ -438,17 +419,24 @@ describe('PromoteDialog device recovery', () => {
       })
       await Promise.resolve()
     })
-    expect(container.textContent).toContain('3.30000000 LUX')
-    expect(container.textContent).not.toContain('2.20000000 LUX')
+    expect(container.textContent).toContain('3.30 LUX')
+    expect(container.textContent).not.toContain('2.20 LUX')
   })
 
-  it('stops at server expiry until the user explicitly refreshes', async () => {
+  it('automatically reads a replacement after server expiry without paying', async () => {
     const expiresAt = new Date(Date.now() + 600).toISOString()
-    previewResponse = () => ({
-      type: 'promote-pricing-result',
-      ok: true,
-      quote: { ...quote, expiresAt },
-    })
+    let previewCount = 0
+    previewResponse = () => {
+      previewCount += 1
+      return {
+        type: 'promote-pricing-result',
+        ok: true,
+        quote:
+          previewCount === 1
+            ? { ...quote, expiresAt }
+            : { ...quote, quoteId: 'quote-after-expiry' },
+      }
+    }
     root = createRoot(container)
     await act(async () =>
       root?.render(
@@ -460,14 +448,8 @@ describe('PromoteDialog device recovery', () => {
     )
     await act(async () => findButton('按上次配置').click())
     await vi.waitFor(() => expect(container.textContent).toContain(expiresAt))
-    await vi.waitFor(
-      () => {
-        expect(container.textContent).toContain('报价已过期，请刷新后重新确认')
-        expect(findButton('确认推广').disabled).toBe(true)
-        expect(findButton('刷新报价')).toBeInstanceOf(HTMLButtonElement)
-      },
-      { timeout: 1_500 },
-    )
+    await vi.waitFor(() => expect(previewCount).toBe(2), { timeout: 1_500 })
+    expect(findButton('确认推广').disabled).toBe(false)
     expect(
       requests.some(
         (request) =>
@@ -477,6 +459,34 @@ describe('PromoteDialog device recovery', () => {
           request.type === 'promote-tweet',
       ),
     ).toBe(false)
+  })
+
+  it('stops after one automatic read when the replacement is already expired', async () => {
+    const expiresAt = new Date(Date.now() + 500).toISOString()
+    let previewCount = 0
+    previewResponse = () => {
+      previewCount += 1
+      return {
+        type: 'promote-pricing-result',
+        ok: true,
+        quote: { ...quote, quoteId: `expired-${previewCount}`, expiresAt },
+      }
+    }
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <PromoteDialog
+          tweetUrl="https://x.com/lighthouse/status/1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    await act(async () => findButton('按上次配置').click())
+    await vi.waitFor(() => expect(previewCount).toBe(2), { timeout: 1_500 })
+    await new Promise((resolve) => setTimeout(resolve, 750))
+    expect(previewCount).toBe(2)
+    expect(findButton('确认推广').disabled).toBe(true)
+    expect(findButton('刷新报价')).toBeInstanceOf(HTMLButtonElement)
   })
 
   it('locks every request-changing control while a payment is pending', async () => {
@@ -495,9 +505,7 @@ describe('PromoteDialog device recovery', () => {
       ),
     )
     await act(async () => findButton('按上次配置').click())
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain('2.20000000 LUX'),
-    )
+    await vi.waitFor(() => expect(container.textContent).toContain('2.20 LUX'))
     await act(async () => {
       const confirm = findButton('确认推广')
       confirm.click()
@@ -565,9 +573,7 @@ describe('PromoteDialog device recovery', () => {
       ),
     )
     await act(async () => findButton('按上次配置').click())
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain('2.20000000 LUX'),
-    )
+    await vi.waitFor(() => expect(container.textContent).toContain('2.20 LUX'))
     await act(async () => findButton('确认推广').click())
     await vi.waitFor(() =>
       expect(findButton('重试同一请求')).toBeInstanceOf(HTMLButtonElement),
@@ -651,9 +657,7 @@ describe('PromoteDialog device recovery', () => {
       ),
     )
     await act(async () => findButton('按上次配置').click())
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain('2.20000000 LUX'),
-    )
+    await vi.waitFor(() => expect(container.textContent).toContain('2.20 LUX'))
     await act(async () => findButton('确认推广').click())
     await vi.waitFor(() =>
       expect(findButton('重试同一请求')).toBeInstanceOf(HTMLButtonElement),
