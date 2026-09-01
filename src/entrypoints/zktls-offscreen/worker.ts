@@ -6,6 +6,10 @@ import {
   matchRequestBody,
 } from '@/lib/zktls/capture'
 import {
+  createZkTlsDebugTrace,
+  redactZkTlsHttpTranscript,
+} from '@/lib/zktls/debug'
+import {
   assertConnectorAvailable,
   type CapturedConnector,
   htmlBetweenDisclosureRanges,
@@ -25,6 +29,7 @@ import {
   type TicketEnvelope,
 } from '@/lib/zktls/signed-config'
 import {
+  type V4ResponseDiagnostic,
   v4PublicRequestDetails,
   v4RequestDisclosureRanges,
   v4ResponseDisclosureRanges,
@@ -432,11 +437,16 @@ export async function transcriptRevealRanges(
   message: ProveMessage,
   sent: Uint8Array,
   received: Uint8Array,
+  observer?: V4ResponseDiagnostic,
 ): Promise<TranscriptRanges> {
   if (isV4Message(message)) {
     return {
       sent: v4RequestDisclosureRanges(sent, message.config, message.captured),
-      recv: await v4ResponseDisclosureRanges(received, message.config),
+      recv: await v4ResponseDisclosureRanges(
+        received,
+        message.config,
+        observer,
+      ),
     }
   }
   if (
@@ -614,54 +624,108 @@ async function loadTlsnWasm(): Promise<typeof import('tlsn-wasm')> {
 }
 
 async function prove(message: ProveMessage): Promise<void> {
-  if (
-    !isV4Message(message) &&
-    message.config.response_format === 'json' &&
-    message.config.extraction.kind !== 'regex'
-  )
-    throw new Error('JSON connectors are unsupported by this runtime')
-  const wasm = await loadTlsnWasm()
-  await wasm.default()
-  await wasm.initialize(null, 1)
-  const origin = new URL(message.config.origin)
-  assertAvailable(message)
-  if (isV4Message(message)) assertV4CapturedRequest(message)
-  else if (!isV1Message(message)) assertCapturedRequest(message)
-  const registration = await registerSession(message)
-  const prover = new wasm.Prover({
-    server_name: origin.hostname,
-    mode: 'Mpc',
-    max_sent_data: message.config.request.max_sent_data,
-    max_sent_records: undefined,
-    max_recv_data_online: undefined,
-    max_recv_data: message.config.request.max_recv_data,
-    max_recv_records_online: undefined,
-    defer_decryption_from_start: undefined,
-    network: 'Bandwidth',
-    client_auth: undefined,
-    root_certs: undefined,
+  const trace = createZkTlsDebugTrace({
+    enabled: ZKTLS_PROFILE.debug,
+    correlationId: message.id,
+  })
+  const secretValues = isV1Message(message)
+    ? [message.cookie]
+    : Object.values(message.captured.secrets)
+  let lastStage = 'proof-started'
+  trace.stage(lastStage, {
+    sessionId: message.sessionId,
+    connectorId: message.connectorId,
+    origin: message.config.origin,
+    request: isV1Message(message)
+      ? { path: requestTarget(message.config, message.identity) }
+      : message.captured,
   })
   try {
-    await prover.setup(await websocketIo(registration.verifierUrl))
+    if (
+      !isV4Message(message) &&
+      message.config.response_format === 'json' &&
+      message.config.extraction.kind !== 'regex'
+    )
+      throw new Error('JSON connectors are unsupported by this runtime')
+    const wasm = await loadTlsnWasm()
+    await wasm.default()
+    await wasm.initialize(null, 1)
+    const origin = new URL(message.config.origin)
     assertAvailable(message)
-    const proxyIo = await websocketIo(registration.proxyUrl)
-    await sendProofHttpRequest(message, (request) =>
-      prover.send_request(proxyIo, request),
-    )
-    const transcript = prover.transcript()
-    const received = new Uint8Array(transcript.recv)
-    if (received.length > message.config.request.max_recv_data)
-      throw new Error('response exceeded the signed receive limit')
-    const ranges = await transcriptRevealRanges(
-      message,
-      new Uint8Array(transcript.sent),
-      received,
-    )
-    await revealTranscript(prover, ranges)
-    await registration.completion
+    if (isV4Message(message)) assertV4CapturedRequest(message)
+    else if (!isV1Message(message)) assertCapturedRequest(message)
+    lastStage = 'signed-config-checked'
+    trace.stage(lastStage, {
+      interpreterVersion: message.config.interpreter_version,
+      revision: message.config.revision,
+      maxSentData: message.config.request.max_sent_data,
+      maxRecvData: message.config.request.max_recv_data,
+    })
+    const registration = await registerSession(message)
+    lastStage = 'verifier-session-registered'
+    trace.stage(lastStage, {
+      verifier: new URL(registration.verifierUrl).origin,
+    })
+    const prover = new wasm.Prover({
+      server_name: origin.hostname,
+      mode: 'Mpc',
+      max_sent_data: message.config.request.max_sent_data,
+      max_sent_records: undefined,
+      max_recv_data_online: undefined,
+      max_recv_data: message.config.request.max_recv_data,
+      max_recv_records_online: undefined,
+      defer_decryption_from_start: undefined,
+      network: 'Bandwidth',
+      client_auth: undefined,
+      root_certs: undefined,
+    })
+    try {
+      await prover.setup(await websocketIo(registration.verifierUrl))
+      lastStage = 'mpc-setup-complete'
+      trace.stage(lastStage)
+      assertAvailable(message)
+      const proxyIo = await websocketIo(registration.proxyUrl)
+      await sendProofHttpRequest(message, (request) =>
+        prover.send_request(proxyIo, request),
+      )
+      lastStage = 'proxy-request-sent'
+      trace.stage(lastStage)
+      const transcript = prover.transcript()
+      const sent = new Uint8Array(transcript.sent)
+      const received = new Uint8Array(transcript.recv)
+      lastStage = 'tls-transcript-received'
+      trace.stage(lastStage, {
+        sentBytes: sent.length,
+        receivedBytes: received.length,
+        sent: redactZkTlsHttpTranscript(sent),
+        received: redactZkTlsHttpTranscript(received),
+      })
+      if (received.length > message.config.request.max_recv_data)
+        throw new Error('response exceeded the signed receive limit')
+      const ranges = await transcriptRevealRanges(
+        message,
+        sent,
+        received,
+        (stage, details) => {
+          lastStage = stage
+          trace.stage(stage, details)
+        },
+      )
+      await revealTranscript(prover, ranges)
+      lastStage = 'reveal-submitted'
+      trace.stage(lastStage, ranges)
+      await registration.completion
+      lastStage = 'completion-received'
+      trace.stage(lastStage)
+    } finally {
+      registration.socket.close()
+      prover.free()
+    }
+  } catch (error) {
+    trace.fail(`${lastStage}:failed`, error, secretValues)
+    throw error
   } finally {
-    registration.socket.close()
-    prover.free()
+    secretValues.fill('')
   }
 }
 

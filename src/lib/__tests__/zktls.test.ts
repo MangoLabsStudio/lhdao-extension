@@ -2490,12 +2490,19 @@ describe('zkTLS strict boundaries', () => {
     )
     const rawReceived = received.slice()
 
-    const reveal = await transcriptRevealRanges(message, sent, received)
+    const stages: string[] = []
+    const reveal = await transcriptRevealRanges(
+      message,
+      sent,
+      received,
+      (stage) => stages.push(stage),
+    )
 
     expect(reveal).toEqual({
       sent: [{ start: 0, end: sent.length }],
       recv: [{ start: 0, end: received.length }],
     })
+    expect(stages).toEqual(['response-framing-decoded', 'strict-json-checked'])
     const prover = { reveal: vi.fn().mockResolvedValue(undefined) }
     await revealTranscript(prover, reveal)
     expect(received).toEqual(rawReceived)
