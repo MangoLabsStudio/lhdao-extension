@@ -7,6 +7,10 @@ import {
   createProductExperienceEvidenceMessage,
   startProductExperienceWatcher,
 } from '../product-experience-watcher'
+import {
+  appendProductZkTlsDiagnostic,
+  createProductZkTlsDiagnostic,
+} from '../zktls/debug'
 
 const CLIENT_ORIGIN = 'https://client.example'
 
@@ -210,6 +214,57 @@ describe('product experience evaluator privacy', () => {
       'raw_body',
     ]) {
       expect(durableShape).not.toContain(forbiddenField)
+    }
+  })
+
+  it('keeps captured public JSON while removing every credential from diagnostics and copied JSON', () => {
+    const secrets = {
+      cookie: 'cookie-private-1',
+      authorization: 'Bearer private-2',
+      setCookie: 'session=private-3',
+      pluginToken: 'lhdao_pk_private-4',
+      walletSignature: '0xprivate-signature-5',
+      macKey: 'private-mac-6',
+      hmac: 'private-hmac-7',
+    }
+    const publicResponse = {
+      data: {
+        account: '0x1234',
+        postBalance: '301.022691071331912180',
+        preBalance: '107.597080071331912181',
+      },
+    }
+    const diagnostic = appendProductZkTlsDiagnostic(
+      createProductZkTlsDiagnostic('privacy-proof', 100),
+      {
+        at: 101,
+        stage: 'tls-transcript-received',
+        status: 'failed',
+        details: {
+          publicResponse,
+          headers: {
+            Cookie: secrets.cookie,
+            Authorization: secrets.authorization,
+            'Set-Cookie': secrets.setCookie,
+          },
+          pluginToken: secrets.pluginToken,
+          walletSignature: secrets.walletSignature,
+          macKey: secrets.macKey,
+          hmac: secrets.hmac,
+        },
+        error: new Error(
+          `Verifier closed after ${secrets.authorization} ${secrets.walletSignature}`,
+        ),
+      },
+      Object.values(secrets),
+    )
+    const copied = JSON.stringify({ zkTlsDiagnostic: diagnostic }, null, 2)
+
+    expect(copied).toContain('301.022691071331912180')
+    expect(copied).toContain('107.597080071331912181')
+    expect(copied).toContain('Verifier closed after [REDACTED] [REDACTED]')
+    for (const secret of Object.values(secrets)) {
+      expect(copied).not.toContain(secret)
     }
   })
 })
