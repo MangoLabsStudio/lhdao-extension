@@ -4,6 +4,14 @@ import { v4DechunkBody } from './v4-chunked'
 import { v4GunzipJson } from './v4-gzip'
 
 export type DisclosureRange = Readonly<{ start: number; end: number }>
+export type V4ResponseDiagnosticStage =
+  | 'response-framing-decoded'
+  | 'gzip-decoded'
+  | 'strict-json-checked'
+export type V4ResponseDiagnostic = (
+  stage: V4ResponseDiagnosticStage,
+  details: unknown,
+) => void
 
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/
 const DECIMAL = /^(?:0|[1-9][0-9]*)$/
@@ -37,6 +45,19 @@ export type V4PublicRequestDetails = Readonly<{
 
 function fail(): never {
   throw new Error('request did not match the signed V4 connector')
+}
+
+function observeResponse(
+  observer: V4ResponseDiagnostic | undefined,
+  stage: V4ResponseDiagnosticStage,
+  details: () => unknown,
+): void {
+  if (!observer) return
+  try {
+    observer(stage, details())
+  } catch {
+    // Diagnostics never affect response validation.
+  }
 }
 
 function trimOws(value: string): string {
@@ -514,6 +535,7 @@ export function v4RequestDisclosureRanges(
 export async function v4ResponseDisclosureRanges(
   received: Uint8Array,
   connector: V4Connector,
+  observer?: V4ResponseDiagnostic,
 ): Promise<DisclosureRange[]> {
   if (
     !(received instanceof Uint8Array) ||
@@ -526,15 +548,30 @@ export async function v4ResponseDisclosureRanges(
   let decoded: Uint8Array | undefined
   try {
     entity = responseBody(received, connector)
+    observeResponse(observer, 'response-framing-decoded', () => ({
+      wireBytes: received.length,
+      entityBytes: entity?.length ?? 0,
+      transferEncoding: connector.response_transfer_encoding ?? 'fixed',
+      contentEncoding: connector.response_content_encoding ?? 'identity',
+    }))
     decoded =
       connector.response_content_encoding === 'gzip'
         ? await v4GunzipJson(entity, connector.max_decoded_data!)
         : entity
+    if (connector.response_content_encoding === 'gzip')
+      observeResponse(observer, 'gzip-decoded', () => ({
+        compressedBytes: entity?.length ?? 0,
+        decodedBytes: decoded?.length ?? 0,
+      }))
     if (connector.response_content_encoding !== 'gzip') {
       const text = decode(decoded)
       if (encoder.encode(text).length !== decoded.length) return fail()
     }
     new StrictResponseJsonParser(decoded).parse()
+    observeResponse(observer, 'strict-json-checked', () => ({
+      decodedBytes: decoded?.length ?? 0,
+      json: decode(decoded as Uint8Array),
+    }))
     return [{ start: 0, end: received.length }]
   } finally {
     if (decoded && decoded !== entity) decoded.fill(0)

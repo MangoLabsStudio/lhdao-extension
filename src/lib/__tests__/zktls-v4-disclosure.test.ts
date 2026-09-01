@@ -810,6 +810,67 @@ describe('complete V4 JSON response disclosure', () => {
     )
   })
 
+  test('reports successful chunked gzip validation stages in order', async () => {
+    const received = fixedBytes(
+      INTEGRATION_FIXTURE.modes.chunkedGzip.responseBase64,
+    )
+    const stages: string[] = []
+    const details: unknown[] = []
+
+    await expect(
+      v4ResponseDisclosureRanges(
+        received,
+        integrationConnector('chunkedGzip'),
+        (stage, value) => {
+          stages.push(stage)
+          details.push(value)
+        },
+      ),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
+    expect(stages).toEqual([
+      'response-framing-decoded',
+      'gzip-decoded',
+      'strict-json-checked',
+    ])
+    expect(details).toEqual([
+      expect.objectContaining({ wireBytes: received.length }),
+      expect.objectContaining({ decodedBytes: 49 }),
+      expect.objectContaining({
+        json: '{"account":"acct-1","rows":[{"amount":"100.00"}]}',
+      }),
+    ])
+  })
+
+  test('reports only completed stages and ignores observer failures', async () => {
+    const corrupt = response(Uint8Array.of(1, 2, 3), {
+      headers: [
+        'Content-Type: application/json',
+        'Content-Length: 3',
+        'Content-Encoding: gzip',
+      ],
+    })
+    const stages: string[] = []
+    await expect(
+      v4ResponseDisclosureRanges(corrupt, gzipConnector(), (stage) => {
+        stages.push(stage)
+      }),
+    ).rejects.toThrow()
+    expect(stages).toEqual(['response-framing-decoded'])
+
+    const received = fixedBytes(
+      INTEGRATION_FIXTURE.modes.chunkedGzip.responseBase64,
+    )
+    await expect(
+      v4ResponseDisclosureRanges(
+        received,
+        integrationConnector('chunkedGzip'),
+        () => {
+          throw new Error('diagnostic observer unavailable')
+        },
+      ),
+    ).resolves.toEqual([{ start: 0, end: received.length }])
+  })
+
   test('reveals the complete compressed HTTP transcript after validating decoded JSON', async () => {
     const received = response(GZIP_JSON, {
       headers: [
