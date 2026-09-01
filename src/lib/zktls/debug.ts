@@ -1,8 +1,15 @@
+import type {
+  ProductZkTlsDiagnostic,
+  ProductZkTlsDiagnosticEvent,
+} from '@/types/product-experience'
+
 const SENSITIVE_KEY =
   /^(?:cookie|set-cookie|authorization|proxy-authorization|mac[-_]?key|.*token.*|.*secret.*)$/i
 const encoder = new TextEncoder()
 const fatalDecoder = new TextDecoder('utf-8', { fatal: true })
 const textDecoder = new TextDecoder()
+const MAX_DIAGNOSTIC_EVENTS = 30
+const MAX_DIAGNOSTIC_VALUE_BYTES = 65_536
 
 type DebugWriter = (...values: unknown[]) => void
 
@@ -40,12 +47,26 @@ function sanitize(
   if (seen.has(value)) return '[circular]'
   seen.add(value)
 
-  if (value instanceof Error)
-    return {
+  if (value instanceof Error) {
+    const output: Record<string, unknown> = {
       name: value.name,
       message: redactText(value.message, secretValues),
       stack: redactText(value.stack ?? '', secretValues),
     }
+    for (const [key, descriptor] of Object.entries(
+      Object.getOwnPropertyDescriptors(value),
+    )) {
+      if (!descriptor.enumerable || key in output) continue
+      if (!('value' in descriptor)) {
+        output[key] = '[accessor]'
+        continue
+      }
+      output[key] = SENSITIVE_KEY.test(key)
+        ? sensitiveSummary(descriptor.value)
+        : sanitize(descriptor.value, seen, secretValues)
+    }
+    return output
+  }
   if (value instanceof Uint8Array)
     return { byteLength: value.byteLength, base64: bytesToBase64(value) }
   if (Array.isArray(value))
@@ -98,6 +119,53 @@ function headerBoundary(bytes: Uint8Array): number {
 
 export function sanitizeZkTlsDebugValue(value: unknown): unknown {
   return sanitize(value, new WeakSet(), [])
+}
+
+function boundedDiagnosticValue(
+  value: unknown,
+  secretValues: readonly string[],
+): unknown {
+  const sanitized = sanitize(value, new WeakSet(), secretValues)
+  const byteLength = encoder.encode(JSON.stringify(sanitized)).byteLength
+  return byteLength <= MAX_DIAGNOSTIC_VALUE_BYTES
+    ? sanitized
+    : { truncated: true, byteLength }
+}
+
+export function createProductZkTlsDiagnostic(
+  correlationId: string,
+  now: number,
+): ProductZkTlsDiagnostic {
+  return {
+    correlationId,
+    startedAt: now,
+    updatedAt: now,
+    events: [],
+  }
+}
+
+export function appendProductZkTlsDiagnostic(
+  current: ProductZkTlsDiagnostic,
+  event: ProductZkTlsDiagnosticEvent,
+  secretValues: readonly string[] = [],
+): ProductZkTlsDiagnostic {
+  const next: ProductZkTlsDiagnosticEvent = {
+    at: event.at,
+    stage: event.stage,
+    status: event.status,
+    ...(event.details === undefined
+      ? {}
+      : { details: boundedDiagnosticValue(event.details, secretValues) }),
+    ...(event.error === undefined
+      ? {}
+      : { error: boundedDiagnosticValue(event.error, secretValues) }),
+  }
+  return {
+    correlationId: current.correlationId,
+    startedAt: current.startedAt,
+    updatedAt: event.at,
+    events: [...current.events, next].slice(-MAX_DIAGNOSTIC_EVENTS),
+  }
 }
 
 export function redactZkTlsHttpTranscript(bytes: Uint8Array): string {

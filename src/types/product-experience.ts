@@ -9,6 +9,21 @@ export type ProductZkTlsProgressStatus =
   | 'VERIFIED'
 export type ProductZkTlsScalar = boolean | number | string | null
 
+export interface ProductZkTlsDiagnosticEvent {
+  at: number
+  stage: string
+  status: 'running' | 'passed' | 'failed'
+  details?: unknown
+  error?: unknown
+}
+
+export interface ProductZkTlsDiagnostic {
+  correlationId: string
+  startedAt: number
+  updatedAt: number
+  events: ProductZkTlsDiagnosticEvent[]
+}
+
 export interface ProductExperienceTaskRef {
   campaignId: string
   ticketKind: ProductTicketKind

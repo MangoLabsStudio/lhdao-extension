@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  appendProductZkTlsDiagnostic,
+  createProductZkTlsDiagnostic,
   createZkTlsDebugTrace,
   redactZkTlsHttpTranscript,
   sanitizeZkTlsDebugValue,
@@ -108,5 +110,66 @@ describe('zkTLS local diagnostics', () => {
     )
     const transcript = new Uint8Array([...header, 0xff, 0x00, 0x80])
     expect(redactZkTlsHttpTranscript(transcript)).toContain('[body base64]/wCA')
+  })
+
+  it('stores bounded redacted popup diagnostics with exact error fields', () => {
+    let attempt = createProductZkTlsDiagnostic('correlation-1', 100)
+    attempt = appendProductZkTlsDiagnostic(
+      attempt,
+      {
+        at: 101,
+        stage: 'capture-failed',
+        status: 'failed',
+        details: { body: { amount: '193.425611' } },
+        error: Object.assign(new Error('socket closed for Bearer abc'), {
+          code: 'PROVER_FAILED',
+        }),
+      },
+      ['Bearer abc'],
+    )
+
+    expect(attempt).toMatchObject({
+      correlationId: 'correlation-1',
+      startedAt: 100,
+      updatedAt: 101,
+    })
+    expect(attempt.events[0]).toMatchObject({
+      details: { body: { amount: '193.425611' } },
+      error: {
+        name: 'Error',
+        message: 'socket closed for [REDACTED]',
+        code: 'PROVER_FAILED',
+      },
+    })
+    expect(JSON.stringify(attempt)).not.toContain('Bearer abc')
+
+    for (let index = 0; index < 35; index += 1) {
+      attempt = appendProductZkTlsDiagnostic(attempt, {
+        at: 102 + index,
+        stage: `stage-${index}`,
+        status: 'passed',
+      })
+    }
+    expect(attempt.events).toHaveLength(30)
+    expect(attempt.events[0]?.stage).toBe('stage-5')
+  })
+
+  it('replaces oversized diagnostic values with a size marker', () => {
+    const attempt = appendProductZkTlsDiagnostic(
+      createProductZkTlsDiagnostic('correlation-2', 200),
+      {
+        at: 201,
+        stage: 'captured-response',
+        status: 'passed',
+        details: { body: 'x'.repeat(65_537) },
+      },
+    )
+
+    expect(attempt.events[0]?.details).toMatchObject({
+      truncated: true,
+    })
+    expect(
+      (attempt.events[0]?.details as { byteLength: number }).byteLength,
+    ).toBeGreaterThan(65_536)
   })
 })
