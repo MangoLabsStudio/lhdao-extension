@@ -65,4 +65,45 @@ describe('zkTLS build profile', () => {
       verifierEndpoint: 'ws://localhost:7047/session',
     })
   })
+
+  test('enables local diagnostics only for an explicit Beta zkTLS build', () => {
+    const env = {
+      WXT_ZKTLS_ENABLED: 'true',
+      WXT_ZKTLS_DEBUG: 'true',
+      WXT_ZKTLS_API_ENDPOINT:
+        'https://service.lhdaobeta.top/zktls/signed-config',
+      WXT_ZKTLS_VERIFIER_ENDPOINT:
+        'wss://verifier.lhdaobeta.top/session',
+      WXT_ZKTLS_VERIFIER_PROFILE_ID: 'lighthouse-beta-v1',
+      WXT_ZKTLS_PUBLIC_KEYS: JSON.stringify(product.publicKeys),
+    }
+
+    expect(
+      buildZkTlsProfile({
+        env,
+        endpointPolicy: { localBuild: false },
+        existingApiEndpoint: 'https://service.lhdaobeta.top/graphql',
+      }),
+    ).toMatchObject({ enabled: true, local: false, debug: true })
+
+    for (const [overrides, endpoint] of [
+      [{ WXT_ZKTLS_DEBUG: undefined }, 'https://service.lhdaobeta.top/graphql'],
+      [{ WXT_ZKTLS_DEBUG: 'false' }, 'https://service.lhdaobeta.top/graphql'],
+      [
+        {
+          WXT_ZKTLS_DEBUG: 'true',
+          WXT_ZKTLS_API_ENDPOINT: 'https://api.lhdao.top/zktls/config',
+        },
+        'https://api.lhdao.top/graphql',
+      ],
+    ] as const) {
+      expect(
+        buildZkTlsProfile({
+          env: { ...env, ...overrides },
+          endpointPolicy: { localBuild: false },
+          existingApiEndpoint: endpoint,
+        }).debug,
+      ).toBe(false)
+    }
+  })
 })

@@ -2,6 +2,7 @@ type PublicKeys = Record<string, JsonWebKey>
 
 export type ZkTlsProfile = {
   enabled: boolean
+  debug: boolean
   local: boolean
   apiEndpoint: string | null
   verifierEndpoint: string | null
@@ -15,6 +16,7 @@ export const ZKTLS_PROFILE: ZkTlsProfile =
   typeof __ZKTLS_PROFILE__ === 'undefined'
     ? {
         enabled: false,
+        debug: false,
         local: false,
         apiEndpoint: null,
         verifierEndpoint: null,

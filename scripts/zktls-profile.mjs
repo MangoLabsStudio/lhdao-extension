@@ -87,9 +87,14 @@ export function validateProductZkTlsProfile({
 
 export function buildZkTlsProfile({ env, endpointPolicy, existingApiEndpoint }) {
   const enabled = env.WXT_ZKTLS_ENABLED === 'true'
+  const debug =
+    enabled &&
+    env.WXT_ZKTLS_DEBUG === 'true' &&
+    new URL(existingApiEndpoint).origin === 'https://service.lhdaobeta.top'
   if (!enabled)
     return {
       enabled: false,
+      debug: false,
       local: endpointPolicy.localBuild,
       apiEndpoint: null,
       verifierEndpoint: null,
@@ -114,6 +119,7 @@ export function buildZkTlsProfile({ env, endpointPolicy, existingApiEndpoint }) 
       throw new Error('Local zkTLS requires localhost HTTP API and WS verifier.')
     return {
       enabled: true,
+      debug: false,
       local: true,
       apiEndpoint: api.href,
       verifierEndpoint: verifier.href,
@@ -123,6 +129,7 @@ export function buildZkTlsProfile({ env, endpointPolicy, existingApiEndpoint }) 
   }
   return {
     enabled: true,
+    debug,
     local: false,
     ...validateProductZkTlsProfile({
       apiEndpoint,
