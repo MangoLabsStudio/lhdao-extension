@@ -45,6 +45,7 @@ type CommonProveMessage = {
   type: 'zktls-worker-prove'
   sessionId: string
   connectorId: string
+  correlationId?: string
   ticket: Ticket
   configEnvelope: ConfigEnvelope
   ticketEnvelope: TicketEnvelope
@@ -626,7 +627,26 @@ async function loadTlsnWasm(): Promise<typeof import('tlsn-wasm')> {
 async function prove(message: ProveMessage): Promise<void> {
   const trace = createZkTlsDebugTrace({
     enabled: ZKTLS_PROFILE.debug,
-    correlationId: message.id,
+    correlationId: message.correlationId ?? message.id,
+    write(_label, payload) {
+      if (!payload || typeof payload !== 'object') return
+      const value = payload as {
+        stage?: unknown
+        details?: unknown
+        error?: unknown
+      }
+      if (typeof value.stage !== 'string') return
+      self.postMessage({
+        id: message.id,
+        diagnostic: {
+          at: Date.now(),
+          stage: value.stage,
+          status: value.error === undefined ? 'passed' : 'failed',
+          ...(value.details === undefined ? {} : { details: value.details }),
+          ...(value.error === undefined ? {} : { error: value.error }),
+        },
+      })
+    },
   })
   const secretValues = isV1Message(message)
     ? [message.cookie]

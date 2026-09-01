@@ -1063,6 +1063,52 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     })
   })
 
+  it('records capture diagnostics emitted by the current proof attempt', async () => {
+    await harness.controller.cancel()
+    harness = createHarness(true)
+    harness.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    await harness.controller.saveTask(task())
+    await harness.controller.start()
+    harness.proveZkTls.mockImplementationOnce(async (input) => {
+      await input.onDiagnostic?.({
+        at: NOW,
+        stage: 'request-captured',
+        status: 'passed',
+        details: {
+          method: 'GET',
+          url: 'https://archive.prod.nado.xyz/v1/history',
+          responseContentEncoding: 'gzip',
+        },
+      })
+      return {
+        type: 'zktls-prove-result',
+        correlationId: input.correlationId,
+        status: 'submitted',
+      }
+    })
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(async () =>
+      expect(
+        (await harness.controller.getState()).zkTlsDiagnostic?.events,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            stage: 'request-captured',
+            status: 'passed',
+            details: expect.objectContaining({
+              responseContentEncoding: 'gzip',
+            }),
+          }),
+        ]),
+      ),
+    )
+  })
+
   it('runs one proof at a time while preserving other matched rules in the queue', async () => {
     let finishFirst:
       | ((value: Awaited<ReturnType<typeof harness.proveZkTls>>) => void)

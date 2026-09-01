@@ -70,6 +70,13 @@ export type MsgRequest =
       event: ProductZkTlsDiagnosticEvent
     }
   | {
+      type: 'product-experience-proof-diagnostic'
+      sessionId: string
+      connectorId: string
+      correlationId: string
+      event: ProductZkTlsDiagnosticEvent
+    }
+  | {
       type: 'product-experience-evidence'
       sessionId: string
       matches: ProductRuleMatch[]

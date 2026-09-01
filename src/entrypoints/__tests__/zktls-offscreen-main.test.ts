@@ -52,6 +52,7 @@ function proofMessage(): Record<string, unknown> {
     type: 'zktls-offscreen-prove',
     sessionId: 'session-1',
     connectorId: 'connector-1',
+    correlationId: 'proof-correlation-1',
     cookie: 'private-cookie',
     captured: {
       path: '/private',
@@ -162,6 +163,48 @@ describe('zkTLS offscreen worker lifecycle', () => {
       result: { status: 'submitted' },
     })
     await expect(next).resolves.toEqual({ status: 'submitted' })
+  })
+
+  test('forwards worker proof diagnostics without settling the proof', async () => {
+    const sendMessage = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockResolvedValue(undefined)
+    const message = {
+      ...proofMessage(),
+      correlationId: 'proof-correlation-1',
+    }
+    const proving = runtimeListener(message)
+    const worker = FakeWorker.instances[0]!
+    const id = worker.posts[0]!.id
+
+    worker.emit('message', {
+      id,
+      diagnostic: {
+        at: 123,
+        stage: 'tls-transcript-received',
+        status: 'passed',
+        details: { sentBytes: 100, receivedBytes: 200 },
+      },
+    })
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'product-experience-proof-diagnostic',
+      sessionId: 'session-1',
+      connectorId: 'connector-1',
+      correlationId: 'proof-correlation-1',
+      event: {
+        at: 123,
+        stage: 'tls-transcript-received',
+        status: 'passed',
+        details: { sentBytes: 100, receivedBytes: 200 },
+      },
+    })
+
+    worker.emit('message', {
+      id,
+      result: { status: 'submitted' },
+    })
+    await expect(proving).resolves.toEqual({ status: 'submitted' })
   })
 
   test('ignores a late old-generation result even when request IDs repeat', async () => {

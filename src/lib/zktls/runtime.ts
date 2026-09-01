@@ -1,4 +1,5 @@
 import { WEB_ENDPOINT } from '@/lib/env'
+import type { ProductZkTlsDiagnosticEvent } from '@/types/product-experience'
 import {
   type CapturedRequest,
   CaptureSession,
@@ -8,6 +9,7 @@ import {
   type RequestBodyDetails,
   type RequestDetails,
 } from './capture'
+import { sanitizeZkTlsDebugValue } from './debug'
 import {
   assertConnectorAvailable,
   type CapturedConnector,
@@ -80,6 +82,7 @@ export type ZkTlsRunRequest = {
   connectorId: string
   correlationId: string
   expiresAt?: string
+  onDiagnostic?: (event: ProductZkTlsDiagnosticEvent) => void | Promise<void>
 }
 
 export type ZkTlsRunResult = {
@@ -93,6 +96,17 @@ let job: Job | null = null
 let permission: Permission | null = null
 let proofFlight: Promise<ZkTlsRunResult> | null = null
 let productWaiter = false
+
+async function reportDiagnostic(
+  request: ZkTlsRunRequest,
+  event: Omit<ProductZkTlsDiagnosticEvent, 'at'>,
+): Promise<void> {
+  try {
+    await request.onDiagnostic?.({ ...event, at: Date.now() })
+  } catch {
+    // Diagnostics never affect proof execution.
+  }
+}
 
 class ZkTlsPermissionDeniedError extends Error {}
 
@@ -390,6 +404,15 @@ async function proveCapturedRequest(
 ): Promise<ZkTlsRunResult> {
   const pageOrigin =
     config.interpreter_version === 4 ? config.page_origin : config.origin
+  await reportDiagnostic(request, {
+    stage: 'capture-started',
+    status: 'running',
+    details: {
+      pageOrigin,
+      targetOrigin: config.origin,
+      method: config.request.method,
+    },
+  })
   await ensurePermissions([pageOrigin, config.origin], request.connectorId)
   assertAvailable(config, ticket)
   const tab = await connectorTab(pageOrigin)
@@ -470,11 +493,16 @@ async function proveCapturedRequest(
       config.interpreter_version === 3 ? config.actions : undefined,
     )
     value = await captured
-  } catch {
+  } catch (error) {
     const permissionDenied = active.permissionDenied
     active.done?.(null)
     clearJob()
     if (permissionDenied) throw new ZkTlsPermissionDeniedError()
+    await reportDiagnostic(request, {
+      stage: 'capture-failed',
+      status: 'failed',
+      error: sanitizeZkTlsDebugValue(error),
+    })
     return {
       type: 'zktls-prove-result',
       correlationId: request.correlationId,
@@ -487,19 +515,39 @@ async function proveCapturedRequest(
     if (value) clearCapturedRequest(value)
     throw new ZkTlsPermissionDeniedError()
   }
-  if (!value)
+  if (!value) {
+    await reportDiagnostic(request, {
+      stage: 'capture-failed',
+      status: 'failed',
+      error: { message: 'No matching request was captured' },
+    })
     return {
       type: 'zktls-prove-result',
       correlationId: request.correlationId,
       status: 'error',
       code: 'ZKTLS_CAPTURE_FAILED',
     }
+  }
   try {
+    await reportDiagnostic(request, {
+      stage: 'request-captured',
+      status: 'passed',
+      details: sanitizeZkTlsDebugValue({
+        method: config.request.method,
+        targetOrigin: config.origin,
+        request: value,
+        responseContentEncoding:
+          config.interpreter_version === 4
+            ? (config.response_content_encoding ?? 'identity')
+            : undefined,
+      }),
+    })
     await ensureOffscreen()
     const result = (await chrome.runtime.sendMessage({
       type: 'zktls-offscreen-prove',
       sessionId: request.sessionId,
       connectorId: request.connectorId,
+      correlationId: request.correlationId,
       config,
       ticket,
       configEnvelope,
@@ -509,6 +557,11 @@ async function proveCapturedRequest(
       status: 'submitted' | 'error'
       code?: string
     }
+    await reportDiagnostic(request, {
+      stage: 'proof-worker-finished',
+      status: result.status === 'submitted' ? 'passed' : 'failed',
+      details: result,
+    })
     return {
       type: 'zktls-prove-result',
       correlationId: request.correlationId,
@@ -601,6 +654,7 @@ async function runValidatedZkTlsRequest(
       type: 'zktls-offscreen-prove',
       sessionId: request.sessionId,
       connectorId: request.connectorId,
+      correlationId: request.correlationId,
       config,
       ticket,
       configEnvelope,
@@ -615,6 +669,11 @@ async function runValidatedZkTlsRequest(
       ...(result.code ? { code: result.code } : {}),
     }
   } catch (error) {
+    await reportDiagnostic(request, {
+      stage: 'setup-failed',
+      status: 'failed',
+      error: sanitizeZkTlsDebugValue(error),
+    })
     return {
       type: 'zktls-prove-result',
       correlationId: request.correlationId,

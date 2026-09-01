@@ -744,6 +744,44 @@ export class ProductExperienceController {
     return this.stateFromSession(next)
   }
 
+  async handleProofDiagnostic(
+    proofSessionId: string,
+    connectorId: string,
+    correlationId: string,
+    event: ProductZkTlsDiagnosticEvent,
+  ): Promise<ProductExperienceControllerState> {
+    if (
+      !this.dependencies.diagnosticsEnabled ||
+      !event.stage ||
+      event.stage.length > 100 ||
+      !Number.isFinite(event.at) ||
+      !['running', 'passed', 'failed'].includes(event.status)
+    )
+      return this.getState()
+    const stored = await this.dependencies.storage.getSession()
+    if (
+      !stored ||
+      !isZkTlsSession(stored) ||
+      stored.zkTlsDiagnostic?.correlationId !== correlationId ||
+      !stored.zkTlsQueue.some(
+        (item) =>
+          item.status === 'proving' &&
+          item.sessionId === proofSessionId &&
+          item.connectorId === connectorId,
+      )
+    )
+      return this.getState()
+    const next = await this.mutateZkTlsSession(stored.sessionId, (current) => {
+      this.appendZkTlsDiagnostic(current, {
+        ...event,
+        at: this.dependencies.now(),
+      })
+    })
+    if (!next) return this.getState()
+    await this.notify()
+    return this.stateFromSession(next)
+  }
+
   async handleEvidence(
     sender: ProductExperienceRuntimeSender,
     sessionId: string,
@@ -1210,12 +1248,23 @@ export class ProductExperienceController {
       if (!provingItem || provingItem.status !== 'proving') return
 
       let result: ZkTlsRunResult
+      const correlationId =
+        proving?.zkTlsDiagnostic?.correlationId ??
+        this.dependencies.randomSessionId()
       try {
         result = await this.dependencies.proveZkTls({
           sessionId: started.sessionId,
           connectorId: started.connectorId,
-          correlationId: this.dependencies.randomSessionId(),
+          correlationId,
           expiresAt: started.expiresAt,
+          onDiagnostic: async (event) => {
+            await this.handleProofDiagnostic(
+              started.sessionId,
+              started.connectorId,
+              correlationId,
+              event,
+            )
+          },
         })
       } catch {
         this.zkTlsDrainRequested = false

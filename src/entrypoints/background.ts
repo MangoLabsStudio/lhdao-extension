@@ -556,6 +556,19 @@ export default defineBackground(() => {
       )
       return { type: 'product-experience-ack' }
     }
+    if (req.type === 'product-experience-proof-diagnostic') {
+      if (
+        sender.id === chrome.runtime.id &&
+        sender.url === chrome.runtime.getURL('zktls-offscreen.html')
+      )
+        await productExperienceController.handleProofDiagnostic(
+          req.sessionId,
+          req.connectorId,
+          req.correlationId,
+          req.event,
+        )
+      return { type: 'product-experience-ack' }
+    }
     if (req.type === 'product-experience-evidence') {
       await productExperienceController.handleEvidence(
         productRuntimeSender(sender),

@@ -1,4 +1,5 @@
 import { type CapturedRequest, clearCapturedRequest } from '@/lib/zktls/capture'
+import type { ProductZkTlsDiagnosticEvent } from '@/types/product-experience'
 
 type Result = { status: 'submitted' | 'error'; code?: string }
 type Generation = {
@@ -8,6 +9,9 @@ type Generation = {
 }
 type Pending = {
   id: string
+  sessionId: string
+  connectorId: string
+  correlationId: string
   generation: Generation
   timer: ReturnType<typeof setTimeout>
   settled: boolean
@@ -52,11 +56,31 @@ function createWorker(): Generation {
   }
   worker.addEventListener(
     'message',
-    (event: MessageEvent<{ id?: string; result?: Result }>) => {
+    (
+      event: MessageEvent<{
+        id?: string
+        result?: Result
+        diagnostic?: ProductZkTlsDiagnosticEvent
+      }>,
+    ) => {
       const id = event.data?.id
       if (!id || generation.terminated) return
       const job = pending.get(id)
       if (!job || job.generation.token !== generation.token) return
+      if (event.data.diagnostic) {
+        void chrome.runtime
+          .sendMessage({
+            type: 'product-experience-proof-diagnostic',
+            sessionId: job.sessionId,
+            connectorId: job.connectorId,
+            correlationId: job.correlationId,
+            event: event.data.diagnostic,
+          })
+          .catch(() => {
+            // The background may be restarting; proof execution continues.
+          })
+        return
+      }
       settle(
         job,
         event.data.result ?? { status: 'error', code: 'PROVER_FAILED' },
@@ -105,6 +129,20 @@ chrome.runtime.onMessage.addListener((message) => {
     })
   }
   const id = crypto.randomUUID()
+  const sessionId = proofMessage.sessionId
+  const connectorId = proofMessage.connectorId
+  const correlationId = proofMessage.correlationId
+  if (
+    typeof sessionId !== 'string' ||
+    typeof connectorId !== 'string' ||
+    typeof correlationId !== 'string'
+  ) {
+    clearProofMessage(proofMessage)
+    return Promise.resolve<Result>({
+      status: 'error',
+      code: 'PROVER_FAILED',
+    })
+  }
   return new Promise<Result>((resolve) => {
     let generation: Generation
     try {
@@ -116,6 +154,9 @@ chrome.runtime.onMessage.addListener((message) => {
     }
     const job: Pending = {
       id,
+      sessionId,
+      connectorId,
+      correlationId,
       generation,
       settled: false,
       resolve,

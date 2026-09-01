@@ -3202,11 +3202,13 @@ describe('zkTLS V4 page and target permissions', () => {
     })) as never)
     const create = vi.spyOn(chrome.tabs, 'create')
 
+    const onDiagnostic = vi.fn()
     await expect(
       proveZkTlsSession({
         correlationId: 'v4-navigation',
         sessionId: 's1',
         connectorId: 'product-volume',
+        onDiagnostic,
       }),
     ).resolves.toEqual({
       type: 'zktls-prove-result',
@@ -3215,6 +3217,15 @@ describe('zkTLS V4 page and target permissions', () => {
       code: 'ZKTLS_CAPTURE_FAILED',
     })
     expect(create).not.toHaveBeenCalled()
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'capture-failed',
+        status: 'failed',
+        error: expect.objectContaining({
+          message: 'page tab left signed origin',
+        }),
+      }),
+    )
   })
 
   test('ignores a malformed body event and submits a later exact V4 request', async () => {

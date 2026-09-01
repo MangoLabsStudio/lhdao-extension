@@ -533,7 +533,15 @@ describe('Product zkTLS jobs', () => {
     expect(contexts).toHaveBeenCalledTimes(2)
     expect(offscreen).toHaveBeenCalledTimes(2)
     expect(submitted).toHaveLength(2)
-    expect(submitted[0]).toEqual(submitted[1])
+    const { correlationId: firstCorrelationId, ...firstSubmitted } =
+      submitted[0] as Record<string, unknown>
+    const { correlationId: secondCorrelationId, ...secondSubmitted } =
+      submitted[1] as Record<string, unknown>
+    expect(firstSubmitted).toEqual(secondSubmitted)
+    expect([firstCorrelationId, secondCorrelationId]).toEqual([
+      'product1',
+      'product-waits-for-page',
+    ])
     expect(submitted[0]).toMatchObject({
       type: 'zktls-offscreen-prove',
       sessionId: 'session1',
