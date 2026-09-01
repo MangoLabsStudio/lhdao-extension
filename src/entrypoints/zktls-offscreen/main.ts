@@ -12,6 +12,7 @@ type Pending = {
   sessionId: string
   connectorId: string
   correlationId: string
+  diagnosticFlight: Promise<void>
   generation: Generation
   timer: ReturnType<typeof setTimeout>
   settled: boolean
@@ -68,23 +69,27 @@ function createWorker(): Generation {
       const job = pending.get(id)
       if (!job || job.generation.token !== generation.token) return
       if (event.data.diagnostic) {
-        void chrome.runtime
-          .sendMessage({
-            type: 'product-experience-proof-diagnostic',
-            sessionId: job.sessionId,
-            connectorId: job.connectorId,
-            correlationId: job.correlationId,
-            event: event.data.diagnostic,
-          })
-          .catch(() => {
-            // The background may be restarting; proof execution continues.
-          })
+        const diagnostic = event.data.diagnostic
+        job.diagnosticFlight = job.diagnosticFlight.then(async () => {
+          await chrome.runtime
+            .sendMessage({
+              type: 'product-experience-proof-diagnostic',
+              sessionId: job.sessionId,
+              connectorId: job.connectorId,
+              correlationId: job.correlationId,
+              event: diagnostic,
+            })
+            .catch(() => {
+              // The background may be restarting; proof execution continues.
+            })
+        })
         return
       }
-      settle(
-        job,
-        event.data.result ?? { status: 'error', code: 'PROVER_FAILED' },
-      )
+      const result = event.data.result ?? {
+        status: 'error',
+        code: 'PROVER_FAILED',
+      }
+      void job.diagnosticFlight.then(() => settle(job, result))
     },
   )
   worker.addEventListener('error', () => failGeneration(generation))
@@ -157,6 +162,7 @@ chrome.runtime.onMessage.addListener((message) => {
       sessionId,
       connectorId,
       correlationId,
+      diagnosticFlight: Promise.resolve(),
       generation,
       settled: false,
       resolve,

@@ -187,24 +187,65 @@ describe('zkTLS offscreen worker lifecycle', () => {
       },
     })
 
-    expect(sendMessage).toHaveBeenCalledWith({
-      type: 'product-experience-proof-diagnostic',
-      sessionId: 'session-1',
-      connectorId: 'connector-1',
-      correlationId: 'proof-correlation-1',
-      event: {
-        at: 123,
-        stage: 'tls-transcript-received',
-        status: 'passed',
-        details: { sentBytes: 100, receivedBytes: 200 },
-      },
-    })
+    await vi.waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith({
+        type: 'product-experience-proof-diagnostic',
+        sessionId: 'session-1',
+        connectorId: 'connector-1',
+        correlationId: 'proof-correlation-1',
+        event: {
+          at: 123,
+          stage: 'tls-transcript-received',
+          status: 'passed',
+          details: { sentBytes: 100, receivedBytes: 200 },
+        },
+      }),
+    )
 
     worker.emit('message', {
       id,
       result: { status: 'submitted' },
     })
     await expect(proving).resolves.toEqual({ status: 'submitted' })
+  })
+
+  test('waits for queued diagnostics before settling the final result', async () => {
+    let finishDiagnostic: (() => void) | undefined
+    vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDiagnostic = resolve
+        }) as never,
+    )
+    const proving = runtimeListener(proofMessage())
+    const worker = FakeWorker.instances[0]!
+    const id = worker.posts[0]!.id
+    let settled = false
+    void proving.then(() => {
+      settled = true
+    })
+
+    worker.emit('message', {
+      id,
+      diagnostic: {
+        at: 123,
+        stage: 'verifier-session-registered:failed',
+        status: 'failed',
+        error: { message: 'connection refused' },
+      },
+    })
+    worker.emit('message', {
+      id,
+      result: { status: 'error', code: 'PROVER_FAILED' },
+    })
+    await Promise.resolve()
+
+    expect(settled).toBe(false)
+    finishDiagnostic?.()
+    await expect(proving).resolves.toEqual({
+      status: 'error',
+      code: 'PROVER_FAILED',
+    })
   })
 
   test('ignores a late old-generation result even when request IDs repeat', async () => {
