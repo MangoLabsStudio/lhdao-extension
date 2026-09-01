@@ -1,6 +1,7 @@
 import {
   createProductExperienceEvidenceMessage,
   createProductExperienceWatcherLifecycle,
+  dispatchProductExperienceEvidence,
   startProductExperienceWatcher,
 } from '@/lib/product-experience-watcher'
 import type {
@@ -158,14 +159,12 @@ export default defineContentScript({
       completionMode: bootstrap.completionMode,
       evaluationMode: bootstrap.evaluationMode,
       onEvidence(matches) {
-        void chrome.runtime
-          .sendMessage(
-            createProductExperienceEvidenceMessage(
-              bootstrap.sessionId,
-              matches,
-            ),
-          )
-          .catch(lifecycle.stop)
+        void dispatchProductExperienceEvidence({
+          sessionId: bootstrap.sessionId,
+          matches,
+          now: Date.now,
+          sendMessage: (message) => chrome.runtime.sendMessage(message),
+        }).catch(lifecycle.stop)
       },
       onDiagnostic(details) {
         void chrome.runtime

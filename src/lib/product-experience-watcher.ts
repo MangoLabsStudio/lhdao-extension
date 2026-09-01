@@ -2,6 +2,7 @@ import type {
   ProductExperienceRule,
   ProductRuleMatch,
 } from '@/types/product-experience'
+import { sanitizeZkTlsDebugValue } from '@/lib/zktls/debug'
 import type { ProductRuleEvaluationDiagnostic } from './product-experience-rules'
 import { evaluateProductRule } from './product-experience-rules'
 
@@ -62,6 +63,44 @@ export function createProductExperienceEvidenceMessage(
     sessionId,
     matches: matches.map(sanitizeMatch),
   }
+}
+
+export async function dispatchProductExperienceEvidence(input: {
+  sessionId: string
+  matches: readonly ProductRuleMatch[]
+  now: () => number
+  sendMessage: (message: unknown) => Promise<unknown>
+}): Promise<void> {
+  try {
+    await input.sendMessage(
+      createProductExperienceEvidenceMessage(input.sessionId, input.matches),
+    )
+  } catch (error) {
+    await input
+      .sendMessage({
+        type: 'product-experience-diagnostic',
+        sessionId: input.sessionId,
+        event: {
+          at: input.now(),
+          stage: 'evidence-sent',
+          status: 'failed',
+          error: sanitizeZkTlsDebugValue(error),
+        },
+      })
+      .catch(() => undefined)
+    throw error
+  }
+  await input
+    .sendMessage({
+      type: 'product-experience-diagnostic',
+      sessionId: input.sessionId,
+      event: {
+        at: input.now(),
+        stage: 'evidence-sent',
+        status: 'passed',
+      },
+    })
+    .catch(() => undefined)
 }
 
 function isSafePageUrl(url: URL): boolean {

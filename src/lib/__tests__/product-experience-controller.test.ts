@@ -276,7 +276,7 @@ describe('ProductExperienceController authorization and lifecycle', () => {
     await harness.controller.start()
     await harness.controller.bootstrap(sender())
     await harness.controller.ready(sender(), 'session-12345678')
-    const state = await harness.controller.handleDiagnostic(
+    await harness.controller.handleDiagnostic(
       sender(),
       'session-12345678',
       {
@@ -290,6 +290,15 @@ describe('ProductExperienceController authorization and lifecycle', () => {
         },
       },
     )
+    const state = await harness.controller.handleDiagnostic(
+      sender(),
+      'session-12345678',
+      {
+        at: NOW,
+        stage: 'evidence-sent',
+        status: 'passed',
+      },
+    )
 
     expect(state.zkTlsDiagnostic?.events.map((event) => event.stage)).toEqual([
       'start-request-received',
@@ -297,6 +306,7 @@ describe('ProductExperienceController authorization and lifecycle', () => {
       'watcher-bootstrapped',
       'watcher-ready',
       'rule-evaluated',
+      'evidence-sent',
     ])
     expect(harness.storage.session?.zkTlsDiagnostic).toEqual(
       state.zkTlsDiagnostic,

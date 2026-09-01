@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProductExperienceRule } from '@/types/product-experience'
 import {
   createProductExperienceWatcherLifecycle,
+  dispatchProductExperienceEvidence,
   startProductExperienceWatcher,
 } from '../product-experience-watcher'
 
@@ -51,6 +52,83 @@ async function expectMatchedRuleIds(
     )
   })
 }
+
+describe('dispatchProductExperienceEvidence', () => {
+  const matches = [
+    {
+      ruleId: 'deposit',
+      matchedAt: '2026-09-01T12:00:00.000Z',
+      origin: CLIENT_ORIGIN,
+      urlPathHash: 'a'.repeat(64),
+    },
+  ]
+
+  it('reports a successful evidence handoff', async () => {
+    const sendMessage = vi.fn(async () => ({ type: 'product-experience-ack' }))
+
+    await dispatchProductExperienceEvidence({
+      sessionId: 'session-1',
+      matches,
+      now: () => 123,
+      sendMessage,
+    })
+
+    expect(sendMessage.mock.calls).toEqual([
+      [
+        {
+          type: 'product-experience-evidence',
+          sessionId: 'session-1',
+          matches,
+        },
+      ],
+      [
+        {
+          type: 'product-experience-diagnostic',
+          sessionId: 'session-1',
+          event: {
+            at: 123,
+            stage: 'evidence-sent',
+            status: 'passed',
+          },
+        },
+      ],
+    ])
+  })
+
+  it('reports the direct error when evidence delivery rejects', async () => {
+    const failure = Object.assign(new Error('background rejected evidence'), {
+      code: 'EVIDENCE_REJECTED',
+    })
+    const sendMessage = vi
+      .fn<(message: unknown) => Promise<unknown>>()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ type: 'product-experience-ack' })
+
+    await expect(
+      dispatchProductExperienceEvidence({
+        sessionId: 'session-1',
+        matches,
+        now: () => 124,
+        sendMessage,
+      }),
+    ).rejects.toBe(failure)
+
+    expect(sendMessage).toHaveBeenLastCalledWith({
+      type: 'product-experience-diagnostic',
+      sessionId: 'session-1',
+      event: {
+        at: 124,
+        stage: 'evidence-sent',
+        status: 'failed',
+        error: expect.objectContaining({
+          name: 'Error',
+          message: 'background rejected evidence',
+          code: 'EVIDENCE_REJECTED',
+        }),
+      },
+    })
+  })
+})
 
 describe('startProductExperienceWatcher', () => {
   beforeEach(() => {

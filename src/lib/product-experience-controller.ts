@@ -721,7 +721,7 @@ export class ProductExperienceController {
   ): Promise<ProductExperienceControllerState> {
     if (
       !this.dependencies.diagnosticsEnabled ||
-      event.stage !== 'rule-evaluated' ||
+      !['rule-evaluated', 'evidence-sent'].includes(event.stage) ||
       !Number.isFinite(event.at) ||
       !['running', 'passed', 'failed'].includes(event.status)
     )
