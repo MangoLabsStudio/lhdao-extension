@@ -276,20 +276,16 @@ describe('ProductExperienceController authorization and lifecycle', () => {
     await harness.controller.start()
     await harness.controller.bootstrap(sender())
     await harness.controller.ready(sender(), 'session-12345678')
-    await harness.controller.handleDiagnostic(
-      sender(),
-      'session-12345678',
-      {
-        at: NOW,
-        stage: 'rule-evaluated',
-        status: 'running',
-        details: {
-          ruleId: 'rule-a',
-          selector: '[data-step="a"]',
-          matchedElementCount: 0,
-        },
+    await harness.controller.handleDiagnostic(sender(), 'session-12345678', {
+      at: NOW,
+      stage: 'rule-evaluated',
+      status: 'running',
+      details: {
+        ruleId: 'rule-a',
+        selector: '[data-step="a"]',
+        matchedElementCount: 0,
       },
-    )
+    })
     const state = await harness.controller.handleDiagnostic(
       sender(),
       'session-12345678',
@@ -1119,6 +1115,77 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     )
   })
 
+  it('records evidence acceptance before requesting a signed proof session', async () => {
+    await harness.controller.cancel()
+    harness = createHarness(true)
+    harness.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    await harness.controller.saveTask(task())
+    await harness.controller.start()
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.startZkTls).toHaveBeenCalledTimes(1))
+
+    const stages = harness.storage.session?.zkTlsDiagnostic?.events.map(
+      (event) => event.stage,
+    )
+    expect(stages).toEqual(
+      expect.arrayContaining(['evidence-accepted', 'proof-session-requested']),
+    )
+    expect(stages?.indexOf('evidence-accepted')).toBeLessThan(
+      stages?.indexOf('proof-session-requested') ?? -1,
+    )
+  })
+
+  it('keeps the direct signed-session error in retryable diagnostics', async () => {
+    await harness.controller.cancel()
+    harness = createHarness(true)
+    harness.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    harness.startZkTls.mockRejectedValueOnce(
+      Object.assign(new Error('session bootstrap unavailable'), {
+        code: 'SESSION_START_FAILED',
+        authorization: 'Bearer api-secret',
+      }),
+    )
+    await harness.controller.saveTask(task())
+    await harness.controller.start()
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(async () =>
+      expect(await harness.controller.getState()).toMatchObject({
+        status: 'observing',
+        error: 'VERIFICATION_FAILED',
+      }),
+    )
+
+    const diagnostic = harness.storage.session?.zkTlsDiagnostic
+    expect(diagnostic?.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stage: 'proof-session-failed',
+          status: 'failed',
+          error: expect.objectContaining({
+            name: 'Error',
+            message: 'session bootstrap unavailable',
+            code: 'SESSION_START_FAILED',
+            authorization: { present: true, length: 17 },
+          }),
+        }),
+      ]),
+    )
+    const durable = JSON.stringify(harness.storage.session)
+    expect(durable).not.toContain('api-secret')
+    expect(durable).not.toContain('ticket-value')
+    expect(durable).not.toContain('mac-key')
+  })
+
   it('runs one proof at a time while preserving other matched rules in the queue', async () => {
     let finishFirst:
       | ((value: Awaited<ReturnType<typeof harness.proveZkTls>>) => void)
@@ -1169,10 +1236,10 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     await harness.controller.handleEvidence(sender(), 'session-12345678', [
       match('rule-a'),
     ])
-    await flushAsync()
-
-    expect(harness.startZkTls).toHaveBeenCalledWith(
-      expect.objectContaining({ ticketKind }),
+    await vi.waitFor(() =>
+      expect(harness.startZkTls).toHaveBeenCalledWith(
+        expect.objectContaining({ ticketKind }),
+      ),
     )
   })
 

@@ -997,6 +997,12 @@ export class ProductExperienceController {
             })
           }
           if (!added) return false
+          this.appendZkTlsDiagnostic(current, {
+            at: this.dependencies.now(),
+            stage: 'evidence-accepted',
+            status: 'passed',
+            details: { ruleIds: sanitized.map((match) => match.ruleId) },
+          })
           current.error = null
           current.zkTlsFailureCode = null
           return true
@@ -1212,15 +1218,42 @@ export class ProductExperienceController {
 
       let started = reusableZkTlsSession(item, this.dependencies.now())
       if (!started) {
+        if (this.dependencies.diagnosticsEnabled) {
+          const requesting = await this.mutateZkTlsSession(
+            session.sessionId,
+            (current) => {
+              const queued = current.zkTlsQueue.find(
+                (entry) => entry.ruleId === item.ruleId,
+              )
+              if (!queued || queued.status !== 'queued') return false
+              this.appendZkTlsDiagnostic(current, {
+                at: this.dependencies.now(),
+                stage: 'proof-session-requested',
+                status: 'running',
+                details: { ruleId: item.ruleId },
+              })
+              return true
+            },
+          )
+          if (!requesting) return
+          await this.notify()
+        }
         try {
           started = await this.dependencies.startZkTls({
             campaignId: session.campaignId,
             ruleId: item.ruleId,
             ticketKind: session.ticketKind,
           })
-        } catch {
+        } catch (error) {
           this.zkTlsDrainRequested = false
-          await this.resetZkTlsItem(session.sessionId, item.ruleId)
+          await this.resetZkTlsItem(
+            session.sessionId,
+            item.ruleId,
+            'VERIFICATION_FAILED',
+            true,
+            null,
+            error,
+          )
           this.zkTlsDrainRequested = false
           return
         }
@@ -1330,6 +1363,7 @@ export class ProductExperienceController {
     error: ProductExperiencePublicError = 'VERIFICATION_FAILED',
     clearSession = true,
     failureCode: ProductZkTlsFailureCode | null = null,
+    diagnosticError?: unknown,
   ): Promise<void> {
     const reset = await this.mutateZkTlsSession(sessionId, (current) => {
       const item = current.zkTlsQueue.find((entry) => entry.ruleId === ruleId)
@@ -1353,6 +1387,15 @@ export class ProductExperienceController {
         !authorizationRequired && error === 'VERIFICATION_FAILED'
           ? (failureCode ?? 'ZKTLS_UNKNOWN_FAILURE')
           : null
+      if (diagnosticError !== undefined) {
+        this.appendZkTlsDiagnostic(current, {
+          at: this.dependencies.now(),
+          stage: 'proof-session-failed',
+          status: 'failed',
+          details: { ruleId },
+          error: diagnosticError,
+        })
+      }
     })
     if (reset) await this.notify()
   }

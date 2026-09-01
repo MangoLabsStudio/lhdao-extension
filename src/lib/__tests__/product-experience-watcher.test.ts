@@ -76,13 +76,6 @@ describe('dispatchProductExperienceEvidence', () => {
     expect(sendMessage.mock.calls).toEqual([
       [
         {
-          type: 'product-experience-evidence',
-          sessionId: 'session-1',
-          matches,
-        },
-      ],
-      [
-        {
           type: 'product-experience-diagnostic',
           sessionId: 'session-1',
           event: {
@@ -90,6 +83,13 @@ describe('dispatchProductExperienceEvidence', () => {
             stage: 'evidence-sent',
             status: 'passed',
           },
+        },
+      ],
+      [
+        {
+          type: 'product-experience-evidence',
+          sessionId: 'session-1',
+          matches,
         },
       ],
     ])
@@ -101,6 +101,7 @@ describe('dispatchProductExperienceEvidence', () => {
     })
     const sendMessage = vi
       .fn<(message: unknown) => Promise<unknown>>()
+      .mockResolvedValueOnce({ type: 'product-experience-ack' })
       .mockRejectedValueOnce(failure)
       .mockResolvedValueOnce({ type: 'product-experience-ack' })
 
