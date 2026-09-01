@@ -16,6 +16,30 @@ export interface ProductRuleEvaluationOptions {
   allowLoopbackHttp?: boolean
   evaluationMode?: 'STRICT' | 'SELECTOR_ONLY'
   now?: () => Date
+  onDiagnostic?(result: ProductRuleEvaluationDiagnostic): void
+}
+
+export interface ProductRuleEvaluationDiagnostic {
+  ruleId: string
+  title: string
+  selector: string
+  urlMatched: boolean
+  selectorValid: boolean
+  matchedElementCount: number
+  visibleElementCount: number
+  conditionType: ProductExperienceCondition['type']
+  conditionMatched: boolean
+}
+
+function reportDiagnostic(
+  options: ProductRuleEvaluationOptions,
+  result: ProductRuleEvaluationDiagnostic,
+): void {
+  try {
+    options.onDiagnostic?.(result)
+  } catch {
+    // Diagnostics never affect rule evaluation.
+  }
 }
 
 function isLoopbackHttp(rawUrl: string, url: URL): boolean {
@@ -210,16 +234,31 @@ export async function evaluateProductRule(
   const allowLoopbackHttp = options.allowLoopbackHttp ?? true
   const pattern = parseRuleUrlPattern(rule.urlPattern, allowLoopbackHttp)
   const pageUrl = parsePageUrl(href, allowLoopbackHttp)
-  if (!pattern || !pageUrl) return null
-  if (pattern.origin !== pageUrl.origin) return null
-  if (!pathnameMatchesGlob(pattern.pathname, pageUrl.pathname)) return null
-  if (
-    typeof rule.id !== 'string' ||
-    rule.id.length === 0 ||
-    typeof rule.selector !== 'string' ||
-    rule.selector.length === 0 ||
-    rule.selector.length > MAX_SELECTOR_LENGTH
-  ) {
+  const ruleShapeValid =
+    typeof rule.id !== 'string' || rule.id.length === 0
+      ? false
+      : typeof rule.selector === 'string' &&
+        rule.selector.length > 0 &&
+        rule.selector.length <= MAX_SELECTOR_LENGTH
+  const urlMatched = Boolean(
+    pattern &&
+      pageUrl &&
+      pattern.origin === pageUrl.origin &&
+      pathnameMatchesGlob(pattern.pathname, pageUrl.pathname),
+  )
+  const emptyDiagnostic = {
+    ruleId: typeof rule.id === 'string' ? rule.id : '',
+    title: typeof rule.title === 'string' ? rule.title : '',
+    selector: typeof rule.selector === 'string' ? rule.selector : '',
+    urlMatched,
+    selectorValid: ruleShapeValid,
+    matchedElementCount: 0,
+    visibleElementCount: 0,
+    conditionType: rule.condition.type,
+    conditionMatched: false,
+  } satisfies ProductRuleEvaluationDiagnostic
+  if (!urlMatched || !ruleShapeValid || !pageUrl) {
+    reportDiagnostic(options, emptyDiagnostic)
     return null
   }
 
@@ -227,18 +266,23 @@ export async function evaluateProductRule(
   try {
     elements = [...ownerDocument.querySelectorAll(rule.selector)]
   } catch {
+    reportDiagnostic(options, { ...emptyDiagnostic, selectorValid: false })
     return null
   }
   const visibleElements = elements.filter((element) =>
     isVisible(element, ownerDocument),
   )
-  if (
-    options.evaluationMode !== 'SELECTOR_ONLY' &&
-    !conditionMatches(rule.condition, visibleElements)
-  ) {
-    return null
-  }
-  if (visibleElements.length === 0) return null
+  const conditionMatched =
+    options.evaluationMode === 'SELECTOR_ONLY'
+      ? visibleElements.length > 0
+      : conditionMatches(rule.condition, visibleElements)
+  reportDiagnostic(options, {
+    ...emptyDiagnostic,
+    matchedElementCount: elements.length,
+    visibleElementCount: visibleElements.length,
+    conditionMatched,
+  })
+  if (!conditionMatched || visibleElements.length === 0) return null
 
   return {
     ruleId: rule.id,

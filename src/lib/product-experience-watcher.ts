@@ -2,6 +2,7 @@ import type {
   ProductExperienceRule,
   ProductRuleMatch,
 } from '@/types/product-experience'
+import type { ProductRuleEvaluationDiagnostic } from './product-experience-rules'
 import { evaluateProductRule } from './product-experience-rules'
 
 const MUTATION_DEBOUNCE_MS = 300
@@ -19,6 +20,7 @@ export interface ProductExperienceWatcherOptions {
   evaluationMode?: 'STRICT' | 'SELECTOR_ONLY'
   onEvidence: (matches: ProductRuleMatch[]) => void
   onStatus?: (status: ProductExperienceWatcherStatus) => void
+  onDiagnostic?: (result: ProductRuleEvaluationDiagnostic) => void
 }
 
 export interface ProductExperienceWatcher {
@@ -210,6 +212,7 @@ export function startProductExperienceWatcher(
         evaluateProductRule(rule, document, href, {
           allowLoopbackHttp: true,
           evaluationMode: options.evaluationMode,
+          onDiagnostic: options.onDiagnostic,
         }),
       ),
     )

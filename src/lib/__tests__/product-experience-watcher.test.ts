@@ -88,6 +88,29 @@ describe('startProductExperienceWatcher', () => {
     watcher.stop()
   })
 
+  it('forwards safe rule evaluation diagnostics before evidence exists', async () => {
+    const onDiagnostic = vi.fn()
+    const watcher = startProductExperienceWatcher({
+      rules: [rule('deposit', '[data-deposit-row]')],
+      allowedOrigins: [CLIENT_ORIGIN],
+      completionMode: 'ALL',
+      onEvidence: vi.fn(),
+      onDiagnostic,
+    })
+
+    await vi.waitFor(() =>
+      expect(onDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ruleId: 'deposit',
+          selector: '[data-deposit-row]',
+          matchedElementCount: 0,
+          conditionMatched: false,
+        }),
+      ),
+    )
+    watcher.stop()
+  })
+
   it('debounces DOM mutations for 300ms and coalesces repeated changes', async () => {
     document.body.innerHTML =
       '<div id="ready" data-state="pending" style="opacity: 1"></div>'

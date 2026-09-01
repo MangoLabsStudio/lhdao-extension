@@ -144,7 +144,7 @@ function transportError(uncertain: boolean): Error & { uncertain: boolean } {
   })
 }
 
-function createHarness() {
+function createHarness(diagnosticsEnabled = false) {
   const storage = new MemoryProductStorage()
   const activeTab: { value: { id: number; url: string } | null } = {
     value: { id: 7, url: `${CLIENT_ORIGIN}/app/start` },
@@ -188,6 +188,7 @@ function createHarness() {
     ) => 'signed-proof',
   )
   const dependencies: ProductExperienceControllerDependencies = {
+    diagnosticsEnabled,
     storage,
     getActiveTab: vi.fn(async () => activeTab.value),
     inject,
@@ -263,6 +264,68 @@ describe('ProductExperienceController authorization and lifecycle', () => {
     })
     expect(harness.mintParticipant).toHaveBeenCalledTimes(1)
     expect(harness.inject).toHaveBeenCalledWith(7)
+  })
+
+  it('records the click and injection before waiting for page evidence', async () => {
+    harness = createHarness(true)
+    await harness.controller.saveTask(task())
+    harness.mintParticipant.mockResolvedValueOnce(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+
+    await harness.controller.start()
+    await harness.controller.bootstrap(sender())
+    await harness.controller.ready(sender(), 'session-12345678')
+    const state = await harness.controller.handleDiagnostic(
+      sender(),
+      'session-12345678',
+      {
+        at: NOW,
+        stage: 'rule-evaluated',
+        status: 'running',
+        details: {
+          ruleId: 'rule-a',
+          selector: '[data-step="a"]',
+          matchedElementCount: 0,
+        },
+      },
+    )
+
+    expect(state.zkTlsDiagnostic?.events.map((event) => event.stage)).toEqual([
+      'start-request-received',
+      'page-watcher-injected',
+      'watcher-bootstrapped',
+      'watcher-ready',
+      'rule-evaluated',
+    ])
+    expect(harness.storage.session?.zkTlsDiagnostic).toEqual(
+      state.zkTlsDiagnostic,
+    )
+  })
+
+  it('ignores page diagnostics from the wrong tab', async () => {
+    harness = createHarness(true)
+    await harness.controller.saveTask(task())
+    harness.mintParticipant.mockResolvedValueOnce(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    await harness.controller.start()
+
+    await harness.controller.handleDiagnostic(
+      sender({ tabId: 99 }),
+      'session-12345678',
+      {
+        at: NOW,
+        stage: 'rule-evaluated',
+        status: 'passed',
+      },
+    )
+
+    expect(
+      harness.storage.session?.zkTlsDiagnostic?.events.map(
+        (event) => event.stage,
+      ),
+    ).not.toContain('rule-evaluated')
   })
 
   it.each([

@@ -112,6 +112,7 @@ import {
   type UserProfile,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
+import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
 import {
   handleZkTlsProof,
   proveZkTlsSession,
@@ -363,6 +364,7 @@ export function productZkTlsStartGqlOptions(
 
 function createProductExperienceController(): ProductExperienceController {
   return new ProductExperienceController({
+    diagnosticsEnabled: ZKTLS_PROFILE.debug,
     storage: productExperienceStore,
     async getActiveTab() {
       const [tab] = await chrome.tabs.query({
@@ -543,6 +545,14 @@ export default defineBackground(() => {
       await productExperienceController.ready(
         productRuntimeSender(sender),
         req.sessionId,
+      )
+      return { type: 'product-experience-ack' }
+    }
+    if (req.type === 'product-experience-diagnostic') {
+      await productExperienceController.handleDiagnostic(
+        productRuntimeSender(sender),
+        req.sessionId,
+        req.event,
       )
       return { type: 'product-experience-ack' }
     }

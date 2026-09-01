@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   ProductExperienceCondition,
   ProductExperienceRule,
@@ -61,6 +61,34 @@ function hide(
 describe('evaluateProductRule', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
+  })
+
+  it('reports why a selector did not satisfy a rule without exposing page text', async () => {
+    const onDiagnostic = vi.fn()
+
+    await expect(
+      evaluateProductRule(
+        rule({ type: 'ELEMENT_EXISTS' }, { selector: '[data-deposit-row]' }),
+        document,
+        CLIENT_URL,
+        { onDiagnostic },
+      ),
+    ).resolves.toBeNull()
+
+    expect(onDiagnostic).toHaveBeenCalledWith({
+      ruleId: 'onboarding-done',
+      title: 'Complete onboarding',
+      selector: '[data-deposit-row]',
+      urlMatched: true,
+      selectorValid: true,
+      matchedElementCount: 0,
+      visibleElementCount: 0,
+      conditionType: 'ELEMENT_EXISTS',
+      conditionMatched: false,
+    })
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toContain(
+      'Welcome, setup complete',
+    )
   })
 
   it.each([

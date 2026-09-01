@@ -4,6 +4,8 @@ import type {
   ProductExperienceTicket,
   ProductRuleMatch,
   ProductTicketKind,
+  ProductZkTlsDiagnostic,
+  ProductZkTlsDiagnosticEvent,
   ProductZkTlsRuleProgress,
   ProductZkTlsSession,
 } from '../types/product-experience'
@@ -17,6 +19,10 @@ import type {
   SubmitProductExperienceProofResult,
   SubmitProductExperienceProofVariables,
 } from './queries'
+import {
+  appendProductZkTlsDiagnostic,
+  createProductZkTlsDiagnostic,
+} from './zktls/debug'
 import type { ZkTlsRunRequest, ZkTlsRunResult } from './zktls/runtime'
 
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
@@ -64,6 +70,7 @@ export interface ProductExperienceControllerState {
   error: ProductExperiencePublicError | null
   zkTlsFailureCode?: ProductZkTlsFailureCode | null
   zkTlsProgress?: ProductZkTlsRuleProgress[]
+  zkTlsDiagnostic?: ProductZkTlsDiagnostic
 }
 
 export interface ProductExperienceSaveResult {
@@ -109,6 +116,7 @@ export interface ProductExperienceSession {
   zkTlsQueue: ProductZkTlsQueueItem[]
   verifiedRuleIds: string[]
   zkTlsProgress: ProductZkTlsRuleProgress[]
+  zkTlsDiagnostic?: ProductZkTlsDiagnostic
   status: 'observing' | 'reauthorize' | 'submitting'
   error: ProductExperiencePublicError | null
   zkTlsFailureCode?: ProductZkTlsFailureCode | null
@@ -123,6 +131,7 @@ export interface ProductExperienceControllerStorage {
 }
 
 export interface ProductExperienceControllerDependencies {
+  diagnosticsEnabled: boolean
   storage: ProductExperienceControllerStorage
   getActiveTab(): Promise<{ id: number; url: string } | null>
   inject(tabId: number): Promise<void>
@@ -347,6 +356,32 @@ export class ProductExperienceController {
     private readonly dependencies: ProductExperienceControllerDependencies,
   ) {}
 
+  private beginZkTlsDiagnostic(session: ProductExperienceSession): void {
+    if (!this.dependencies.diagnosticsEnabled || !isZkTlsSession(session))
+      return
+    const now = this.dependencies.now()
+    session.zkTlsDiagnostic = appendProductZkTlsDiagnostic(
+      createProductZkTlsDiagnostic(this.dependencies.randomSessionId(), now),
+      {
+        at: now,
+        stage: 'start-request-received',
+        status: 'passed',
+      },
+    )
+  }
+
+  private appendZkTlsDiagnostic(
+    session: ProductExperienceSession,
+    event: ProductZkTlsDiagnosticEvent,
+  ): void {
+    if (!this.dependencies.diagnosticsEnabled || !session.zkTlsDiagnostic)
+      return
+    session.zkTlsDiagnostic = appendProductZkTlsDiagnostic(
+      session.zkTlsDiagnostic,
+      event,
+    )
+  }
+
   async saveTask(
     task: ProductExperienceTaskRef,
   ): Promise<ProductExperienceSaveResult> {
@@ -470,6 +505,7 @@ export class ProductExperienceController {
         existing.currentOriginAllowed = true
         existing.status = awaitingBackend ? 'submitting' : 'observing'
         if (!awaitingBackend) existing.error = null
+        if (!awaitingBackend) this.beginZkTlsDiagnostic(existing)
         await this.dependencies.storage.setSession(existing)
         if (this.generation !== sessionGeneration) {
           return this.getStateWithoutRetry()
@@ -567,6 +603,7 @@ export class ProductExperienceController {
             }
           : {}),
       }
+      this.beginZkTlsDiagnostic(session)
       const sessionGeneration = this.advanceGeneration()
       await this.dependencies.storage.setSession(session)
       if (this.generation !== sessionGeneration) {
@@ -600,6 +637,12 @@ export class ProductExperienceController {
       await this.markReauthorizeForSender(session, sender)
       return { ok: false, error: 'INVALID_SENDER' }
     }
+    this.appendZkTlsDiagnostic(session, {
+      at: this.dependencies.now(),
+      stage: 'watcher-bootstrapped',
+      status: 'passed',
+    })
+    await this.dependencies.storage.setSession(session)
     return {
       ok: true,
       sessionId: session.sessionId,
@@ -658,12 +701,47 @@ export class ProductExperienceController {
     session.status = 'observing'
     session.error = null
     session.zkTlsFailureCode = null
+    this.appendZkTlsDiagnostic(session, {
+      at: this.dependencies.now(),
+      stage: 'watcher-ready',
+      status: 'passed',
+    })
     await this.dependencies.storage.setSession(session)
     if (this.generation !== sessionGeneration) {
       return this.getStateWithoutRetry()
     }
     await this.notify()
     return this.stateFromSession(session)
+  }
+
+  async handleDiagnostic(
+    sender: ProductExperienceRuntimeSender,
+    sessionId: string,
+    event: ProductZkTlsDiagnosticEvent,
+  ): Promise<ProductExperienceControllerState> {
+    if (
+      !this.dependencies.diagnosticsEnabled ||
+      event.stage !== 'rule-evaluated' ||
+      !Number.isFinite(event.at) ||
+      !['running', 'passed', 'failed'].includes(event.status)
+    )
+      return this.getState()
+    const stored = await this.dependencies.storage.getSession()
+    if (
+      !stored ||
+      stored.sessionId !== sessionId ||
+      !this.senderMatches(sender, stored)
+    )
+      return this.getState()
+    const next = await this.mutateZkTlsSession(sessionId, (current) => {
+      this.appendZkTlsDiagnostic(current, {
+        ...event,
+        at: this.dependencies.now(),
+      })
+    })
+    if (!next) return this.getState()
+    await this.notify()
+    return this.stateFromSession(next)
   }
 
   async handleEvidence(
@@ -1650,11 +1728,17 @@ export class ProductExperienceController {
       if (this.generation !== expectedGeneration) {
         return this.getStateWithoutRetry()
       }
+      this.appendZkTlsDiagnostic(session, {
+        at: this.dependencies.now(),
+        stage: 'page-watcher-injected',
+        status: 'passed',
+      })
+      await this.dependencies.storage.setSession(session)
       await this.notify()
       return this.generation === expectedGeneration
         ? this.stateFromSession(session)
         : this.getStateWithoutRetry()
-    } catch {
+    } catch (error) {
       if (this.generation !== expectedGeneration) {
         return this.getStateWithoutRetry()
       }
@@ -1663,6 +1747,12 @@ export class ProductExperienceController {
         session.status = 'reauthorize'
         session.error = 'AUTHORIZATION_REQUIRED'
         session.zkTlsFailureCode = null
+        this.appendZkTlsDiagnostic(session, {
+          at: this.dependencies.now(),
+          stage: 'page-watcher-injected',
+          status: 'failed',
+          error,
+        })
         await this.dependencies.storage.setSession(session)
         if (this.generation !== sessionGeneration) {
           return this.getStateWithoutRetry()
@@ -1706,6 +1796,9 @@ export class ProductExperienceController {
         : null,
       ...(isZkTlsSession(session)
         ? { zkTlsProgress: clone(session.zkTlsProgress) }
+        : {}),
+      ...(session.zkTlsDiagnostic
+        ? { zkTlsDiagnostic: clone(session.zkTlsDiagnostic) }
         : {}),
     }
   }

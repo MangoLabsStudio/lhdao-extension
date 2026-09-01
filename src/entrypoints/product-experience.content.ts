@@ -167,6 +167,20 @@ export default defineContentScript({
           )
           .catch(lifecycle.stop)
       },
+      onDiagnostic(details) {
+        void chrome.runtime
+          .sendMessage({
+            type: 'product-experience-diagnostic',
+            sessionId: bootstrap.sessionId,
+            event: {
+              at: Date.now(),
+              stage: 'rule-evaluated',
+              status: details.conditionMatched ? 'passed' : 'running',
+              details,
+            },
+          })
+          .catch(lifecycle.stop)
+      },
       onStatus() {
         // The empty, credential-free evidence message lets the background
         // validate the sender's new origin and move the session to reauthorize.

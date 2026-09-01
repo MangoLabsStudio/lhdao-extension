@@ -28,6 +28,7 @@ import type {
   ProductExperienceRule,
   ProductExperienceTaskRef,
   ProductRuleMatch,
+  ProductZkTlsDiagnosticEvent,
 } from './product-experience'
 
 // ── Requests (CS → BG, 偶尔反向) ─────────────────────────────────────
@@ -63,6 +64,11 @@ export type MsgRequest =
   | { type: 'start-product-experience' }
   | { type: 'product-experience-bootstrap' }
   | { type: 'product-experience-ready'; sessionId: string }
+  | {
+      type: 'product-experience-diagnostic'
+      sessionId: string
+      event: ProductZkTlsDiagnosticEvent
+    }
   | {
       type: 'product-experience-evidence'
       sessionId: string
