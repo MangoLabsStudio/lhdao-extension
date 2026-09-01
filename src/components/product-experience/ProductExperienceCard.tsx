@@ -3,6 +3,7 @@ import type {
   ProductZkTlsRuleProgress,
   ProductZkTlsScalar,
 } from '@/types/product-experience'
+import { ProductExperienceDiagnostics } from './ProductExperienceDiagnostics'
 
 interface ProductExperienceCardProps {
   state: ProductExperienceControllerState
@@ -103,7 +104,12 @@ function projectCopy(
   state: ProductExperienceControllerState,
   busy: boolean,
 ): { label: string; detail: string; tone: string } {
-  if (busy) return STATUS_COPY.authorizing
+  if (busy)
+    return {
+      label: '正在检查页面',
+      detail: '正在注入页面监听并检查规则，请稍候。',
+      tone: 'bg-amber-300',
+    }
   if (state.status === 'verified') return STATUS_COPY.verified
   if (
     state.error === 'ORIGIN_NOT_ALLOWED' ||
@@ -322,6 +328,10 @@ export function ProductExperienceCard({
               )
             })}
           </ul>
+        )}
+
+        {state.zkTlsDiagnostic && (
+          <ProductExperienceDiagnostics diagnostic={state.zkTlsDiagnostic} />
         )}
 
         {action && (

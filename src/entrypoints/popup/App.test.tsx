@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing'
+import { ProductExperienceCard } from '@/components/product-experience/ProductExperienceCard'
 import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
 import type { MsgResponse } from '@/types/messages'
 import { App } from './App'
@@ -218,6 +219,120 @@ describe('product experience popup', () => {
           request.type === 'start-product-experience',
       ),
     ).toEqual([{ type: 'start-product-experience' }])
+  })
+
+  it('shows immediate page-check feedback while the start action is running', async () => {
+    const container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <ProductExperienceCard
+          state={productState('observing')}
+          busy
+          onStart={() => undefined}
+        />,
+      ),
+    )
+
+    expect(container.textContent).toContain('正在检查页面')
+    expect(container.textContent).toContain('正在注入页面监听并检查规则')
+  })
+
+  it('shows captured proof stages and exact safe failure details', async () => {
+    const { container } = await renderPopup(
+      productState('observing', {
+        error: 'VERIFICATION_FAILED',
+        zkTlsFailureCode: 'PROVER_FAILED',
+        zkTlsProgress: [],
+        zkTlsDiagnostic: {
+          correlationId: 'proof-20260901',
+          startedAt: 100,
+          updatedAt: 300,
+          events: [
+            {
+              at: 100,
+              stage: 'rule-evaluated',
+              status: 'passed',
+              details: {
+                selector: '#portfolio',
+                matchedElementCount: 1,
+                conditionMatched: true,
+              },
+            },
+            {
+              at: 200,
+              stage: 'request-captured',
+              status: 'passed',
+              details: {
+                method: 'GET',
+                targetOrigin: 'https://archive.prod.nado.xyz',
+                request: { path: '/v1/history?account=0x1234' },
+                responseContentEncoding: 'gzip',
+              },
+            },
+            {
+              at: 300,
+              stage: 'verifier-session-registered:failed',
+              status: 'failed',
+              error: {
+                name: 'TypeError',
+                message: 'WebSocket connection refused',
+                code: 'ERR_CONNECTION_REFUSED',
+              },
+            },
+          ],
+        },
+      }),
+    )
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('诊断记录')
+      expect(container.textContent).toContain('request-captured')
+      expect(container.textContent).toContain('/v1/history?account=0x1234')
+      expect(container.textContent).toContain('gzip')
+      expect(container.textContent).toContain('WebSocket connection refused')
+      expect(container.textContent).toContain('ERR_CONNECTION_REFUSED')
+    })
+    expect(
+      container.querySelector<HTMLDetailsElement>(
+        '[data-testid="zktls-diagnostics"]',
+      )?.open,
+    ).toBe(true)
+  })
+
+  it('copies the complete safe diagnostic record', async () => {
+    const writeText = vi.fn(async (_value: string) => undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const { container } = await renderPopup(
+      productState('observing', {
+        zkTlsProgress: [],
+        zkTlsDiagnostic: {
+          correlationId: 'copy-proof-1',
+          startedAt: 100,
+          updatedAt: 100,
+          events: [
+            {
+              at: 100,
+              stage: 'request-captured',
+              status: 'passed',
+              details: { path: '/v1/history' },
+            },
+          ],
+        },
+      }),
+    )
+
+    await act(async () => findButton(container, '复制诊断').click())
+
+    expect(writeText).toHaveBeenCalledTimes(1)
+    expect(writeText.mock.calls[0]?.[0]).toContain('copy-proof-1')
+    expect(writeText.mock.calls[0]?.[0]).toContain('request-captured')
+    expect(writeText.mock.calls[0]?.[0]).toContain('/v1/history')
+    expect(container.textContent).toContain('已复制')
   })
 
   it('refreshes from the controller broadcast and retains safe progress on reauthorization', async () => {
