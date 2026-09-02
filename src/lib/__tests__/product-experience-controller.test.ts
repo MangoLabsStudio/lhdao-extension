@@ -1585,7 +1585,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     await vi.waitFor(() =>
       expect(harness.storage.session?.zkTlsQueue[0]).toEqual({
         ruleId: 'rule-a',
-        status: 'queued',
+        status: 'paused',
         sessionId: 'failed-session',
         connectorId: 'failed-connector',
         expiresAt: '2026-07-13T10:10:00.000Z',
@@ -1709,7 +1709,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     expect(harness.storage.session?.zkTlsQueue).toEqual([
       {
         ruleId: 'rule-a',
-        status: 'queued',
+        status: 'paused',
         sessionId: failureStage === 'start' ? null : 'zktls-session-1',
         connectorId: failureStage === 'start' ? null : 'trusted-connector-1',
         expiresAt: failureStage === 'start' ? null : '2026-07-13T10:10:00.000Z',
@@ -1724,7 +1724,98 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     ])
     expect(await harness.controller.getState()).toMatchObject({
       status: 'submitting',
-      error: null,
+      error: 'VERIFICATION_FAILED',
+    })
+  })
+
+  it('keeps a failed rule paused across a controller restart until matching evidence returns', async () => {
+    harness.proveZkTls.mockImplementationOnce(async (input) => ({
+      type: 'zktls-prove-result',
+      correlationId: input.correlationId,
+      status: 'error',
+      code: 'REQUEST_NOT_CAPTURED',
+    }))
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('paused'),
+    )
+
+    const restarted = new ProductExperienceController(harness.dependencies)
+    await restarted.resumePendingSubmit()
+    await flushAsync()
+
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('paused')
+
+    await restarted.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+    expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted')
+  })
+
+  it('returns to a retryable observing state after another submitted rule verifies', async () => {
+    harness.proveZkTls.mockImplementationOnce(async (input) => ({
+      type: 'zktls-prove-result',
+      correlationId: input.correlationId,
+      status: 'error',
+      code: 'REQUEST_NOT_CAPTURED',
+    }))
+    harness.readZkTlsProgress.mockResolvedValueOnce([
+      {
+        ruleId: 'rule-a',
+        title: 'First step',
+        status: 'PENDING',
+        current: null,
+        target: true,
+        unit: null,
+      },
+      {
+        ruleId: 'rule-b',
+        title: 'Second step',
+        status: 'VERIFIED',
+        current: true,
+        target: true,
+        unit: null,
+      },
+    ])
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('paused'),
+    )
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-b'),
+    ])
+    await vi.waitFor(() =>
+      expect(
+        harness.storage.session?.zkTlsQueue.find(
+          (item) => item.ruleId === 'rule-b',
+        )?.status,
+      ).toBe('submitted'),
+    )
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushAsync()
+
+    expect(harness.storage.session).toMatchObject({
+      status: 'observing',
+      error: 'VERIFICATION_FAILED',
+      verifiedRuleIds: ['rule-b'],
+      zkTlsQueue: [
+        expect.objectContaining({ ruleId: 'rule-a', status: 'paused' }),
+      ],
+    })
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'observing',
+      error: 'VERIFICATION_FAILED',
+      matchedRuleIds: ['rule-b'],
     })
   })
 
@@ -1749,7 +1840,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
       expect(harness.storage.session?.zkTlsQueue).toEqual([
         {
           ruleId: 'rule-a',
-          status: 'queued',
+          status: 'paused',
           sessionId: clearsSession ? null : 'zktls-session-1',
           connectorId: clearsSession ? null : 'trusted-connector-1',
           expiresAt: clearsSession ? null : '2026-07-13T10:10:00.000Z',
@@ -2279,6 +2370,59 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     await flushAsync()
     await flushAsync()
 
+    await harness.controller.handleEvidence(sender(), 'session-replacement', [
+      match('rule-b'),
+    ])
+    for (let index = 0; index < 10; index += 1) await flushAsync()
+
+    expect(harness.startZkTls).toHaveBeenCalledTimes(2)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(2)
+    expect(harness.storage.session).toMatchObject({
+      sessionId: 'session-replacement',
+      zkTlsQueue: [
+        expect.objectContaining({ ruleId: 'rule-a', status: 'proving' }),
+        expect.objectContaining({ ruleId: 'rule-b', status: 'queued' }),
+      ],
+    })
+  })
+
+  it('does not let a slow stale start drain overwrite the replacement flight', async () => {
+    let finishInject: (() => void) | undefined
+    harness.proveZkTls
+      .mockImplementationOnce(async (input) => ({
+        type: 'zktls-prove-result',
+        correlationId: input.correlationId,
+        status: 'submitted',
+      }))
+      .mockImplementationOnce(() => new Promise(() => undefined))
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted'),
+    )
+
+    harness.inject.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishInject = () => resolve(undefined)
+        }),
+    )
+    const staleStart = harness.controller.start()
+    await vi.waitFor(() => expect(harness.inject).toHaveBeenCalledTimes(2))
+
+    harness.randomSessionId.mockReturnValue('session-replacement')
+    await harness.controller.saveTask(replacementTask())
+    await harness.controller.start()
+    await harness.controller.handleEvidence(sender(), 'session-replacement', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+
+    finishInject?.()
+    await staleStart
+    await flushAsync()
     await harness.controller.handleEvidence(sender(), 'session-replacement', [
       match('rule-b'),
     ])

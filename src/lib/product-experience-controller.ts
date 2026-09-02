@@ -87,7 +87,7 @@ export interface ProductExperienceRuntimeSender {
 
 export type ProductZkTlsQueueItem = {
   ruleId: string
-  status: 'queued' | 'proving' | 'submitted'
+  status: 'queued' | 'paused' | 'proving' | 'submitted'
   sessionId: string | null
   connectorId: string | null
   expiresAt: string | null
@@ -349,7 +349,6 @@ export class ProductExperienceController {
   private submitInFlight: ProductExperienceSubmitFlight | null = null
   private zkTlsFlight: ProductExperienceZkTlsFlight | null = null
   private readonly exhaustedZkTlsPolls = new Set<string>()
-  private readonly pausedZkTlsRules = new Set<string>()
   private zkTlsMutationQueue: Promise<void> = Promise.resolve()
   private evidenceQueue: Promise<void> = Promise.resolve()
   private generation = 0
@@ -964,7 +963,6 @@ export class ProductExperienceController {
     if (isZkTlsSession(session)) {
       let added = false
       let rearmedPollKey: string | null = null
-      const rearmedPausedRuleKeys = new Set<string>()
       const queued = await this.mutateZkTlsSession(
         session.sessionId,
         (current) => {
@@ -975,6 +973,11 @@ export class ProductExperienceController {
               (item) => item.ruleId === evidence.ruleId,
             )
             if (existing) {
+              if (existing.status === 'paused') {
+                existing.status = 'queued'
+                added = true
+                continue
+              }
               const pollKey = this.zkTlsPollKey(
                 current.sessionId,
                 evidence.ruleId,
@@ -989,12 +992,6 @@ export class ProductExperienceController {
                   existing.connectorId = null
                   existing.expiresAt = null
                   rearmedPollKey = pollKey
-                }
-                if (
-                  existing.status === 'queued' &&
-                  this.pausedZkTlsRules.has(pollKey)
-                ) {
-                  rearmedPausedRuleKeys.add(pollKey)
                 }
                 added = true
               }
@@ -1024,17 +1021,16 @@ export class ProductExperienceController {
               details: { ruleIds: sanitized.map((match) => match.ruleId) },
             })
           }
-          current.error = null
-          current.zkTlsFailureCode = null
+          if (!current.zkTlsQueue.some((item) => item.status === 'paused')) {
+            current.error = null
+            current.zkTlsFailureCode = null
+          }
           return true
         },
       )
       if (!queued) return this.getStateWithoutRetry()
       if (!added) return this.stateFromSession(queued)
       if (rearmedPollKey) this.exhaustedZkTlsPolls.delete(rearmedPollKey)
-      for (const ruleKey of rearmedPausedRuleKeys) {
-        this.pausedZkTlsRules.delete(ruleKey)
-      }
       await this.notify()
       void this.drainZkTlsQueue(queued.sessionId, true)
       return this.stateFromSession(queued)
@@ -1172,21 +1168,25 @@ export class ProductExperienceController {
   ): Promise<void> {
     const active = this.zkTlsFlight
     if (active?.sessionId === sessionId) await active.promise
-    const session = await this.dependencies.storage.getSession()
-    if (!isZkTlsSession(session) || session.sessionId !== sessionId) return
+    const session = await this.mutateZkTlsSession(sessionId, (current) => {
+      let resumed = false
+      for (const item of current.zkTlsQueue) {
+        if (item.status !== 'paused') continue
+        item.status = 'queued'
+        resumed = true
+      }
+      if (!resumed) return false
+      current.error = null
+      current.zkTlsFailureCode = null
+      return true
+    })
+    if (!session) return
     const current = this.zkTlsFlight
     if (current && current.sessionId !== sessionId) return
-    for (const item of session.zkTlsQueue) {
-      if (item.status === 'queued') {
-        this.pausedZkTlsRules.delete(
-          this.zkTlsPollKey(session.sessionId, item.ruleId),
-        )
-      }
-    }
     await this.drainZkTlsQueue(sessionId)
   }
 
-  private drainZkTlsQueue(
+  private async drainZkTlsQueue(
     sessionId: string,
     hasNewQueuedWork = false,
   ): Promise<void> {
@@ -1194,6 +1194,16 @@ export class ProductExperienceController {
     if (active?.sessionId === sessionId) {
       if (hasNewQueuedWork) active.drainRequested = true
       return active.promise
+    }
+    if (active) {
+      const session = await this.dependencies.storage.getSession()
+      if (!isZkTlsSession(session) || session.sessionId !== sessionId) return
+      const current = this.zkTlsFlight
+      if (current?.sessionId === sessionId) {
+        if (hasNewQueuedWork) current.drainRequested = true
+        return current.promise
+      }
+      if (current && current !== active) return
     }
     const flight: ProductExperienceZkTlsFlight = {
       sessionId,
@@ -1224,11 +1234,7 @@ export class ProductExperienceController {
         return
       const item =
         session.zkTlsQueue.find(
-          (entry) =>
-            entry.status !== 'submitted' &&
-            !this.pausedZkTlsRules.has(
-              this.zkTlsPollKey(session.sessionId, entry.ruleId),
-            ),
+          (entry) => entry.status === 'queued' || entry.status === 'proving',
         ) ??
         session.zkTlsQueue.find(
           (entry) =>
@@ -1302,15 +1308,13 @@ export class ProductExperienceController {
             ticketKind: session.ticketKind,
           })
         } catch (error) {
-          this.pausedZkTlsRules.add(
-            this.zkTlsPollKey(session.sessionId, item.ruleId),
-          )
           await this.resetZkTlsItem(
             session.sessionId,
             item.ruleId,
             'VERIFICATION_FAILED',
             true,
             null,
+            'paused',
             error,
           )
           return
@@ -1329,8 +1333,10 @@ export class ProductExperienceController {
           queued.connectorId = started.connectorId
           queued.expiresAt = started.expiresAt
           current.status = 'submitting'
-          current.error = null
-          current.zkTlsFailureCode = null
+          if (!current.zkTlsQueue.some((item) => item.status === 'paused')) {
+            current.error = null
+            current.zkTlsFailureCode = null
+          }
         },
       )
       const provingItem = proving?.zkTlsQueue.find(
@@ -1358,23 +1364,18 @@ export class ProductExperienceController {
           },
         })
       } catch {
-        this.pausedZkTlsRules.add(
-          this.zkTlsPollKey(session.sessionId, item.ruleId),
-        )
         await this.resetZkTlsItem(
           session.sessionId,
           item.ruleId,
           'VERIFICATION_FAILED',
           false,
           'ZKTLS_UNKNOWN_FAILURE',
+          'paused',
         )
         return
       }
 
       if (result.status !== 'submitted') {
-        this.pausedZkTlsRules.add(
-          this.zkTlsPollKey(session.sessionId, item.ruleId),
-        )
         const publicError =
           result.status === 'pending_login' ||
           result.code === 'PERMISSION_DENIED'
@@ -1390,6 +1391,7 @@ export class ProductExperienceController {
           publicError === 'VERIFICATION_FAILED'
             ? safeZkTlsFailureCode(result.code)
             : null,
+          'paused',
         )
         return
       }
@@ -1409,8 +1411,10 @@ export class ProductExperienceController {
           }
           provingEntry.status = 'submitted'
           current.status = 'submitting'
-          current.error = null
-          current.zkTlsFailureCode = null
+          if (!current.zkTlsQueue.some((item) => item.status === 'paused')) {
+            current.error = null
+            current.zkTlsFailureCode = null
+          }
         },
       )
       if (!submitted) return
@@ -1423,6 +1427,7 @@ export class ProductExperienceController {
     error: ProductExperiencePublicError = 'VERIFICATION_FAILED',
     clearSession = true,
     failureCode: ProductZkTlsFailureCode | null = null,
+    queueStatus: 'queued' | 'paused' = 'queued',
     diagnosticError?: unknown,
   ): Promise<void> {
     const reset = await this.mutateZkTlsSession(sessionId, (current) => {
@@ -1432,7 +1437,7 @@ export class ProductExperienceController {
         current.status === 'reauthorize' ||
         !current.currentOriginAllowed ||
         current.error === 'AUTHORIZATION_REQUIRED'
-      item.status = 'queued'
+      item.status = queueStatus
       if (clearSession) {
         item.sessionId = null
         item.connectorId = null
@@ -1528,13 +1533,19 @@ export class ProductExperienceController {
           current.zkTlsQueue = current.zkTlsQueue.filter(
             (item) => item.ruleId !== activeRuleId,
           )
-          if (!authorizationRequired) {
-            current.status = current.zkTlsQueue.some(
-              (item) =>
-                item.status === 'submitted' || item.status === 'proving',
-            )
-              ? 'submitting'
-              : 'observing'
+        }
+        if (!authorizationRequired) {
+          const hasActive = current.zkTlsQueue.some(
+            (item) => item.status === 'submitted' || item.status === 'proving',
+          )
+          const hasPaused = current.zkTlsQueue.some(
+            (item) => item.status === 'paused',
+          )
+          current.status = hasActive ? 'submitting' : 'observing'
+          if (hasPaused) {
+            current.error ??= 'VERIFICATION_FAILED'
+            current.zkTlsFailureCode ??= 'ZKTLS_UNKNOWN_FAILURE'
+          } else {
             current.error = null
             current.zkTlsFailureCode = null
           }
