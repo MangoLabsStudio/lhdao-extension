@@ -177,6 +177,12 @@ interface ProductExperienceSubmitFlight {
   promise: Promise<ProductExperienceControllerState>
 }
 
+interface ProductExperienceZkTlsFlight {
+  sessionId: string
+  drainRequested: boolean
+  promise: Promise<void>
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value)
 }
@@ -341,8 +347,7 @@ export function controllerStateToPublicSource(
 export class ProductExperienceController {
   private lastState: ProductExperienceControllerState | null = null
   private submitInFlight: ProductExperienceSubmitFlight | null = null
-  private zkTlsFlight: Promise<void> | null = null
-  private zkTlsDrainRequested = false
+  private zkTlsFlight: ProductExperienceZkTlsFlight | null = null
   private readonly exhaustedZkTlsPolls = new Set<string>()
   private zkTlsMutationQueue: Promise<void> = Promise.resolve()
   private evidenceQueue: Promise<void> = Promise.resolve()
@@ -516,8 +521,8 @@ export class ProductExperienceController {
           sessionGeneration,
         )
         if (isZkTlsSession(existing) && existing.zkTlsQueue.length > 0) {
-          if (awaitingBackend) void this.drainZkTlsQueue()
-          else void this.drainZkTlsQueueAfterCurrentFlight()
+          if (awaitingBackend) void this.drainZkTlsQueue(existing.sessionId)
+          else void this.drainZkTlsQueueAfterCurrentFlight(existing.sessionId)
         }
         return state
       }
@@ -686,7 +691,7 @@ export class ProductExperienceController {
         return this.getStateWithoutRetry()
       }
       await this.notify()
-      void this.drainZkTlsQueue()
+      void this.drainZkTlsQueue(session.sessionId)
       return this.stateFromSession(session)
     }
     if (
@@ -922,7 +927,7 @@ export class ProductExperienceController {
       },
     )
     if (!resumed) return this.getStateWithoutRetry()
-    void this.drainZkTlsQueue()
+    void this.drainZkTlsQueue(resumed.sessionId)
     return this.stateFromSession(resumed)
   }
 
@@ -1003,6 +1008,14 @@ export class ProductExperienceController {
             status: 'passed',
             details: { ruleIds: sanitized.map((match) => match.ruleId) },
           })
+          if (this.zkTlsFlight?.sessionId === current.sessionId) {
+            this.appendZkTlsDiagnostic(current, {
+              at: this.dependencies.now(),
+              stage: 'proof-queue-waiting',
+              status: 'running',
+              details: { ruleIds: sanitized.map((match) => match.ruleId) },
+            })
+          }
           current.error = null
           current.zkTlsFailureCode = null
           return true
@@ -1012,7 +1025,7 @@ export class ProductExperienceController {
       if (!added) return this.stateFromSession(queued)
       if (rearmedPollKey) this.exhaustedZkTlsPolls.delete(rearmedPollKey)
       await this.notify()
-      void this.drainZkTlsQueue(true)
+      void this.drainZkTlsQueue(queued.sessionId, true)
       return this.stateFromSession(queued)
     }
 
@@ -1143,55 +1156,69 @@ export class ProductExperienceController {
     return result
   }
 
-  private async drainZkTlsQueueAfterCurrentFlight(): Promise<void> {
+  private async drainZkTlsQueueAfterCurrentFlight(
+    sessionId: string,
+  ): Promise<void> {
     const active = this.zkTlsFlight
-    if (active) await active
-    await this.drainZkTlsQueue()
+    if (active?.sessionId === sessionId) await active.promise
+    await this.drainZkTlsQueue(sessionId)
   }
 
-  private drainZkTlsQueue(hasNewQueuedWork = false): Promise<void> {
-    if (this.zkTlsFlight) {
-      if (hasNewQueuedWork) this.zkTlsDrainRequested = true
-      return this.zkTlsFlight
+  private drainZkTlsQueue(
+    sessionId: string,
+    hasNewQueuedWork = false,
+  ): Promise<void> {
+    const active = this.zkTlsFlight
+    if (active?.sessionId === sessionId) {
+      if (hasNewQueuedWork) active.drainRequested = true
+      return active.promise
     }
-    const flight = this.runZkTlsQueue().finally(() => {
+    const flight = {} as ProductExperienceZkTlsFlight
+    flight.sessionId = sessionId
+    flight.drainRequested = false
+    flight.promise = this.runZkTlsQueue(sessionId, flight).finally(() => {
       if (this.zkTlsFlight !== flight) return
       this.zkTlsFlight = null
-      if (this.zkTlsDrainRequested) {
-        this.zkTlsDrainRequested = false
-        void this.drainZkTlsQueue()
-      }
+      if (flight.drainRequested) void this.drainZkTlsQueue(sessionId)
     })
     this.zkTlsFlight = flight
-    return flight
+    return flight.promise
   }
 
-  private async runZkTlsQueue(): Promise<void> {
+  private async runZkTlsQueue(
+    sessionId: string,
+    flight: ProductExperienceZkTlsFlight,
+  ): Promise<void> {
     while (true) {
       const session = await this.dependencies.storage.getSession()
-      if (!isZkTlsSession(session)) return
+      if (!isZkTlsSession(session) || session.sessionId !== sessionId) return
       if (
-        session.zkTlsQueue.some(
-          (entry) => entry.status === 'queued' || entry.status === 'proving',
-        )
-      ) {
-        this.zkTlsDrainRequested = false
-      }
+        session.status === 'reauthorize' ||
+        !session.currentOriginAllowed ||
+        session.error === 'AUTHORIZATION_REQUIRED'
+      )
+        return
       const item =
+        session.zkTlsQueue.find((entry) => entry.status !== 'submitted') ??
         session.zkTlsQueue.find(
           (entry) =>
             entry.status === 'submitted' &&
             !this.exhaustedZkTlsPolls.has(
               this.zkTlsPollKey(session.sessionId, entry.ruleId),
             ),
-        ) ?? session.zkTlsQueue.find((entry) => entry.status !== 'submitted')
+        )
       if (!item) return
 
       if (item.status === 'submitted') {
-        if (!(await this.pollZkTlsProgress(session.sessionId, item.ruleId))) {
+        if (
+          !(await this.pollZkTlsProgress(
+            session.sessionId,
+            item.ruleId,
+            flight,
+          ))
+        ) {
           // One submitted attempt gets one bounded polling lifecycle. New DOM
           // rules remain durable, but they must not restart an exhausted poll.
-          this.zkTlsDrainRequested = false
           return
         }
         continue
@@ -1245,7 +1272,7 @@ export class ProductExperienceController {
             ticketKind: session.ticketKind,
           })
         } catch (error) {
-          this.zkTlsDrainRequested = false
+          flight.drainRequested = false
           await this.resetZkTlsItem(
             session.sessionId,
             item.ruleId,
@@ -1254,7 +1281,6 @@ export class ProductExperienceController {
             null,
             error,
           )
-          this.zkTlsDrainRequested = false
           return
         }
       }
@@ -1300,7 +1326,7 @@ export class ProductExperienceController {
           },
         })
       } catch {
-        this.zkTlsDrainRequested = false
+        flight.drainRequested = false
         await this.resetZkTlsItem(
           session.sessionId,
           item.ruleId,
@@ -1308,12 +1334,11 @@ export class ProductExperienceController {
           false,
           'ZKTLS_UNKNOWN_FAILURE',
         )
-        this.zkTlsDrainRequested = false
         return
       }
 
       if (result.status !== 'submitted') {
-        this.zkTlsDrainRequested = false
+        flight.drainRequested = false
         const publicError =
           result.status === 'pending_login' ||
           result.code === 'PERMISSION_DENIED'
@@ -1330,7 +1355,6 @@ export class ProductExperienceController {
             ? safeZkTlsFailureCode(result.code)
             : null,
         )
-        this.zkTlsDrainRequested = false
         return
       }
 
@@ -1403,11 +1427,16 @@ export class ProductExperienceController {
   private async pollZkTlsProgress(
     sessionId: string,
     activeRuleId: string,
+    flight: ProductExperienceZkTlsFlight,
   ): Promise<boolean> {
     const pollKey = this.zkTlsPollKey(sessionId, activeRuleId)
     this.exhaustedZkTlsPolls.delete(pollKey)
     for (const delayMs of [1_000, 2_000, 4_000, 8_000, 15_000]) {
       await wait(delayMs)
+      if (flight.drainRequested) {
+        this.exhaustedZkTlsPolls.add(pollKey)
+        return false
+      }
       const beforePoll = await this.dependencies.storage.getSession()
       if (!isZkTlsSession(beforePoll) || beforePoll.sessionId !== sessionId) {
         return false
@@ -1494,7 +1523,6 @@ export class ProductExperienceController {
         !updated.currentOriginAllowed ||
         updated.error === 'AUTHORIZATION_REQUIRED'
       ) {
-        this.zkTlsDrainRequested = false
         await this.notify()
         return false
       }
