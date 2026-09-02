@@ -509,7 +509,12 @@ export class ProductExperienceController {
         existing.currentOrigin = origin
         existing.currentOriginAllowed = true
         existing.status = awaitingBackend ? 'submitting' : 'observing'
-        if (!awaitingBackend) existing.error = null
+        const hasPausedFailure =
+          isZkTlsSession(existing) &&
+          existing.zkTlsQueue.some((item) => item.status === 'paused') &&
+          existing.zkTlsFailureCode !== null
+        existing.error = hasPausedFailure ? 'VERIFICATION_FAILED' : null
+        if (!hasPausedFailure) existing.zkTlsFailureCode = null
         if (!awaitingBackend) this.beginZkTlsDiagnostic(existing)
         await this.dependencies.storage.setSession(existing)
         if (this.generation !== sessionGeneration) {
@@ -857,7 +862,12 @@ export class ProductExperienceController {
         : hasVisibleUrl
           ? 'ORIGIN_NOT_ALLOWED'
           : 'AUTHORIZATION_REQUIRED'
-      session.zkTlsFailureCode = null
+      if (
+        !isZkTlsSession(session) ||
+        !session.zkTlsQueue.some((item) => item.status === 'paused')
+      ) {
+        session.zkTlsFailureCode = null
+      }
       await this.dependencies.storage.setSession(session)
       if (this.generation !== sessionGeneration) {
         return this.getStateWithoutRetry()
@@ -1319,6 +1329,7 @@ export class ProductExperienceController {
             'paused',
             error,
           )
+          flight.drainRequested = true
           return
         }
       }
@@ -1374,6 +1385,7 @@ export class ProductExperienceController {
           'ZKTLS_UNKNOWN_FAILURE',
           'paused',
         )
+        flight.drainRequested = true
         return
       }
 
@@ -1395,6 +1407,7 @@ export class ProductExperienceController {
             : null,
           'paused',
         )
+        flight.drainRequested = true
         return
       }
 
@@ -1477,7 +1490,6 @@ export class ProductExperienceController {
     for (const delayMs of [1_000, 2_000, 4_000, 8_000, 15_000]) {
       await wait(delayMs)
       if (flight.drainRequested) {
-        this.exhaustedZkTlsPolls.add(pollKey)
         return false
       }
       const beforePoll = await this.dependencies.storage.getSession()
@@ -1842,7 +1854,12 @@ export class ProductExperienceController {
     session.error = session.currentOriginAllowed
       ? 'AUTHORIZATION_REQUIRED'
       : 'ORIGIN_NOT_ALLOWED'
-    session.zkTlsFailureCode = null
+    if (
+      !isZkTlsSession(session) ||
+      !session.zkTlsQueue.some((item) => item.status === 'paused')
+    ) {
+      session.zkTlsFailureCode = null
+    }
     const sessionGeneration = this.advanceGeneration()
     await this.dependencies.storage.setSession(session)
     if (this.generation !== sessionGeneration) return
