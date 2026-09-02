@@ -1647,7 +1647,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     'start',
     'prove-throw',
     'prove-result',
-  ] as const)('does not implicitly retry failed %s work when another rule joined the flight', async (failureStage) => {
+  ] as const)('continues queued work after failed %s without retrying the failed rule', async (failureStage) => {
     let finishFailure: (() => void) | undefined
     if (failureStage === 'start') {
       harness.startZkTls.mockImplementationOnce(
@@ -1689,13 +1689,22 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     ])
     finishFailure?.()
     await vi.waitFor(() =>
-      expect(harness.storage.session?.error).toBe('VERIFICATION_FAILED'),
+      expect(
+        harness.storage.session?.zkTlsQueue.find(
+          (item) => item.ruleId === 'rule-b',
+        )?.status,
+      ).toBe('submitted'),
     )
     await flushAsync()
 
-    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.startZkTls).toHaveBeenCalledTimes(2)
+    expect(harness.startZkTls).toHaveBeenNthCalledWith(2, {
+      campaignId: 'campaign-product-001',
+      ruleId: 'rule-b',
+      ticketKind: 'PARTICIPANT',
+    })
     expect(harness.proveZkTls).toHaveBeenCalledTimes(
-      failureStage === 'start' ? 0 : 1,
+      failureStage === 'start' ? 1 : 2,
     )
     expect(harness.storage.session?.zkTlsQueue).toEqual([
       {
@@ -1707,12 +1716,16 @@ describe('ProductExperienceController zkTLS authority queue', () => {
       },
       {
         ruleId: 'rule-b',
-        status: 'queued',
-        sessionId: null,
-        connectorId: null,
-        expiresAt: null,
+        status: 'submitted',
+        sessionId: 'zktls-session-1',
+        connectorId: 'trusted-connector-1',
+        expiresAt: '2026-07-13T10:10:00.000Z',
       },
     ])
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'submitting',
+      error: null,
+    })
   })
 
   it.each([
@@ -2228,6 +2241,57 @@ describe('ProductExperienceController zkTLS authority queue', () => {
         expect.objectContaining({ ruleId: 'rule-a', status: 'submitted' }),
       ],
       error: null,
+    })
+  })
+
+  it('does not let a stale after-current helper untrack the replacement flight', async () => {
+    let finishFirst:
+      | ((value: Awaited<ReturnType<typeof harness.proveZkTls>>) => void)
+      | undefined
+    harness.proveZkTls
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFirst = resolve
+          }),
+      )
+      .mockImplementationOnce(() => new Promise(() => undefined))
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(1))
+    await harness.controller.start()
+
+    harness.randomSessionId.mockReturnValue('session-replacement')
+    await harness.controller.saveTask(replacementTask())
+    await harness.controller.start()
+    await harness.controller.handleEvidence(sender(), 'session-replacement', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(2))
+
+    finishFirst?.({
+      type: 'zktls-prove-result',
+      correlationId: 'stale-correlation',
+      status: 'submitted',
+    })
+    await flushAsync()
+    await flushAsync()
+
+    await harness.controller.handleEvidence(sender(), 'session-replacement', [
+      match('rule-b'),
+    ])
+    for (let index = 0; index < 10; index += 1) await flushAsync()
+
+    expect(harness.startZkTls).toHaveBeenCalledTimes(2)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(2)
+    expect(harness.storage.session).toMatchObject({
+      sessionId: 'session-replacement',
+      zkTlsQueue: [
+        expect.objectContaining({ ruleId: 'rule-a', status: 'proving' }),
+        expect.objectContaining({ ruleId: 'rule-b', status: 'queued' }),
+      ],
     })
   })
 
