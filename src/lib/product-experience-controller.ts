@@ -704,8 +704,13 @@ export class ProductExperienceController {
     }
     const sessionGeneration = this.advanceGeneration()
     session.status = 'observing'
-    session.error = null
-    session.zkTlsFailureCode = null
+    if (
+      !isZkTlsSession(session) ||
+      !session.zkTlsQueue.some((item) => item.status === 'paused')
+    ) {
+      session.error = null
+      session.zkTlsFailureCode = null
+    }
     this.appendZkTlsDiagnostic(session, {
       at: this.dependencies.now(),
       stage: 'watcher-ready',
@@ -1181,8 +1186,6 @@ export class ProductExperienceController {
       return true
     })
     if (!session) return
-    const current = this.zkTlsFlight
-    if (current && current.sessionId !== sessionId) return
     await this.drainZkTlsQueue(sessionId)
   }
 
@@ -1203,7 +1206,6 @@ export class ProductExperienceController {
         if (hasNewQueuedWork) current.drainRequested = true
         return current.promise
       }
-      if (current && current !== active) return
     }
     const flight: ProductExperienceZkTlsFlight = {
       sessionId,

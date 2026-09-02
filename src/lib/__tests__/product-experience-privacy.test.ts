@@ -196,7 +196,9 @@ describe('product experience evaluator privacy', () => {
     )
 
     expect(durableShape).toContain('ProductZkTlsQueueItem')
-    expect(durableShape).toContain("status: 'queued' | 'proving' | 'submitted'")
+    expect(durableShape).toContain(
+      "status: 'queued' | 'paused' | 'proving' | 'submitted'",
+    )
     for (const forbiddenField of [
       'connectorJson',
       'signedEnvelope',

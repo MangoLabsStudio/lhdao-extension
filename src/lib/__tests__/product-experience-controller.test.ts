@@ -1758,6 +1758,43 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted')
   })
 
+  it('keeps a paused failure visible when the page watcher becomes ready again', async () => {
+    harness.proveZkTls.mockImplementationOnce(async (input) => ({
+      type: 'zktls-prove-result',
+      correlationId: input.correlationId,
+      status: 'error',
+      code: 'PROVER_FAILED',
+    }))
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() =>
+      expect(harness.storage.session).toMatchObject({
+        error: 'VERIFICATION_FAILED',
+        zkTlsFailureCode: 'PROVER_FAILED',
+        zkTlsQueue: [
+          expect.objectContaining({ ruleId: 'rule-a', status: 'paused' }),
+        ],
+      }),
+    )
+
+    const state = await harness.controller.ready(sender(), 'session-12345678')
+
+    expect(state).toMatchObject({
+      status: 'observing',
+      error: 'VERIFICATION_FAILED',
+      zkTlsFailureCode: 'PROVER_FAILED',
+    })
+    expect(harness.storage.session).toMatchObject({
+      error: 'VERIFICATION_FAILED',
+      zkTlsFailureCode: 'PROVER_FAILED',
+      zkTlsQueue: [
+        expect.objectContaining({ ruleId: 'rule-a', status: 'paused' }),
+      ],
+    })
+  })
+
   it('returns to a retryable observing state after another submitted rule verifies', async () => {
     harness.proveZkTls.mockImplementationOnce(async (input) => ({
       type: 'zktls-prove-result',
@@ -2437,6 +2474,92 @@ describe('ProductExperienceController zkTLS authority queue', () => {
         expect.objectContaining({ ruleId: 'rule-b', status: 'queued' }),
       ],
     })
+  })
+
+  it('lets a replacement drain supersede a stale follow-up flight', async () => {
+    let finishFirst:
+      | ((value: Awaited<ReturnType<typeof harness.proveZkTls>>) => void)
+      | undefined
+    harness.proveZkTls.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirst = resolve
+        }),
+    )
+
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(1))
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-b'),
+    ])
+
+    harness.randomSessionId.mockReturnValue('session-replacement')
+    await harness.controller.saveTask(replacementTask())
+    await harness.controller.start()
+
+    const originalGetSession = harness.storage.getSession.bind(harness.storage)
+    let sessionReadCount = 0
+    let releaseReplacementRead: (() => void) | undefined
+    let releaseStaleRead: (() => void) | undefined
+    let markReplacementRead: (() => void) | undefined
+    let markReplacementReadReturned: (() => void) | undefined
+    let markStaleRead: (() => void) | undefined
+    const replacementReadReached = new Promise<void>((resolve) => {
+      markReplacementRead = resolve
+    })
+    const staleReadReached = new Promise<void>((resolve) => {
+      markStaleRead = resolve
+    })
+    const replacementReadReturned = new Promise<void>((resolve) => {
+      markReplacementReadReturned = resolve
+    })
+    const replacementReadGate = new Promise<void>((resolve) => {
+      releaseReplacementRead = resolve
+    })
+    const staleReadGate = new Promise<void>((resolve) => {
+      releaseStaleRead = resolve
+    })
+    harness.storage.getSession = vi.fn(async () => {
+      sessionReadCount += 1
+      if (sessionReadCount === 3) {
+        markReplacementRead?.()
+        await replacementReadGate
+        const session = await originalGetSession()
+        markReplacementReadReturned?.()
+        return session
+      }
+      if (sessionReadCount === 5) {
+        markStaleRead?.()
+        await staleReadGate
+      }
+      return originalGetSession()
+    })
+
+    await harness.controller.handleEvidence(sender(), 'session-replacement', [
+      match('rule-a'),
+    ])
+    await replacementReadReached
+
+    finishFirst?.({
+      type: 'zktls-prove-result',
+      correlationId: 'stale-correlation',
+      status: 'submitted',
+    })
+    await staleReadReached
+    releaseReplacementRead?.()
+    await replacementReadReturned
+
+    try {
+      await vi.waitFor(() =>
+        expect(harness.proveZkTls).toHaveBeenCalledTimes(2),
+      )
+      expect(harness.startZkTls).toHaveBeenCalledTimes(2)
+      expect(harness.storage.session?.zkTlsQueue[0]?.status).toBe('submitted')
+    } finally {
+      releaseStaleRead?.()
+    }
   })
 
   it('yields a submitted poll at the safe boundary for new same-session evidence', async () => {
