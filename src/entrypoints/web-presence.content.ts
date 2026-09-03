@@ -15,7 +15,7 @@ import {
   PRODUCT_EXPERIENCE_PAGE_CHANNEL,
   parseProductExperiencePageRequest,
 } from '@/lib/product-experience-task-bridge'
-import { freezeCopy } from '@/lib/zktls/discovery/redaction'
+import { parseDiscoveryResponse } from '@/lib/zktls/discovery/response-contract'
 import {
   parseZkTlsPageRequest,
   ZKTLS_PAGE_CHANNEL,
@@ -120,23 +120,17 @@ export default defineContentScript({
         const { channel: _channel, ...runtimeRequest } = request
         void chrome.runtime
           .sendMessage(runtimeRequest)
-          .then((response: MsgResponse) => {
-            if (
-              response?.type !== 'discovery-result' ||
-              response.correlationId !== request.correlationId ||
-              response.requestType !== request.type ||
-              (response.ok &&
-                request.type !== 'start-discovery' &&
-                response.snapshot.sessionId !== request.sessionId)
-            ) {
+          .then((input: unknown) => {
+            const response = parseDiscoveryResponse(input, runtimeRequest)
+            if (!response) {
               postProductError(request.correlationId, request.type)
               return
             }
             window.postMessage(
-              freezeCopy({
+              {
                 channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
                 ...response,
-              }),
+              },
               LIGHTHOUSE_ORIGIN,
             )
           })

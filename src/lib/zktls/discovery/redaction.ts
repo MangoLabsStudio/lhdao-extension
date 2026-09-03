@@ -11,15 +11,20 @@ const encoder = new TextEncoder()
 export const byteLength = (text: string) => encoder.encode(text).byteLength
 
 /** Descriptors first (no getter execution), clone second (reject proxies). */
-export function safeClone(value: unknown): unknown | null {
+export function safeClone(
+  value: unknown,
+  maximumBytes = 512 * 1024,
+  maximumNodes = 20_000,
+  maximumDepth = 32,
+): unknown | null {
   let nodes = 0
   let bytes = 0
   const seen = new Set<object>()
   const validate = (item: unknown, depth: number): boolean => {
-    if (++nodes > 20_000 || depth > 32) return false
+    if (++nodes > maximumNodes || depth > maximumDepth) return false
     if (typeof item === 'string') {
       bytes += item.length
-      return bytes <= 512 * 1024
+      return bytes <= maximumBytes
     }
     if (item === null || item === undefined || typeof item === 'boolean')
       return true
@@ -35,6 +40,8 @@ export function safeClone(value: unknown): unknown | null {
       return false
     for (const key of Reflect.ownKeys(item)) {
       if (typeof key !== 'string') return false
+      bytes += key.length
+      if (bytes > maximumBytes) return false
       if (Array.isArray(item) && key === 'length') continue
       const descriptor = Object.getOwnPropertyDescriptor(item, key)
       if (
@@ -280,6 +287,41 @@ export function observationSecrets(raw: Record<string, unknown>): string[] {
   }
   visit(raw.requestHeaders)
   visit(raw.responseHeaders)
+  for (const headers of [raw.requestHeaders, raw.responseHeaders]) {
+    if (!headers || typeof headers !== 'object') continue
+    for (const [name, text] of Object.entries(headers)) {
+      if (typeof text !== 'string') continue
+      if (/^(?:proxy-)?authorization$/i.test(name)) {
+        const credential = /^\S+\s+(.+)$/.exec(text)?.[1]?.trim()
+        if (credential) found.add(credential)
+        if (/^Basic\s/i.test(text) && credential) {
+          try {
+            const decoded = atob(credential)
+            found.add(decoded)
+            for (const part of decoded.split(':')) if (part) found.add(part)
+          } catch {
+            /* malformed Basic */
+          }
+        }
+        for (const match of text.matchAll(
+          /(?:^|[,\s])[\w-]+=(?:"([^"]+)"|([^,\s]+))/g,
+        ))
+          found.add(match[1] ?? match[2])
+      }
+      if (/^(?:set-)?cookie$/i.test(name)) {
+        const pairs = /^set-/i.test(name)
+          ? text.split(';').slice(0, 1)
+          : text.split(';')
+        for (const pair of pairs) {
+          const value = pair
+            .slice(pair.indexOf('=') + 1)
+            .trim()
+            .replace(/^"(.*)"$/, '$1')
+          if (pair.includes('=') && value) found.add(value)
+        }
+      }
+    }
+  }
   for (const body of [raw.requestBody, raw.responseBody]) {
     if (typeof body !== 'string' || byteLength(body) > BODY_LIMIT) continue
     try {

@@ -129,4 +129,23 @@ describe('discovery page to background bridge', () => {
     runtime({ type: 'discovery-snapshot-changed' }, { id: 'other' })
     expect(post.mock.calls.length).toBe(before)
   })
+  it('rejects extra raw fields and nonboolean ok before posting to the page', async () => {
+    for (const value of [
+      { ...response, stack: 'private-stack' },
+      { ...response, ok: 'true' },
+      {
+        ...response,
+        snapshot: { ...response.snapshot, rawBody: 'private-body' },
+      },
+    ]) {
+      send.mockImplementationOnce((async () => value) as never)
+      await emit(request)
+      expect(post).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'product-experience-error' }),
+        origin,
+      )
+    }
+    expect(JSON.stringify(post.mock.calls)).not.toContain('private-stack')
+    expect(JSON.stringify(post.mock.calls)).not.toContain('private-body')
+  })
 })

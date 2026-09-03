@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CandidateStore } from '../zktls/discovery/candidate-store'
 import { safeClone } from '../zktls/discovery/redaction'
+import { parseDiscoveryResponse } from '../zktls/discovery/response-contract'
 import { DiscoverySessionManager } from '../zktls/discovery/session-manager'
 
 const owner = {
@@ -30,6 +31,31 @@ const observation = (body = { operation: 'balances', amount: 10 }) => ({
 })
 
 describe('discovery candidate privacy and inference', () => {
+  it('redacts bare bearer, proxy authorization and individual cookie values in echoes', () => {
+    const store = new CandidateStore()
+    store.add({
+      ...observation(),
+      requestHeaders: {
+        Authorization: 'Bearer short-secret',
+        'Proxy-Authorization': 'Bearer short-proxy',
+        Cookie: 'session=short-cookie; other=second-cookie',
+      },
+      responseBody: JSON.stringify({
+        echo: 'short-secret',
+        other: 'short-cookie',
+        proxy: 'short-proxy',
+        nested: { repeated: 'second-cookie' },
+      }),
+    })
+    const serialized = JSON.stringify(store.snapshot())
+    for (const secret of [
+      'short-secret',
+      'short-cookie',
+      'short-proxy',
+      'second-cookie',
+    ])
+      expect(serialized).not.toContain(secret)
+  })
   it('redacts before insertion, merges dynamic samples and splits operations', () => {
     const store = new CandidateStore()
     store.add(observation())
@@ -385,6 +411,9 @@ describe('native discovery vertical slice', () => {
   })
   async function begin() {
     const result = await manager.handle(start, owner)
+    expect(
+      parseDiscoveryResponse(result, { ...start, type: 'start-discovery' }),
+    ).toEqual(result)
     expect(result).toMatchObject({
       type: 'discovery-result',
       ok: true,
@@ -394,14 +423,14 @@ describe('native discovery vertical slice', () => {
       .sessionId
   }
   async function snapshot(sender = owner, id = sessionId) {
-    return manager.handle(
-      {
-        type: 'get-discovery-snapshot',
-        correlationId: 'snapshot-123',
-        sessionId: id,
-      },
-      sender,
-    )
+    const query = {
+      type: 'get-discovery-snapshot' as const,
+      correlationId: 'snapshot-123',
+      sessionId: id,
+    }
+    const result = await manager.handle(query, sender)
+    expect(parseDiscoveryResponse(result, query)).toEqual(result)
+    return result
   }
   function request(id = 'req1', extra = {}) {
     event({ tabId: 8 }, 'Network.requestWillBeSent', {
@@ -631,6 +660,103 @@ describe('native discovery vertical slice', () => {
       },
     })
     expect(JSON.stringify(await snapshot())).not.toContain('private-body-error')
+  })
+  it.each([
+    'decoded',
+    'identity-length',
+  ])('does not fetch an already oversized JSON body: %s', async (kind) => {
+    await begin()
+    request()
+    if (kind === 'decoded') {
+      event({ tabId: 8 }, 'Network.dataReceived', {
+        requestId: 'req1',
+        dataLength: 40000,
+        encodedDataLength: 100,
+      })
+      event({ tabId: 8 }, 'Network.dataReceived', {
+        requestId: 'req1',
+        dataLength: 30000,
+        encodedDataLength: 100,
+      })
+    } else
+      event({ tabId: 8 }, 'Network.responseReceived', {
+        requestId: 'req1',
+        response: {
+          mimeType: 'application/json',
+          status: 200,
+          headers: { 'Content-Length': '70000' },
+        },
+      })
+    await finish()
+    expect(
+      command.mock.calls.some((call) => call[1] === 'Network.getResponseBody'),
+    ).toBe(false)
+    expect(await snapshot()).toMatchObject({
+      snapshot: {
+        candidates: [
+          {
+            configurable: false,
+            samples: [
+              {
+                response: null,
+                responseBodyState: 'oversize',
+                responseBodyBytes: 65537,
+              },
+            ],
+          },
+        ],
+      },
+    })
+  })
+  it('does not confuse gzip encoded content-length with decoded body length', async () => {
+    await begin()
+    request()
+    event({ tabId: 8 }, 'Network.responseReceived', {
+      requestId: 'req1',
+      response: {
+        mimeType: 'application/json',
+        status: 200,
+        headers: { 'Content-Encoding': 'gzip', 'Content-Length': '70000' },
+      },
+    })
+    event({ tabId: 8 }, 'Network.dataReceived', {
+      requestId: 'req1',
+      dataLength: 14,
+      encodedDataLength: 70000,
+    })
+    await finish()
+    expect(
+      command.mock.calls.some((call) => call[1] === 'Network.getResponseBody'),
+    ).toBe(true)
+    expect(await snapshot()).toMatchObject({
+      snapshot: { candidates: [{ samples: [{ response: { balance: 42 } }] }] },
+    })
+  })
+  it('ignores late byte-count events after refresh and stop', async () => {
+    await begin()
+    request('old')
+    manager.tabUpdated(8, { status: 'loading', url: start.targetUrl })
+    event({ tabId: 8 }, 'Network.dataReceived', {
+      requestId: 'old',
+      dataLength: 70000,
+    })
+    request('fresh')
+    await finish('fresh')
+    expect(await snapshot()).toMatchObject({
+      snapshot: { candidates: [{ samples: [{ responseBodyState: 'json' }] }] },
+    })
+    await manager.handle(
+      { type: 'stop-discovery', correlationId: 'stop-1234', sessionId },
+      owner,
+    )
+    event({ tabId: 8 }, 'Network.dataReceived', {
+      requestId: 'fresh',
+      dataLength: 70000,
+    })
+    await finish('old')
+    expect(await snapshot()).toMatchObject({
+      snapshot: { status: 'stopped', candidates: [] },
+    })
   })
   it('invalidates attach completion after owner closes, detaching only once', async () => {
     let release: () => void = () => undefined

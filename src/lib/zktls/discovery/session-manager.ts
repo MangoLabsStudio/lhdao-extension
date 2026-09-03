@@ -48,6 +48,8 @@ type Pending = {
   contentType: string
   status: number
   reading?: boolean
+  decodedBytes: number
+  oversized: boolean
 }
 type Session = {
   id: string
@@ -409,6 +411,7 @@ export class DiscoverySessionManager {
       ![
         'Network.requestWillBeSent',
         'Network.responseReceived',
+        'Network.dataReceived',
         'Network.loadingFinished',
         'Network.loadingFailed',
       ].includes(method)
@@ -477,6 +480,8 @@ export class DiscoverySessionManager {
         responseHeaders: {},
         contentType: '',
         status: 0,
+        decodedBytes: 0,
+        oversized: false,
       })
       return
     }
@@ -489,12 +494,49 @@ export class DiscoverySessionManager {
       pending.responseHeaders = response?.headers ?? {}
       pending.status =
         typeof response?.status === 'number' ? response.status : 0
+      const headers = record(response?.headers)
+      if (headers) {
+        const lower = Object.fromEntries(
+          Object.entries(headers).map(([name, value]) => [
+            name.toLowerCase(),
+            value,
+          ]),
+        )
+        const encoding = lower['content-encoding']
+        const length = lower['content-length']
+        if (
+          (encoding === undefined ||
+            (typeof encoding === 'string' &&
+              encoding.trim().toLowerCase() === 'identity')) &&
+          typeof length === 'string' &&
+          /^\d+$/.test(length) &&
+          Number(length) > BODY_LIMIT
+        )
+          pending.oversized = true
+      }
+    } else if (method === 'Network.dataReceived') {
+      if (
+        typeof params.dataLength !== 'number' ||
+        !Number.isSafeInteger(params.dataLength) ||
+        params.dataLength < 0
+      )
+        return
+      pending.decodedBytes = Math.min(
+        BODY_LIMIT + 1,
+        pending.decodedBytes + params.dataLength,
+      )
+      if (pending.decodedBytes > BODY_LIMIT) pending.oversized = true
     } else if (method === 'Network.loadingFailed') {
       session.pending.delete(id)
       this.insert(session, pending)
     } else if (method === 'Network.loadingFinished') {
       if (pending.reading) return
       pending.reading = true
+      if (pending.oversized) {
+        session.pending.delete(id)
+        this.insert(session, pending, ' '.repeat(BODY_LIMIT + 1))
+        return
+      }
       // Keep entry through the async read; refresh/stop/timeout clears it.
       if (
         !/^application\/(?:[\w.-]+\+)?json(?:\s*;|\s*$)/i.test(
@@ -550,6 +592,7 @@ export class DiscoverySessionManager {
   }
   private insert(session: Session, pending: Pending, responseBody?: string) {
     if (!this.active(session) || pending.epoch !== session.epoch) return
+    if (pending.oversized) responseBody = ' '.repeat(BODY_LIMIT + 1)
     const result = session.store.add({
       method: pending.method,
       url: pending.url,
