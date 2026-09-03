@@ -28,7 +28,7 @@ describe('release workflow contract', () => {
   it('pins all three store artifacts to MV3 production builds', async () => {
     const { packageJson, workflow } = await releaseInputs()
 
-    expect(packageJson.version).toBe('0.2.2')
+    expect(packageJson.version).toBe('0.2.3')
     expect(packageJson.scripts.zip).toBe('wxt zip')
     expect(packageJson.scripts['zip:edge']).toBe('wxt zip -b edge')
     expect(packageJson.scripts['zip:firefox']).toMatch(

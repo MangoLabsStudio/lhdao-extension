@@ -18,6 +18,7 @@ import {
   validateConnector,
 } from '@/lib/zktls/interpreter'
 import {
+  createZkTlsPageResult,
   parseZkTlsPageRequest,
   ZKTLS_PAGE_CHANNEL,
 } from '@/lib/zktls/page-bridge'
@@ -2066,6 +2067,36 @@ describe('zkTLS strict boundaries', () => {
         '/verify/s2',
       ),
     ).toBeNull()
+  })
+
+  test('page results retain the request session and connector bindings', () => {
+    const request = {
+      channel: ZKTLS_PAGE_CHANNEL,
+      type: 'prove' as const,
+      correlationId: 'c1',
+      sessionId: 's1',
+      connectorId: 'github-login',
+    } as const
+
+    expect(createZkTlsPageResult(request, { status: 'submitted' })).toEqual({
+      channel: ZKTLS_PAGE_CHANNEL,
+      type: 'prove-result',
+      correlationId: 'c1',
+      sessionId: 's1',
+      connectorId: 'github-login',
+      status: 'submitted',
+    })
+    expect(
+      createZkTlsPageResult(request, {
+        status: 'error',
+        code: 'EXTENSION_ERROR',
+      }),
+    ).toMatchObject({
+      sessionId: 's1',
+      connectorId: 'github-login',
+      status: 'error',
+      code: 'EXTENSION_ERROR',
+    })
   })
 
   test('background parser independently requires exact sender origin and path', () => {

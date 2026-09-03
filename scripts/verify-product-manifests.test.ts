@@ -39,7 +39,7 @@ function validManifest(overrides = {}) {
   return {
     manifest_version: 3,
     name: 'Lighthouse',
-    version: '0.2.2',
+    version: '0.2.3',
     permissions: [
       'storage',
       'alarms',
@@ -199,7 +199,7 @@ describe('requires exact version, permissions, and host permissions', () => {
   const verify = productionManifestVerifier()
   const cases = [
     ['manifest version', { manifest_version: 2 }, /manifest_version.*3/i],
-    ['extension version', { version: '0.1.6' }, /version.*0\.2\.2/i],
+    ['extension version', { version: '0.1.6' }, /version.*0\.2\.3/i],
     [
       'permissions',
       { permissions: ['storage', 'alarms', 'activeTab', 'scripting'] },

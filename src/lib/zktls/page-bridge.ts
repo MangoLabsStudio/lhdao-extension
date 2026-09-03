@@ -8,7 +8,32 @@ export type ZkTlsPageRequest = {
   connectorId: string
 }
 
+export type ZkTlsPageResult = {
+  channel: typeof ZKTLS_PAGE_CHANNEL
+  type: 'prove-result'
+  correlationId: string
+  sessionId: string
+  connectorId: string
+  status: 'submitted' | 'pending_login' | 'error' | 'unsupported'
+  code?: string
+}
+
 const TOKEN = /^[A-Za-z0-9_-]{1,128}$/
+
+export function createZkTlsPageResult(
+  request: ZkTlsPageRequest,
+  result: Pick<ZkTlsPageResult, 'status' | 'code'>,
+): ZkTlsPageResult {
+  return {
+    channel: ZKTLS_PAGE_CHANNEL,
+    type: 'prove-result',
+    correlationId: request.correlationId,
+    sessionId: request.sessionId,
+    connectorId: request.connectorId,
+    status: result.status,
+    ...(result.code ? { code: result.code } : {}),
+  }
+}
 
 export function parseZkTlsPageRequest(
   event: MessageEvent,
