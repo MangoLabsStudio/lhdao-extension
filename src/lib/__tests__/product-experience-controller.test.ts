@@ -1574,6 +1574,96 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['VERIFIED', 'PARTIAL'],
+    ['VERIFIED', 'INSUFFICIENT_DATA'],
+    ['VERIFIED_NO', 'PARTIAL'],
+    ['VERIFIED_NO', 'INSUFFICIENT_DATA'],
+  ] as const)('continues the unfinished shared output after %s and %s', async (primaryStatus, siblingStatus) => {
+    harness.startZkTls.mockImplementation(async ({ ruleId }) => ({
+      sessionId: `proof-${ruleId}`,
+      connectorId: 'shared',
+      expiresAt: '2026-07-13T10:10:00.000Z',
+      executionPlan: {
+        version: 1,
+        steps: [
+          {
+            connectorId: 'shared',
+            triggerPaths: ['/app'],
+            dependentFactIds: ['shared:a', 'shared:b'],
+            dependentRuleIds: ['rule-a', 'rule-b'],
+          },
+        ],
+      },
+    }))
+    harness.readZkTlsProgress
+      .mockResolvedValueOnce([
+        {
+          ruleId: 'rule-a',
+          title: 'A',
+          status: primaryStatus,
+          current: 1,
+          target: 1,
+          unit: null,
+        },
+        {
+          ruleId: 'rule-b',
+          title: 'B',
+          status: siblingStatus,
+          current: 1,
+          target: 3,
+          unit: 'days',
+        },
+      ])
+      .mockResolvedValue(
+        rules.map((rule) => ({
+          ruleId: rule.id,
+          title: rule.title,
+          status: 'VERIFIED',
+          current: 3,
+          target: 3,
+          unit: null,
+        })),
+      )
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.advanceTimersByTimeAsync(1100)
+    const paused = await harness.controller.getState()
+    expect(paused.zkTlsConditions?.[1]).toMatchObject({
+      ruleId: 'rule-b',
+      status: 'action_required',
+      code: siblingStatus,
+    })
+    expect(paused.zkTlsConditions?.[0]).toMatchObject({
+      ruleId: 'rule-a',
+      status: primaryStatus === 'VERIFIED' ? 'verified' : 'verified_no',
+      code: null,
+      stage: 'backend-confirmed',
+    })
+    expect(paused.zkTlsFinished).toBe(false)
+    await harness.controller.retryRule(task().campaignId, 'rule-a')
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+    await harness.controller.retryRule(task().campaignId, 'rule-b')
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(
+      harness.startZkTls.mock.calls.map(([input]) => input.ruleId),
+    ).toEqual(['rule-a', 'rule-b'])
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(2)
+    const completed = await harness.controller.getState()
+    expect(completed.zkTlsFinished).toBe(true)
+    expect(completed.matchedRuleIds).toEqual(
+      primaryStatus === 'VERIFIED' ? ['rule-a', 'rule-b'] : ['rule-b'],
+    )
+    expect(completed.zkTlsProgress?.[0]).toMatchObject({
+      status: primaryStatus,
+      current: 1,
+      target: 1,
+    })
+    expect(completed.zkTlsConditions?.[0]).toEqual(paused.zkTlsConditions?.[0])
+    expect(completed.zkTlsConditions?.[1].status).toBe('verified')
+  })
+
   it('retains terminal planned conditions and their correlation across another start', async () => {
     harness.startZkTls.mockResolvedValue({
       sessionId: 'shared-session',

@@ -1484,6 +1484,7 @@ export class ProductExperienceController {
           (!current.currentOriginAllowed && !current.plannedExecution)
         )
           return false
+        item.ruleId = ruleId
         item.status = 'queued'
         item.failureCode = null
         item.actionRequired = false
@@ -1694,11 +1695,14 @@ export class ProductExperienceController {
               current.error = 'VERIFICATION_FAILED'
               return
             }
-            queued.dependentRuleIds = [...step.dependentRuleIds]
+            queued.dependentRuleIds = step.dependentRuleIds.filter(
+              (id) => !terminalRuleIds(current).has(id),
+            )
             queued.binding = step.dependentFactIds.length === 0
             current.zkTlsQueue = current.zkTlsQueue.filter(
               (entry) =>
                 entry === queued ||
+                entry.status === 'completed' ||
                 !step.dependentRuleIds.includes(entry.ruleId),
             )
             if (!queued.binding) {
@@ -1926,12 +1930,7 @@ export class ProductExperienceController {
       } catch {
         continue
       }
-      const activeProgress = progress.find(
-        (entry) => entry.ruleId === activeRuleId,
-      )
-      const attemptFinishedWithoutVerification =
-        activeProgress?.status === 'PARTIAL' ||
-        activeProgress?.status === 'INSUFFICIENT_DATA'
+      let attemptFinishedWithoutVerification = false
       const updated = await this.mutateZkTlsSession(sessionId, (current) => {
         const authorizationRequired =
           current.status === 'reauthorize' ||
@@ -1977,21 +1976,49 @@ export class ProductExperienceController {
           item.failureCode = null
           return true
         })
-        if (attemptFinishedWithoutVerification) {
-          const completed = current.zkTlsQueue.find(
-            (item) => item.ruleId === activeRuleId,
-          )
-          if (completed?.binding && activeProgress?.status === 'PARTIAL') {
+        const completed = current.zkTlsQueue.find(
+          (item) => item.ruleId === activeRuleId,
+        )
+        const incompleteProgress = current.zkTlsProgress.find(
+          (entry) =>
+            (completed?.dependentRuleIds ?? [activeRuleId]).includes(
+              entry.ruleId,
+            ) &&
+            !terminalRuleIds(current).has(entry.ruleId) &&
+            (entry.status === 'PARTIAL' ||
+              entry.status === 'INSUFFICIENT_DATA'),
+        )
+        if (completed && incompleteProgress) {
+          attemptFinishedWithoutVerification = true
+          if (completed.binding && incompleteProgress.status === 'PARTIAL') {
             completed.status = 'queued'
             completed.sessionId = null
             completed.connectorId = null
             completed.expiresAt = null
             completed.binding = false
-          } else if (completed?.dependentRuleIds) {
+          } else if (completed.dependentRuleIds) {
+            const confirmed = completed.dependentRuleIds.filter((id) =>
+              terminalRuleIds(current).has(id),
+            )
+            if (confirmed.length > 0) {
+              current.zkTlsQueue.push({
+                ...completed,
+                ruleId: confirmed[0],
+                dependentRuleIds: confirmed,
+                status: 'completed',
+                stage: 'backend-confirmed',
+                failureCode: null,
+                actionRequired: false,
+              })
+              completed.dependentRuleIds = completed.dependentRuleIds.filter(
+                (id) => !confirmed.includes(id),
+              )
+            }
+            completed.ruleId = incompleteProgress.ruleId
             completed.status = 'paused'
             completed.actionRequired = true
             completed.failureCode =
-              activeProgress?.status === 'INSUFFICIENT_DATA'
+              incompleteProgress.status === 'INSUFFICIENT_DATA'
                 ? 'INSUFFICIENT_DATA'
                 : 'PARTIAL'
             completed.stage = 'backend-progress'
