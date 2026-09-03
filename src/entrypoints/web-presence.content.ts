@@ -15,6 +15,7 @@ import {
   PRODUCT_EXPERIENCE_PAGE_CHANNEL,
   parseProductExperiencePageRequest,
 } from '@/lib/product-experience-task-bridge'
+import { freezeCopy } from '@/lib/zktls/discovery/redaction'
 import {
   parseZkTlsPageRequest,
   ZKTLS_PAGE_CHANNEL,
@@ -111,8 +112,35 @@ export default defineContentScript({
         return true
       }
 
-      if (request.type !== 'get-public-product-experience-state') {
-        postProductError(request.correlationId, request.type)
+      if (
+        request.type === 'start-discovery' ||
+        request.type === 'stop-discovery' ||
+        request.type === 'get-discovery-snapshot'
+      ) {
+        const { channel: _channel, ...runtimeRequest } = request
+        void chrome.runtime
+          .sendMessage(runtimeRequest)
+          .then((response: MsgResponse) => {
+            if (
+              response?.type !== 'discovery-result' ||
+              response.correlationId !== request.correlationId ||
+              response.requestType !== request.type ||
+              (response.ok &&
+                request.type !== 'start-discovery' &&
+                response.snapshot.sessionId !== request.sessionId)
+            ) {
+              postProductError(request.correlationId, request.type)
+              return
+            }
+            window.postMessage(
+              freezeCopy({
+                channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+                ...response,
+              }),
+              LIGHTHOUSE_ORIGIN,
+            )
+          })
+          .catch(() => postProductError(request.correlationId, request.type))
         return true
       }
 
@@ -299,7 +327,25 @@ export default defineContentScript({
     }
     window.addEventListener('message', onWindowMessage)
 
-    const onRuntimeMessage = (message: unknown): void => {
+    const onRuntimeMessage = (
+      message: unknown,
+      sender: chrome.runtime.MessageSender,
+    ): void => {
+      if (
+        sender.id === chrome.runtime.id &&
+        typeof message === 'object' &&
+        message !== null &&
+        (message as { type?: unknown }).type === 'discovery-snapshot-changed'
+      ) {
+        window.postMessage(
+          {
+            channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+            type: 'discovery-snapshot-changed',
+          },
+          LIGHTHOUSE_ORIGIN,
+        )
+        return
+      }
       if (
         typeof message !== 'object' ||
         message === null ||

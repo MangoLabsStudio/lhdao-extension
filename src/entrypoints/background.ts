@@ -112,6 +112,7 @@ import {
   type UserProfile,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
+import { DiscoverySessionManager } from '@/lib/zktls/discovery/session-manager'
 import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
 import {
   handleZkTlsProof,
@@ -464,6 +465,7 @@ export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
   const productExperienceController = createProductExperienceController()
+  const discovery = new DiscoverySessionManager(new URL(WEB_ENDPOINT).origin)
   registerZkTlsRuntime()
   void productExperienceController.resumePendingSubmit()
 
@@ -487,6 +489,13 @@ export default defineBackground(() => {
   })
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
+    if (
+      req.type === 'start-discovery' ||
+      req.type === 'stop-discovery' ||
+      req.type === 'get-discovery-snapshot'
+    ) {
+      return discovery.handle(req, sender)
+    }
     if (req.type === 'zktls-prove') {
       return (await handleZkTlsProof(req, sender)) as MsgResponse
     }

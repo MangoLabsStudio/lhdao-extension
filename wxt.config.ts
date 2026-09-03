@@ -43,12 +43,13 @@ export default defineConfig({
   manifest: ({ browser }) => ({
     name: 'Lighthouse',
     description: 'Complete Lighthouse engagement and product-experience tasks',
+    ...(browser === 'firefox' ? {} : { minimum_chrome_version: '118' }),
     permissions: [
       'storage',
       'alarms',
       'activeTab',
       'scripting',
-      ...(browser === 'firefox' ? [] : ['offscreen', 'webRequest']),
+      ...(browser === 'firefox' ? [] : ['offscreen', 'webRequest', 'debugger']),
     ],
     optional_host_permissions: browser === 'firefox' ? [] : ['https://*/*'],
     host_permissions: [

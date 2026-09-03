@@ -37,6 +37,32 @@ function rule(
 }
 
 describe('product experience evaluator privacy', () => {
+  it('keeps discovery isolated from proof, storage, page execution and credential APIs', async () => {
+    const sources = await Promise.all([
+      import('../zktls/discovery/session-manager?raw'),
+      import('../zktls/discovery/candidate-store?raw'),
+      import('../zktls/discovery/redaction?raw'),
+    ])
+    const source = sources.map((item) => item.default).join('\n')
+    for (const forbidden of [
+      'chrome.cookies',
+      'chrome.storage',
+      'localStorage',
+      'sessionStorage',
+      'fetch(',
+      'XMLHttpRequest',
+      'Runtime.evaluate',
+      'Network.setRequestInterception',
+      'Target.setAutoAttach',
+      'Page.reload',
+      'requestWillBeSentExtraInfo',
+      "from './runtime'",
+      'worker.postMessage',
+    ])
+      expect(source).not.toContain(forbidden)
+    expect(source).toContain("'Network.getResponseBody'")
+    expect(source).toContain("'Page.getFrameTree'")
+  })
   beforeEach(() => {
     setUrl(`${CLIENT_ORIGIN}/app/start?private=query#private-fragment`)
     document.body.innerHTML = [

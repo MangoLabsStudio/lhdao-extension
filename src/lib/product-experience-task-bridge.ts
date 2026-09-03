@@ -124,6 +124,54 @@ function isDiscoveryTargetUrl(value: unknown): value is string {
   }
 }
 
+export type DiscoveryRequest = Extract<
+  MsgRequest,
+  { type: 'start-discovery' | 'stop-discovery' | 'get-discovery-snapshot' }
+>
+
+/** The runtime boundary repeats the page validation; sender supplies all tab IDs. */
+export function parseDiscoveryRequest(input: unknown): DiscoveryRequest | null {
+  try {
+    if (!isRecord(input)) return null
+    const type = Object.getOwnPropertyDescriptor(input, 'type')?.value
+    if (
+      !['start-discovery', 'stop-discovery', 'get-discovery-snapshot'].includes(
+        type,
+      )
+    )
+      return null
+    const proto = Object.getPrototypeOf(input)
+    if (proto !== Object.prototype && proto !== null) return null
+    const keys = [
+      'type',
+      'correlationId',
+      type === 'start-discovery' ? 'targetUrl' : 'sessionId',
+    ]
+    if (Reflect.ownKeys(input).length !== keys.length) return null
+    for (const key of Reflect.ownKeys(input)) {
+      if (typeof key !== 'string' || !keys.includes(key)) return null
+      const descriptor = Object.getOwnPropertyDescriptor(input, key)
+      if (
+        !descriptor?.enumerable ||
+        !('value' in descriptor) ||
+        typeof descriptor.value !== 'string'
+      )
+        return null
+    }
+    const value = structuredClone(input)
+    if (!isCorrelationId(value.correlationId)) return null
+    if (
+      type === 'start-discovery'
+        ? !isDiscoveryTargetUrl(value.targetUrl)
+        : !isCampaignId(value.sessionId)
+    )
+      return null
+    return value as DiscoveryRequest
+  } catch {
+    return null
+  }
+}
+
 function discoverySnapshot(
   value: Record<string, unknown>,
   operation: string,

@@ -24,6 +24,7 @@ import type {
   TweetCampaignSummary,
   UserProfile,
 } from '@/lib/storage'
+import type { DiscoveryResponse } from '@/lib/zktls/discovery/session-manager'
 import type {
   ProductExperienceRule,
   ProductExperienceTaskRef,
@@ -235,6 +236,7 @@ export type MsgRequest =
 // ── Responses ────────────────────────────────────────────────────────
 
 export type MsgResponse =
+  | DiscoveryResponse
   | {
       type: 'zktls-prove-result'
       correlationId: string
