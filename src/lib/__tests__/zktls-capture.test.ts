@@ -315,6 +315,22 @@ describe('safe V4 near-match diagnostics', () => {
     ).toThrow()
     expect(capture.diagnostics()?.code).toBe('NO_REQUEST_OBSERVED')
   })
+
+  test('never emits untrusted high-entropy object keys as diagnostic pointers', () => {
+    const capture = v4Session()
+    const key = 'deadbeef-dead-beef-dead-beefdeadbeef'
+    const body = new TextEncoder().encode(
+      JSON.stringify({ [key]: 'secret-value' }),
+    )
+    capture.observeBody({
+      ...request,
+      requestBody: { raw: [{ bytes: body.buffer }] },
+    })
+    const diagnostic = JSON.stringify(capture.diagnostics())
+    expect(diagnostic).not.toContain(key)
+    expect(diagnostic).not.toContain('secret-value')
+    expect(diagnostic).toContain('/body/*')
+  })
 })
 
 describe('zkTLS v2 capture', () => {

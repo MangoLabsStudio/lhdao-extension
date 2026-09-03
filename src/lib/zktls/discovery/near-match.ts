@@ -109,7 +109,7 @@ export class NearMatchDiagnostics {
           }
           for (const key of Object.keys(record).slice(0, 128))
             if (!Object.hasOwn(template, key))
-              add('EXTRA_FIELD', `${pointer}/${pointerPart(key)}`)
+              add('EXTRA_FIELD', `${pointer}/*`)
           return
         }
         try {
