@@ -1163,6 +1163,137 @@ describe('ProductExperienceController zkTLS authority queue', () => {
       error: null,
     })
     expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-b'),
+    ])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    'empty',
+    'submitted',
+  ] as const)('does not finish a TEST %s plan from business VERIFIED progress', async (kind) => {
+    const fresh = createHarness()
+    fresh.mintTest.mockResolvedValue(ticket({ verificationMode: 'ZKTLS' }))
+    fresh.startZkTls.mockResolvedValue({
+      sessionId: 'test-proof',
+      connectorId: 'metric',
+      expiresAt: '2026-07-13T10:10:00.000Z',
+      executionPlan: {
+        version: 1,
+        steps:
+          kind === 'empty'
+            ? []
+            : [
+                {
+                  connectorId: 'metric',
+                  triggerPaths: ['/app'],
+                  dependentFactIds: ['metric:a', 'metric:b'],
+                  dependentRuleIds: ['rule-a', 'rule-b'],
+                },
+              ],
+      },
+    })
+    fresh.readZkTlsProgress.mockResolvedValue(
+      rules.map((rule) => ({
+        ruleId: rule.id,
+        title: rule.title,
+        status: 'VERIFIED',
+        current: 1,
+        target: 1,
+        unit: null,
+      })),
+    )
+    await fresh.controller.saveTask(task('TEST'))
+    await fresh.controller.start({ executePlan: true })
+    await vi.advanceTimersByTimeAsync(1100)
+    const state = await fresh.controller.getState()
+    expect(state.status).not.toBe('verified')
+    expect(state.zkTlsFinished).toBe(false)
+    expect(state.zkTlsTestPassed).not.toBe(true)
+    expect(state.matchedRuleIds).toEqual([])
+  })
+
+  it('keeps an earlier terminal NO out of verified IDs while polling its sibling', async () => {
+    const steps = rules.map((rule) => ({
+      connectorId: rule.id,
+      triggerPaths: ['/app'],
+      dependentFactIds: [`${rule.id}:value`],
+      dependentRuleIds: [rule.id],
+    }))
+    harness.startZkTls.mockImplementation(async ({ ruleId }) => ({
+      sessionId: `${ruleId}-proof`,
+      connectorId: ruleId,
+      expiresAt: '2026-07-13T10:10:00.000Z',
+      executionPlan: { version: 1, steps },
+    }))
+    harness.readZkTlsProgress
+      .mockResolvedValueOnce(
+        rules.map((rule) => ({
+          ruleId: rule.id,
+          title: rule.title,
+          status: rule.id === 'rule-a' ? 'VERIFIED_NO' : 'PENDING',
+          current: 0,
+          target: 1,
+          unit: null,
+        })),
+      )
+      .mockResolvedValue(
+        rules.map((rule) => ({
+          ruleId: rule.id,
+          title: rule.title,
+          status: 'VERIFIED',
+          current: 1,
+          target: 1,
+          unit: null,
+        })),
+      )
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(
+      (await harness.controller.getState()).zkTlsConditions?.[0].status,
+    ).toBe('verified_no')
+    await vi.advanceTimersByTimeAsync(3100)
+    const state = await harness.controller.getState()
+    expect(state).toMatchObject({
+      status: 'observing',
+      zkTlsFinished: true,
+      matchedRuleIds: ['rule-b'],
+    })
+    expect(state.zkTlsConditions?.[0].status).toBe('verified_no')
+    expect(harness.storage.session?.verifiedRuleIds).toEqual(['rule-b'])
+  })
+
+  it('reuses a legacy null-plan preflight session when DOM evidence arrives', async () => {
+    const fresh = createHarness()
+    fresh.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    fresh.startZkTls
+      .mockResolvedValueOnce({
+        sessionId: 'live-first-proof',
+        connectorId: 'legacy',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+        executionPlan: null,
+      })
+      .mockRejectedValue(new Error('PRODUCT_ZKTLS_PROOF_PENDING'))
+    await fresh.controller.saveTask(task())
+    await fresh.controller.start({ executePlan: true })
+    await fresh.controller.resumePendingSubmit()
+    expect(fresh.proveZkTls).not.toHaveBeenCalled()
+    await fresh.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fresh.startZkTls).toHaveBeenCalledTimes(1)
+    expect(fresh.proveZkTls).toHaveBeenCalledTimes(1)
+    expect(fresh.proveZkTls.mock.calls[0][0]).toMatchObject({
+      sessionId: 'live-first-proof',
+      connectorId: 'legacy',
+    })
   })
 
   it('closes an empty authoritative plan from progress instead of waiting for DOM', async () => {
@@ -2688,7 +2819,7 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     )
   })
 
-  it('closes a TEST proof only after reading backend VERIFIED progress', async () => {
+  it('waits for the current TEST integration check even after backend VERIFIED progress', async () => {
     await harness.controller.cancel()
     await harness.controller.saveTask(task('TEST'))
     await harness.controller.start()
@@ -2716,8 +2847,21 @@ describe('ProductExperienceController zkTLS authority queue', () => {
       'campaign-product-001',
     )
     expect(await harness.controller.getState()).toMatchObject({
-      status: 'verified',
-      matchedRuleIds: ['rule-a', 'rule-b'],
+      status: 'submitting',
+      matchedRuleIds: [],
+      zkTlsFinished: false,
+    })
+    harness.readIntegration.mockResolvedValue({
+      configVersion: 3,
+      experiencePassed: true,
+      experiencePassedAt: '2026-07-13T10:00:01.000Z',
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'observing',
+      matchedRuleIds: [],
+      zkTlsFinished: true,
+      zkTlsTestPassed: true,
     })
   })
 
