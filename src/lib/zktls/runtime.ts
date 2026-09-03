@@ -57,6 +57,8 @@ type V1Job = JobAuthorization & {
 }
 type RuntimeCapturedConnector = CapturedConnector | V4Connector
 type CaptureJob = JobAuthorization & {
+  awaitingSignedNavigation?: boolean
+  captureAborted?: boolean
   kind: 'capture'
   sessionId: string
   connectorId: string
@@ -88,7 +90,12 @@ export type ZkTlsRunRequest = {
 export type ZkTlsRunResult = {
   type: 'zktls-prove-result'
   correlationId: string
-  status: 'submitted' | 'pending_login' | 'error' | 'unsupported'
+  status:
+    | 'submitted'
+    | 'pending_login'
+    | 'action_required'
+    | 'error'
+    | 'unsupported'
   code?: string
 }
 
@@ -364,12 +371,15 @@ function waitForCookie(active: Job): Promise<string | null> {
   })
 }
 
-function waitForCapture(active: CaptureJob): Promise<CapturedRequest | null> {
+function waitForCapture(
+  active: CaptureJob,
+  timeoutMs = 60_000,
+): Promise<CapturedRequest | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       active.done = undefined
       resolve(null)
-    }, 60_000)
+    }, timeoutMs)
     active.done = (captured) => {
       clearTimeout(timer)
       active.done = undefined
@@ -415,7 +425,11 @@ async function proveCapturedRequest(
   })
   await ensurePermissions([pageOrigin, config.origin], request.connectorId)
   assertAvailable(config, ticket)
-  const tab = await connectorTab(pageOrigin)
+  const triggers =
+    config.interpreter_version === 4 ? config.trigger_paths : undefined
+  const tab = triggers
+    ? await chrome.tabs.create({ url: 'about:blank', active: false })
+    : await connectorTab(pageOrigin)
   if (!tab?.id) {
     await chrome.tabs.create({ url: pageOrigin })
     return {
@@ -426,6 +440,7 @@ async function proveCapturedRequest(
   }
   clearJob()
   const active: CaptureJob = {
+    awaitingSignedNavigation: !!triggers,
     kind: 'capture',
     sessionId: request.sessionId,
     connectorId: request.connectorId,
@@ -478,21 +493,51 @@ async function proveCapturedRequest(
     ),
   }
   armJob(active, [pageOrigin, config.origin])
-  const captured = waitForCapture(active)
-  let value: CapturedRequest | null
+  let value: CapturedRequest | null = null
   try {
-    const ready = await activateCaptureTab(tab.id)
-    if (
-      config.interpreter_version === 4 &&
-      !tabAtOrigin(ready, config.page_origin)
-    )
-      throw new Error('page tab left signed origin')
-    await runProviderActions(
-      tab.id,
-      config.origin,
-      config.interpreter_version === 3 ? config.actions : undefined,
-    )
-    value = await captured
+    if (triggers) {
+      for (const path of triggers) {
+        assertAvailable(config, ticket)
+        if (job !== active || active.permissionDenied) break
+        const captured = waitForCapture(active, 60_000 / triggers.length)
+        await reportDiagnostic(request, {
+          stage: 'capture-ready',
+          status: 'running',
+        })
+        if (job !== active || active.permissionDenied) {
+          active.done?.(null)
+          break
+        }
+        const ready = await chrome.tabs.update(tab.id, {
+          active: true,
+          url: `${pageOrigin}${path}`,
+        })
+        active.awaitingSignedNavigation = false
+        if (
+          !tabAtOrigin(
+            { ...ready, url: ready.pendingUrl ?? ready.url },
+            pageOrigin,
+          )
+        )
+          throw new Error('page tab left signed origin')
+        value = await captured
+        if (value) break
+      }
+    } else {
+      const captured = waitForCapture(active)
+      const ready = await activateCaptureTab(tab.id)
+      if (
+        config.interpreter_version === 4 &&
+        !tabAtOrigin(ready, config.page_origin)
+      )
+        throw new Error('page tab left signed origin')
+      await runProviderActions(
+        tab.id,
+        config.origin,
+        config.interpreter_version === 3 ? config.actions : undefined,
+      )
+      value = await captured
+    }
   } catch (error) {
     const permissionDenied = active.permissionDenied
     active.done?.(null)
@@ -516,16 +561,20 @@ async function proveCapturedRequest(
     throw new ZkTlsPermissionDeniedError()
   }
   if (!value) {
+    const summary = active.captureAborted ? null : active.capture.diagnostics()
     await reportDiagnostic(request, {
       stage: 'capture-failed',
       status: 'failed',
-      error: { message: 'No matching request was captured' },
+      error: summary ?? { message: 'No matching request was captured' },
     })
     return {
       type: 'zktls-prove-result',
       correlationId: request.correlationId,
-      status: 'error',
-      code: 'ZKTLS_CAPTURE_FAILED',
+      status:
+        triggers && summary?.code !== 'AMBIGUOUS_REQUEST'
+          ? 'action_required'
+          : 'error',
+      code: summary?.code ?? 'ZKTLS_CAPTURE_FAILED',
     }
   }
   try {
@@ -535,7 +584,9 @@ async function proveCapturedRequest(
       details: sanitizeZkTlsDebugValue({
         method: config.request.method,
         targetOrigin: config.origin,
-        request: value,
+        bodyBytes: value.body
+          ? new TextEncoder().encode(value.body).byteLength
+          : 0,
         responseContentEncoding:
           config.interpreter_version === 4
             ? (config.response_content_encoding ?? 'identity')
@@ -779,6 +830,8 @@ export function registerZkTlsRuntime(): void {
       active?.kind !== 'capture' ||
       active.config.interpreter_version !== 4 ||
       active.tabId !== tabId ||
+      (active.awaitingSignedNavigation &&
+        (changeInfo.url ?? tab.url) === 'about:blank') ||
       (!changeInfo.url && !tab.url) ||
       tabAtOrigin(
         { ...tab, url: changeInfo.url ?? tab.url },
@@ -786,6 +839,7 @@ export function registerZkTlsRuntime(): void {
       )
     )
       return
+    active.captureAborted = true
     active.done?.(null)
     clearJob()
   })

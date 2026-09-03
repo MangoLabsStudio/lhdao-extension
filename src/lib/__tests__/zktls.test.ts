@@ -2803,6 +2803,72 @@ describe('zkTLS strict boundaries', () => {
 })
 
 describe('zkTLS V4 page and target permissions', () => {
+  test('arms exact capture before visiting only signed triggers and pauses after the bounded sequence', async () => {
+    vi.useFakeTimers()
+    const raw = { ...v4Connector(), trigger_paths: ['/balances', '/history'] }
+    const config = validateConnector(raw)
+    const signed = await signedV4Envelopes(raw)
+    vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
+      config,
+      ticket: signed.ticket_envelope.ticket,
+      configEnvelope: { ...signed.config_envelope, config },
+      ticketEnvelope: signed.ticket_envelope,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    const order: string[] = []
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation((async () => {
+      order.push('permission')
+      return true
+    }) as never)
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([])
+    vi.spyOn(chrome.tabs, 'create').mockImplementation((async (input: {
+      url: string
+    }) => {
+      order.push(input.url)
+      return { id: 7, url: input.url }
+    }) as never)
+    vi.spyOn(chrome.tabs, 'update').mockImplementation((async (
+      _id: number,
+      input: { url?: string },
+    ) => {
+      order.push(input.url!)
+      return { id: 7, url: input.url }
+    }) as never)
+    const diagnostics = vi.fn((event: { stage: string }) => {
+      order.push(event.stage)
+    })
+    const result = proveZkTlsSession({
+      correlationId: 'signed-trigger',
+      sessionId: 's1',
+      connectorId: 'product-volume',
+      onDiagnostic: diagnostics,
+    })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(order).toEqual(
+      expect.arrayContaining([
+        'permission',
+        'about:blank',
+        'capture-ready',
+        'https://app.example.com/balances',
+      ]),
+    )
+    expect(order.indexOf('capture-ready')).toBeLessThan(
+      order.indexOf('https://app.example.com/balances'),
+    )
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(order).toContain('https://app.example.com/history')
+    await vi.advanceTimersByTimeAsync(30_000)
+    await expect(result).resolves.toMatchObject({
+      status: 'action_required',
+      code: 'NO_REQUEST_OBSERVED',
+    })
+    expect(chrome.tabs.update).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
   beforeEach(() => {
     const removed = chrome.permissions.onRemoved as unknown as {
       addListener(
@@ -3365,7 +3431,7 @@ describe('zkTLS V4 page and target permissions', () => {
   })
 
   test('ignores a malformed body event and submits a later exact V4 request', async () => {
-    const rawConfig = v4Connector()
+    const rawConfig = { ...v4Connector(), trigger_paths: ['/first', '/second'] }
     const config = validateConnector(rawConfig)
     const signed = await signedV4Envelopes(rawConfig)
     vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
@@ -3385,6 +3451,10 @@ describe('zkTLS V4 page and target permissions', () => {
     vi.spyOn(chrome.tabs, 'query').mockResolvedValue([
       { id: 7, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
     ])
+    vi.spyOn(chrome.tabs, 'create').mockImplementation((async () => ({
+      id: 7,
+      url: 'about:blank',
+    })) as never)
     vi.spyOn(chrome.tabs, 'update').mockImplementation((async () => ({
       id: 7,
       url: 'https://app.example.com/dashboard',
@@ -3478,6 +3548,11 @@ describe('zkTLS V4 page and target permissions', () => {
       status: 'submitted',
     })
     expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(chrome.tabs.update).toHaveBeenCalledTimes(1)
+    expect(chrome.tabs.update).toHaveBeenCalledWith(7, {
+      active: true,
+      url: 'https://app.example.com/first',
+    })
     expect(submittedMessage).toEqual(
       expect.objectContaining({
         type: 'zktls-offscreen-prove',

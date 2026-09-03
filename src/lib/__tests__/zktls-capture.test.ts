@@ -256,6 +256,67 @@ function v4Session(
   )
 }
 
+describe('safe V4 near-match diagnostics', () => {
+  const request = {
+    requestId: 'near',
+    tabId: 7,
+    frameId: 0,
+    method: 'POST',
+    type: 'fetch',
+    initiator: v4BindingConnector.page_origin,
+    url: `${v4BindingConnector.origin}/v1/account?network=mainnet&account=private-account`,
+  }
+
+  test('distinguishes no observation, unrelated request and template mismatch without values', () => {
+    const capture = v4Session()
+    expect(capture.diagnostics()?.code).toBe('NO_REQUEST_OBSERVED')
+    capture.observeBody({
+      ...request,
+      requestId: 'other',
+      url: `${v4BindingConnector.origin}/unrelated`,
+    })
+    expect(capture.diagnostics()?.code).toBe('NO_NEAR_MATCH')
+    const body = new TextEncoder().encode(
+      '{"operation":"secret-other-operation","input":{"account":"private-account"},"secretToken":"never-export"}',
+    )
+    capture.observeBody({
+      ...request,
+      url: `${v4BindingConnector.origin}${v4BindingConnector.request.matcher.path.value}?network=mainnet&account=private-account`,
+      requestBody: { raw: [{ bytes: body.buffer }] },
+    })
+    capture.observe({
+      ...request,
+      url: `${v4BindingConnector.origin}${v4BindingConnector.request.matcher.path.value}?network=mainnet&account=private-account`,
+      requestHeaders: [{ name: 'content-type', value: 'text/plain' }],
+    })
+    expect(capture.diagnostics()).toMatchObject({
+      code: 'REQUEST_TEMPLATE_MISMATCH',
+      observed: 2,
+      sameOrigin: 2,
+    })
+    const text = JSON.stringify(capture.diagnostics())
+    expect(text).toContain('/body/input/day')
+    for (const value of [
+      'private-account',
+      'never-export',
+      'secret-other-operation',
+      'text/plain',
+    ])
+      expect(text).not.toContain(value)
+    expect(() => capture.take()).toThrow()
+  })
+
+  test('ignores other tabs, frames and page initiators', () => {
+    const capture = v4Session()
+    capture.observeBody({ ...request, tabId: 99 })
+    capture.observeBody({ ...request, frameId: 2 })
+    expect(() =>
+      capture.observeBody({ ...request, initiator: 'https://evil.example' }),
+    ).toThrow()
+    expect(capture.diagnostics()?.code).toBe('NO_REQUEST_OBSERVED')
+  })
+})
+
 describe('zkTLS v2 capture', () => {
   test('ignores unrelated GETs and fails on a duplicate exact match', () => {
     const capture = session()

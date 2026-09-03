@@ -1,3 +1,7 @@
+import {
+  NearMatchDiagnostics,
+  type NearMatchSummary,
+} from './discovery/near-match'
 import type {
   V4ResolvedVariable,
   V4TemplateValue,
@@ -769,6 +773,7 @@ function joinedRawBody(
 }
 
 export class CaptureSession {
+  #diagnostics: NearMatchDiagnostics | null
   #binding: CaptureBinding
   #requestId: string | null = null
   #candidate: CapturedRequest | null = null
@@ -780,9 +785,17 @@ export class CaptureSession {
 
   constructor(binding: CaptureBinding) {
     this.#binding = createCaptureBinding(binding)
+    this.#diagnostics = isV4Binding(binding)
+      ? new NearMatchDiagnostics(binding)
+      : null
+  }
+
+  diagnostics(): NearMatchSummary | null {
+    return this.#diagnostics?.summary() ?? null
   }
 
   observe(details: RequestDetails): void {
+    this.#diagnostics?.observe(details)
     if (this.#redirected.has(details.requestId)) {
       this.#fail('redirected request cannot be captured')
       throw this.#failed
@@ -943,6 +956,7 @@ export class CaptureSession {
   }
 
   observeBody(details: RequestBodyDetails): void {
+    this.#diagnostics?.observe(details)
     if (this.#redirected.has(details.requestId)) {
       this.#fail('redirected request cannot be captured')
       throw this.#failed
@@ -1000,8 +1014,11 @@ export class CaptureSession {
       }
       if (bodyMatch === null) return
     }
-    if (this.#used || this.#failed || this.#candidate || this.#captured)
+    if (this.#used || this.#failed || this.#candidate || this.#captured) {
+      if (this.#requestId !== details.requestId)
+        this.#diagnostics?.markAmbiguous()
       fail('capture already completed')
+    }
     if (binding.method === 'POST') {
       this.#requestBody = requestBody!
     } else if (details.requestBody) {
