@@ -67,6 +67,7 @@ export const sensitiveKey = (key: string) =>
     key,
   )
 export const dynamicKey = (key: string) =>
+  businessTimeKey(key) ||
   /(?:^|[_.-])(?:id|nonce|cursor|timestamp|time|date|uuid)(?:$|[_.-])|(?:Id|Nonce|Cursor|Timestamp)$/.test(
     key,
   )
@@ -74,6 +75,30 @@ export const dynamicValue = (value: string) =>
   /^(?:0x[\da-f]+|[\da-f]{16,}|[\da-f]{8}-[\da-f-]{27,}|\d{8,}|\d{4}-\d\d-\d\dT)/i.test(
     value,
   ) || /^[\w+/=-]{32,}$/.test(value)
+
+function businessTimeKey(key: string): boolean {
+  return /(?:^|[_.-])(?:time|timestamp|date)$|_at$|(?:At|Time|Timestamp|Date)$/.test(
+    key,
+  )
+}
+
+function businessTime(value: string, key: string): boolean {
+  if (/nonce|cursor|uuid|id$/i.test(key)) return false
+  if (businessTimeKey(key) && /^(?:\d{9,10}|\d{12,13})$/.test(value)) {
+    const milliseconds = Number(value) * (value.length <= 10 ? 1000 : 1)
+    return milliseconds <= 4_102_444_800_000
+  }
+  const date =
+    /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(
+      value,
+    )?.[1]
+  if (!date || !Number.isFinite(Date.parse(value))) return false
+  const calendar = new Date(`${date}T00:00:00Z`)
+  return (
+    Number.isFinite(calendar.getTime()) &&
+    calendar.toISOString().slice(0, 10) === date
+  )
+}
 
 /** Only redacted JSON crosses the store boundary; arbitrary headers never do. */
 export function redact(
@@ -86,6 +111,7 @@ export function redact(
     return REDACTED
   if (typeof value === 'string') {
     if (secrets.some((secret) => value.includes(secret))) return REDACTED
+    if (businessTime(value, key)) return value
     const decimal = /^-?\d+(?:\.\d+)?$/.test(value)
     if (
       ((!decimal || dynamicKey(key)) && dynamicValue(value)) ||
