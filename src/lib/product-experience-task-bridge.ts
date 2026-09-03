@@ -1,3 +1,4 @@
+import type { MsgRequest } from '../types/messages'
 import type { ProductExperienceTaskRef } from '../types/product-experience'
 
 export const PRODUCT_EXPERIENCE_PAGE_CHANNEL = 'product-experience-v1' as const
@@ -10,6 +11,12 @@ const MAX_RULE_ID_LENGTH = 128
 const MAX_RULE_COUNT = 20
 
 export type ProductExperiencePageRequest =
+  | (Extract<
+      MsgRequest,
+      { type: 'start-discovery' | 'stop-discovery' | 'get-discovery-snapshot' }
+    > & {
+      channel: typeof PRODUCT_EXPERIENCE_PAGE_CHANNEL
+    })
   | {
       channel: typeof PRODUCT_EXPERIENCE_PAGE_CHANNEL
       type: 'save-product-experience-task'
@@ -101,6 +108,22 @@ function isCampaignId(value: unknown): value is string {
   )
 }
 
+function isDiscoveryTargetUrl(value: unknown): value is string {
+  if (!isSafeText(value, 2048)) return false
+  try {
+    const url = new URL(value)
+    return (
+      url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      !url.hash &&
+      (url.href === value || url.origin === value)
+    )
+  } catch {
+    return false
+  }
+}
+
 function isSafeText(value: unknown, maximumLength: number): value is string {
   return (
     typeof value === 'string' &&
@@ -179,6 +202,47 @@ export function parseProductExperiencePageRequest(
         type: 'save-product-experience-task',
         correlationId: value.correlationId,
         task,
+      }
+    }
+
+    if (value.type === 'start-discovery') {
+      if (
+        !hasExactKeys(value, [
+          'channel',
+          'correlationId',
+          'targetUrl',
+          'type',
+        ]) ||
+        !isDiscoveryTargetUrl(value.targetUrl)
+      )
+        return null
+      return {
+        channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+        type: value.type,
+        correlationId: value.correlationId,
+        targetUrl: value.targetUrl,
+      }
+    }
+
+    if (
+      value.type === 'stop-discovery' ||
+      value.type === 'get-discovery-snapshot'
+    ) {
+      if (
+        !hasExactKeys(value, [
+          'channel',
+          'correlationId',
+          'sessionId',
+          'type',
+        ]) ||
+        !isCampaignId(value.sessionId)
+      )
+        return null
+      return {
+        channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+        type: value.type,
+        correlationId: value.correlationId,
+        sessionId: value.sessionId,
       }
     }
 

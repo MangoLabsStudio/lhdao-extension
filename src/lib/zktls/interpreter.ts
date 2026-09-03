@@ -230,6 +230,7 @@ export type V4Connector = {
   expires_at: string
   period_days?: number
   page_origin: string
+  trigger_paths?: string[]
   origin: string
   request: {
     method: 'GET' | 'POST'
@@ -1037,6 +1038,55 @@ function v4Identifier(value: unknown, name: string): string {
   const result = v4String(value, name, 128, false)
   if (!V4_IDENTIFIER.test(result)) fail(`${name} is invalid.`)
   return result
+}
+
+function v4TriggerPaths(value: unknown, pageOrigin: string): void {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 5)
+    fail('trigger_paths is invalid.')
+  const unique = new Set<string>()
+  for (const item of value) {
+    const path = v4String(item, 'trigger_paths', 2048, false)
+    if (
+      !path.startsWith('/') ||
+      path.startsWith('//') ||
+      path.includes('\\') ||
+      path.includes('#') ||
+      unique.has(path)
+    )
+      fail('trigger_paths is invalid.')
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(path)
+    } catch {
+      fail('trigger_paths is invalid.')
+    }
+    if (v4UnsafeString(decoded) || decoded.includes('\\'))
+      fail('trigger_paths is invalid.')
+    for (
+      let offset = path.indexOf('%');
+      offset !== -1;
+      offset = path.indexOf('%', offset + 3)
+    ) {
+      const encodedByte = path.slice(offset + 1, offset + 3)
+      if (
+        !/^[0-9A-F]{2}$/.test(encodedByte) ||
+        /^[A-Za-z0-9._~-]$/.test(
+          String.fromCharCode(Number.parseInt(encodedByte, 16)),
+        )
+      )
+        fail('trigger_paths is invalid.')
+    }
+    const parsed = new URL(path, `${pageOrigin}/`)
+    if (
+      parsed.origin !== pageOrigin ||
+      parsed.username ||
+      parsed.password ||
+      parsed.hash ||
+      `${parsed.pathname}${parsed.search}` !== path
+    )
+      fail('trigger_paths is invalid.')
+    unique.add(path)
+  }
 }
 
 function v4Token(value: unknown, name: string): string {
@@ -2124,6 +2174,7 @@ function validateV4Connector(value: unknown): V4Connector {
   )
   const hasMaxDecodedData = Object.hasOwn(initial, 'max_decoded_data')
   const hasPeriodDays = Object.hasOwn(initial, 'period_days')
+  const hasTriggerPaths = Object.hasOwn(initial, 'trigger_paths')
   if (hasResponseContentEncoding !== hasMaxDecodedData)
     fail('V4 response encoding is invalid.')
   const fields = [
@@ -2136,6 +2187,7 @@ function validateV4Connector(value: unknown): V4Connector {
     'expires_at',
     ...(hasPeriodDays ? ['period_days'] : []),
     'page_origin',
+    ...(hasTriggerPaths ? ['trigger_paths'] : []),
     'origin',
     'request',
     'variables',
@@ -2189,6 +2241,8 @@ function validateV4Connector(value: unknown): V4Connector {
   )
     fail('expires_at is invalid.')
   v4Origin(input.page_origin, 'page_origin')
+  if (hasTriggerPaths)
+    v4TriggerPaths(input.trigger_paths, input.page_origin as string)
   v4Origin(input.origin, 'origin')
   v4Token(input.verifier_profile_id, 'verifier_profile_id')
 

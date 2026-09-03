@@ -111,6 +111,11 @@ export default defineContentScript({
         return true
       }
 
+      if (request.type !== 'get-public-product-experience-state') {
+        postProductError(request.correlationId, request.type)
+        return true
+      }
+
       void chrome.runtime
         .sendMessage({
           type: request.type,

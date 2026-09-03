@@ -481,6 +481,142 @@ async function signedV4Envelopes(
 }
 
 describe('zkTLS strict boundaries', () => {
+  test('parses and deeply freezes signed V4 trigger paths without changing their order', async () => {
+    const config = {
+      ...v4Connector(),
+      trigger_paths: ['/account?tab=history', '/dashboard'],
+    }
+    const direct = validateConnector(config)
+    expect(direct).toMatchObject({ trigger_paths: config.trigger_paths })
+    expect(
+      Object.isFrozen((direct as Record<string, unknown>).trigger_paths),
+    ).toBe(true)
+    config.trigger_paths[0] = '/changed'
+    expect(direct).toMatchObject({
+      trigger_paths: ['/account?tab=history', '/dashboard'],
+    })
+    const {
+      publicKeys,
+      signTicket: _signTicket,
+      ...response
+    } = await signedV4Envelopes(config)
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+    try {
+      const result = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        { publicKeys, now: '2026-08-15T00:00:00.000Z', local: true },
+      )
+      expect(result.config).toMatchObject({
+        trigger_paths: ['/changed', '/dashboard'],
+      })
+      expect(
+        Object.isFrozen(
+          (result.config as Record<string, unknown>).trigger_paths,
+        ),
+      ).toBe(true)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('preserves the legacy V4 canonical payload when trigger paths are absent', () => {
+    const config = v4Connector()
+    const parsed = validateConnector(config)
+    expect(Object.hasOwn(parsed, 'trigger_paths')).toBe(false)
+    expect(canonicalJson(parsed)).toBe(canonicalJson(config))
+  })
+
+  test.each([
+    ['/'],
+    ['/a', '/b', '/c', '/d', '/e'],
+    [`/${'a'.repeat(2047)}`],
+    ['/a%2Fb?fragment=%23'],
+    ['/a%252F?value=%2500'],
+    ['/caf%C3%A9'],
+  ])('accepts canonical V4 trigger paths %#', (...trigger_paths) => {
+    expect(
+      validateConnector({ ...v4Connector(), trigger_paths }),
+    ).toMatchObject({ trigger_paths })
+  })
+
+  test.each([
+    [],
+    ['/a', '/b', '/c', '/d', '/e', '/f'],
+    ['/a', '/a'],
+    ['/a', 3],
+    ['/a/../b'],
+    ['/./a'],
+    ['//evil.example/a'],
+    ['https://evil.example/a'],
+    ['/a#b'],
+    ['/a?'],
+    ['/a\\b'],
+    ['/a\n'],
+    ['/a%5Cb'],
+    ['/a%00'],
+    ['/a%7F'],
+    ['/a%C2%80'],
+    ['/a%D8%9C'],
+    ['/a%E2%80%8E'],
+    ['/a%E2%80%8F'],
+    ['/a%E2%80%AA'],
+    ['/a%E2%80%AE'],
+    ['/a%E2%81%A6'],
+    ['/a%E2%81%A9'],
+    ['/a%2fb'],
+    ['/a%2'],
+    ['/a%GG'],
+    ['/a%FF'],
+    ['/a%C0%AF'],
+    ['/a%ED%A0%80'],
+    ['/a%41'],
+    ['/a%30'],
+    ['/a%2E'],
+    ['/a%5F'],
+    ['/a%7E'],
+    ['/a%2D'],
+    ['/café'],
+    ['/a b'],
+    [`/${'a'.repeat(2048)}`],
+  ])('rejects invalid V4 trigger paths %#', (...trigger_paths) => {
+    expect(() =>
+      validateConnector({ ...v4Connector(), trigger_paths }),
+    ).toThrow()
+  })
+
+  test('rejects non-plain V4 trigger paths without invoking accessors', () => {
+    let reads = 0
+    const accessor = ['/a']
+    Object.defineProperty(accessor, '0', {
+      enumerable: true,
+      get() {
+        reads += 1
+        return '/a'
+      },
+    })
+    const hidden = ['/a']
+    Object.defineProperty(hidden, '0', { enumerable: false, value: '/a' })
+    const exotic = Object.setPrototypeOf(['/a'], {})
+    for (const trigger_paths of [
+      undefined,
+      null,
+      '/a',
+      Array(1),
+      accessor,
+      hidden,
+      exotic,
+      new Proxy(['/a'], {}),
+      Object.assign(['/a'], { extra: true }),
+    ]) {
+      expect(() =>
+        validateConnector({ ...v4Connector(), trigger_paths }),
+      ).toThrow()
+    }
+    expect(reads).toBe(0)
+  })
+
   test('verifies a real signed V4 config and ticket envelope round-trip', async () => {
     const payload = await signedV4Envelopes()
     const { publicKeys, signTicket: _signTicket, ...response } = payload

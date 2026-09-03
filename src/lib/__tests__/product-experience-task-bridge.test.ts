@@ -38,6 +38,113 @@ function saveRequest(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseProductExperiencePageRequest', () => {
+  const discoveryRequests = [
+    { type: 'start-discovery', targetUrl: 'https://app.example.com' },
+    { type: 'start-discovery', targetUrl: 'https://app.example.com/account' },
+    { type: 'stop-discovery', sessionId: 'discovery-12345678' },
+    { type: 'get-discovery-snapshot', sessionId: 'discovery-12345678' },
+  ]
+
+  it.each(
+    discoveryRequests,
+  )('accepts exact discovery request $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toEqual(request)
+  })
+
+  it.each(
+    discoveryRequests,
+  )('rejects unsafe discovery request $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    for (const extra of [
+      { tabId: 4 },
+      { ownerTabId: 4 },
+      { body: 'secret' },
+      { headers: {} },
+      { correlationId: '' },
+    ]) {
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent({ ...request, ...extra }),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+    }
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request, { source: null }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request, { origin: 'https://evil.example' }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+  })
+
+  it.each([
+    '',
+    'http://app.example.com',
+    'javascript:alert(1)',
+    'https://user:pass@app.example.com',
+    'https://app.example.com/#secret',
+    'https://app.example.com/\npath',
+    `https://app.example.com/${'x'.repeat(2048)}`,
+  ])('rejects invalid discovery target %s', (targetUrl) => {
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent({
+          channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+          correlationId: 'request-12345678',
+          type: 'start-discovery',
+          targetUrl,
+        }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+  })
+
+  it.each([
+    '',
+    'space session',
+    'x'.repeat(129),
+  ])('rejects invalid discovery session %s', (sessionId) => {
+    for (const type of ['stop-discovery', 'get-discovery-snapshot']) {
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent({
+            channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+            correlationId: 'request-12345678',
+            type,
+            sessionId,
+          }),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+    }
+  })
+
   it('accepts a strictly shaped task-save request from the Lighthouse window', () => {
     expect(
       parseProductExperiencePageRequest(
