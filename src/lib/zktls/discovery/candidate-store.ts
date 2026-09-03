@@ -54,6 +54,7 @@ export type DiscoveryCandidate = {
   lastSeenAt: number
   samples: DiscoverySample[]
   inference: {
+    // Original types at redacted-visible paths; masked parents have no descendants.
     requestShape: Record<string, string>
     responseShape: Record<string, string>
     dynamicFields: string[]
@@ -144,10 +145,11 @@ export class CandidateStore {
     const request = jsonBody(
       Object.hasOwn(raw, 'requestBody') ? raw.requestBody : '',
       secrets,
+      'request',
     )
     const response =
       contentType === 'application/json'
-        ? jsonBody(raw.responseBody, secrets)
+        ? jsonBody(raw.responseBody, secrets, 'response')
         : { state: 'non-json' as const, value: null, bytes: 0 }
     const page =
       typeof raw.documentUrl === 'string'
@@ -186,8 +188,12 @@ export class CandidateStore {
             (typeof value === 'string' && value.length <= 64)),
       ),
     )
-    const requestShape = shape(requestFields)
-    const responseShape = shape(responseFields)
+    const requestShape = {
+      ...shape(fields(url.query, 'query')),
+      ...(request.shape ?? shape(fields(request.value, 'request'))),
+    }
+    const responseShape =
+      ('shape' in response && response.shape) || shape(responseFields)
     const authHeaders =
       !!raw.requestHeaders &&
       typeof raw.requestHeaders === 'object' &&

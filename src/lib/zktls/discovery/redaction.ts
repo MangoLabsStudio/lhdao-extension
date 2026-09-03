@@ -202,10 +202,55 @@ export type BodyState =
   | 'oversize'
   | 'unavailable'
   | 'invalid'
+
+/** Original types, but only paths visible after redaction. Masked parents stop traversal. */
+function visibleShape(
+  original: Json,
+  redacted: Json,
+  prefix: string,
+): Record<string, string> {
+  const types = new Map<string, Set<string>>()
+  const visit = (raw: Json, safe: Json, path: string) => {
+    const values = types.get(path) ?? new Set<string>()
+    values.add(
+      raw === null ? 'null' : Array.isArray(raw) ? 'array' : typeof raw,
+    )
+    types.set(path, values)
+    if (Array.isArray(safe)) {
+      safe.forEach((item, index) => {
+        visit(Array.isArray(raw) ? raw[index] : item, item, `${path}[]`)
+      })
+    } else if (safe && typeof safe === 'object') {
+      for (const [key, item] of Object.entries(safe)) {
+        const child =
+          raw &&
+          typeof raw === 'object' &&
+          !Array.isArray(raw) &&
+          Object.hasOwn(raw, key)
+            ? raw[key]
+            : item
+        visit(child, item, `${path}.${key}`)
+      }
+    }
+  }
+  visit(original, redacted, prefix)
+  return Object.fromEntries(
+    [...types]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([path, values]) => [path, [...values].sort().join('|')]),
+  )
+}
+
 export function jsonBody(
   text: unknown,
   secrets: readonly string[] = [],
-): { state: BodyState; value: Json | null; bytes: number } {
+  prefix = '',
+): {
+  state: BodyState
+  value: Json | null
+  bytes: number
+  shape?: Record<string, string>
+} {
   const bytes =
     typeof text === 'string' ? Math.min(BODY_LIMIT + 1, byteLength(text)) : 0
   if (text === undefined) return { state: 'unavailable', value: null, bytes }
@@ -221,7 +266,12 @@ export function jsonBody(
     const value = redact(cloned as Json, '', secrets)
     if (byteLength(JSON.stringify(value)) > BODY_LIMIT)
       return { state: 'oversize', value: null, bytes }
-    return { state: 'json', value, bytes }
+    return {
+      state: 'json',
+      value,
+      bytes,
+      shape: visibleShape(cloned as Json, value, prefix),
+    }
   } catch {
     return { state: 'non-json', value: null, bytes }
   }
