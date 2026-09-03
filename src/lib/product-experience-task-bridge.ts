@@ -1,8 +1,14 @@
 import type { MsgRequest } from '../types/messages'
 import type { ProductExperienceTaskRef } from '../types/product-experience'
+import type { ProductZkTlsCondition } from './product-experience-controller'
 
 export const PRODUCT_EXPERIENCE_PAGE_CHANNEL = 'product-experience-v1' as const
 export const PRODUCT_EXPERIENCE_CAPABILITY = 'product-experience-v1' as const
+export const PRODUCT_EXPERIENCE_CAPABILITIES = [
+  PRODUCT_EXPERIENCE_CAPABILITY,
+  'product-zktls-discovery-v1',
+  'product-zktls-execution-v1',
+] as const
 
 const MAX_CORRELATION_ID_LENGTH = 128
 const MAX_CAMPAIGN_ID_LENGTH = 128
@@ -11,6 +17,13 @@ const MAX_RULE_ID_LENGTH = 128
 const MAX_RULE_COUNT = 20
 
 export type ProductExperiencePageRequest =
+  | {
+      channel: typeof PRODUCT_EXPERIENCE_PAGE_CHANNEL
+      type: 'retry-product-experience-rule'
+      correlationId: string
+      campaignId: string
+      ruleId: string
+    }
   | (Extract<
       MsgRequest,
       { type: 'start-discovery' | 'stop-discovery' | 'get-discovery-snapshot' }
@@ -58,6 +71,9 @@ export interface ProductExperiencePublicStateSource {
   authorizationRequired: boolean
   currentOriginAllowed: boolean
   error: ProductExperiencePublicError | null
+  conditions?: ProductZkTlsCondition[]
+  finished?: boolean
+  testPassed?: boolean
 }
 
 export interface PublicProductExperienceState {
@@ -68,8 +84,11 @@ export interface PublicProductExperienceState {
   authorizationRequired: boolean
   currentOriginAllowed: boolean
   version: string
-  capabilities: [typeof PRODUCT_EXPERIENCE_CAPABILITY]
+  capabilities: Array<(typeof PRODUCT_EXPERIENCE_CAPABILITIES)[number]>
   error: ProductExperiencePublicError | null
+  conditions?: ProductZkTlsCondition[]
+  finished?: boolean
+  testPassed?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -106,6 +125,34 @@ function isCampaignId(value: unknown): value is string {
     value.length <= MAX_CAMPAIGN_ID_LENGTH &&
     /^[A-Za-z0-9_-]+$/.test(value)
   )
+}
+
+export function parseProductRuleRetry(
+  value: unknown,
+): Extract<MsgRequest, { type: 'retry-product-experience-rule' }> | null {
+  if (
+    !isRecord(value) ||
+    value.type !== 'retry-product-experience-rule' ||
+    !hasExactKeys(value, [
+      'type',
+      'campaignId',
+      'ruleId',
+      ...(value.correlationId === undefined ? [] : ['correlationId']),
+    ]) ||
+    !isCampaignId(value.campaignId) ||
+    typeof value.ruleId !== 'string' ||
+    !/^[A-Za-z0-9_.:-]{1,128}$/.test(value.ruleId) ||
+    (value.correlationId !== undefined && !isCorrelationId(value.correlationId))
+  )
+    return null
+  return {
+    type: 'retry-product-experience-rule',
+    campaignId: value.campaignId,
+    ruleId: value.ruleId,
+    ...(value.correlationId === undefined
+      ? {}
+      : { correlationId: value.correlationId }),
+  }
 }
 
 function isDiscoveryTargetUrl(value: unknown): value is string {
@@ -294,6 +341,18 @@ export function parseProductExperiencePageRequest(
       }
     }
 
+    if (operation === 'retry-product-experience-rule') {
+      const { channel: _channel, ...runtime } = value
+      const parsed = parseProductRuleRetry(runtime)
+      return parsed?.correlationId
+        ? {
+            ...parsed,
+            channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+            correlationId: parsed.correlationId,
+          }
+        : null
+    }
+
     if (operation === 'start-discovery') {
       if (
         !hasExactKeys(value, [
@@ -373,7 +432,7 @@ function idleState(
     authorizationRequired: false,
     currentOriginAllowed: false,
     version,
-    capabilities: [PRODUCT_EXPERIENCE_CAPABILITY],
+    capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
     error: null,
   }
 }
@@ -416,7 +475,37 @@ export function projectPublicProductExperienceState(
     authorizationRequired: currentState.authorizationRequired,
     currentOriginAllowed: currentState.currentOriginAllowed,
     version,
-    capabilities: [PRODUCT_EXPERIENCE_CAPABILITY],
+    capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
     error: currentState.error,
+    ...(currentState.conditions
+      ? {
+          conditions: currentState.conditions
+            .slice(0, MAX_RULE_COUNT)
+            .map((condition) => ({
+              ruleId: condition.ruleId,
+              ...(condition.title ? { title: condition.title } : {}),
+              status: condition.status,
+              code: condition.code,
+              stage: condition.stage,
+              correlationId: condition.correlationId,
+              ...(condition.details
+                ? {
+                    details: condition.details
+                      .slice(0, 32)
+                      .map(({ category, pointer }) => ({ category, pointer })),
+                  }
+                : {}),
+              ...(condition.status === 'verified_no'
+                ? {
+                    actual: condition.actual,
+                    required: condition.required,
+                    comparator: condition.comparator,
+                  }
+                : {}),
+            })),
+          finished: currentState.finished === true,
+          testPassed: currentState.testPassed === true,
+        }
+      : {}),
   }
 }

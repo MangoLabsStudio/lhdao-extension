@@ -9,6 +9,7 @@ interface ProductExperienceCardProps {
   state: ProductExperienceControllerState
   busy?: boolean
   onStart(): void
+  onRetryRule?(ruleId: string): void
 }
 
 const STATUS_COPY: Record<
@@ -68,11 +69,18 @@ const STATUS_COPY: Record<
 }
 
 function actionLabel(state: ProductExperienceControllerState): string | null {
+  if (state.zkTlsFinished) return null
   const { status } = state
   if (state.error === 'ORIGIN_NOT_ALLOWED' || status === 'origin-mismatch') {
     return '检查当前网站'
   }
   if (status === 'reauthorize') return '重新授权'
+  if (
+    state.zkTlsConditions?.some(
+      (item) => item.status === 'failed' || item.status === 'action_required',
+    )
+  )
+    return null
   if (isRetryableProofState(state)) return '重试证明'
   if (isContinuableZkTlsProofState(state)) return '继续证明'
   if (status === 'ready') return '开始验证'
@@ -111,6 +119,23 @@ function projectCopy(
       tone: 'bg-amber-300',
     }
   if (state.status === 'verified') return STATUS_COPY.verified
+  if (state.zkTlsFinished)
+    return {
+      label: state.zkTlsTestPassed
+        ? '测试验证完成'
+        : '验证完成，部分条件不满足',
+      detail: state.zkTlsTestPassed
+        ? '后端已确认当前配置测试通过；这不是参与者业务达标凭证。'
+        : '所有条件均已返回结果。未满足条件是业务结果，不是证明系统错误。',
+      tone: 'bg-teal-300',
+    }
+  if (state.zkTlsConditions?.some((item) => item.status === 'action_required'))
+    return {
+      label: '需要操作页面',
+      detail:
+        '请在打开的目标页面登录、连接钱包或加载对应记录，然后继续此条件。其他已完成条件会保留。',
+      tone: 'bg-amber-300',
+    }
   if (
     state.error === 'ORIGIN_NOT_ALLOWED' ||
     state.status === 'origin-mismatch'
@@ -196,6 +221,8 @@ function progressValue(progress: ProductZkTlsRuleProgress): string | null {
 }
 
 function progressLabel(progress: ProductZkTlsRuleProgress): string {
+  if (progress.status === 'VERIFIED_NO')
+    return `未满足（实际 ${scalarLabel(progress.actual ?? progress.current)}；要求 ${displayText(progress.comparator ?? '')} ${scalarLabel(progress.required ?? progress.target)}）`
   if (progress.status === 'PENDING') return '等待证明'
   if (progress.status === 'SUBMITTED') return '已提交，等待后端确认'
   if (progress.status === 'INSUFFICIENT_DATA') return '数据范围不足'
@@ -210,6 +237,7 @@ export function ProductExperienceCard({
   state,
   busy = false,
   onStart,
+  onRetryRule,
 }: ProductExperienceCardProps) {
   const copy = projectCopy(state, busy)
   const completed = Math.min(
@@ -332,6 +360,49 @@ export function ProductExperienceCard({
 
         {state.zkTlsDiagnostic && (
           <ProductExperienceDiagnostics diagnostic={state.zkTlsDiagnostic} />
+        )}
+
+        {state.zkTlsConditions && (
+          <ul className="mt-3 space-y-2 text-[10px] text-slate-300">
+            {state.zkTlsConditions.map((condition) => (
+              <li key={condition.ruleId}>
+                <span>
+                  {displayText(condition.ruleId)} ·{' '}
+                  {displayText(condition.stage ?? condition.status)}
+                </span>
+                {condition.code && (
+                  <p className="font-mono text-amber-200">{condition.code}</p>
+                )}
+                {condition.correlationId && (
+                  <p className="font-mono text-slate-400">
+                    {displayText(condition.correlationId)}
+                  </p>
+                )}
+                {condition.details?.map((detail) => (
+                  <p
+                    key={`${detail.category}:${detail.pointer}`}
+                    className="font-mono"
+                  >
+                    {displayText(detail.category)} {displayText(detail.pointer)}
+                  </p>
+                ))}
+                {onRetryRule &&
+                  (condition.status === 'failed' ||
+                    condition.status === 'action_required') && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onRetryRule(condition.ruleId)}
+                      className="mt-1 rounded bg-teal-300 px-2 py-1 font-bold text-slate-950 disabled:opacity-50"
+                    >
+                      {condition.status === 'action_required'
+                        ? '继续此条件'
+                        : '重试此条件'}
+                    </button>
+                  )}
+              </li>
+            ))}
+          </ul>
         )}
 
         {action && (

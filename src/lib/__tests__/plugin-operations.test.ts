@@ -117,6 +117,10 @@ describe('PLUGIN_OPERATIONS', () => {
       'StartProductZkTlsProof',
       'StartProductZkTlsTestProof',
       'ProductZkTlsRuleProgress',
+      'StartProductZkTlsProof',
+      'StartProductZkTlsTestProof',
+      'ProductZkTlsRuleProgress',
+      'ProductTrackerIntegrationStatus',
     ])
     expect(
       getPluginOperationByDocument(PROMOTE_TWEET_MUTATION, 'PromoteTweet'),

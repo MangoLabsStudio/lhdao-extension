@@ -12,6 +12,7 @@
 
 import { WEB_ENDPOINT, WEB_MATCH_PATTERN } from '@/lib/env'
 import {
+  PRODUCT_EXPERIENCE_CAPABILITIES,
   PRODUCT_EXPERIENCE_PAGE_CHANNEL,
   parseProductExperiencePageRequest,
 } from '@/lib/product-experience-task-bridge'
@@ -51,7 +52,11 @@ export default defineContentScript({
     const pong = (): void => {
       try {
         window.postMessage(
-          { __lhdaoExtPong__: true, version },
+          {
+            __lhdaoExtPong__: true,
+            version,
+            capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
+          },
           window.location.origin,
         )
       } catch {
@@ -143,6 +148,9 @@ export default defineContentScript({
           type: request.type,
           campaignId: request.campaignId,
           correlationId: request.correlationId,
+          ...(request.type === 'retry-product-experience-rule'
+            ? { ruleId: request.ruleId }
+            : {}),
         })
         .then((response: MsgResponse) => {
           if (
@@ -165,6 +173,13 @@ export default defineContentScript({
                 totalRuleCount: state.totalRuleCount,
                 authorizationRequired: state.authorizationRequired,
                 currentOriginAllowed: state.currentOriginAllowed,
+                ...(state.conditions
+                  ? {
+                      conditions: state.conditions,
+                      finished: state.finished,
+                      testPassed: state.testPassed,
+                    }
+                  : {}),
                 version: state.version,
                 capabilities: [...state.capabilities],
                 error: state.error,

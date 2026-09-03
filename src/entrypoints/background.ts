@@ -27,7 +27,10 @@ import {
   type ProductExperienceRuntimeSender,
 } from '@/lib/product-experience-controller'
 import { signProductExperienceProof } from '@/lib/product-experience-proof'
-import { projectPublicProductExperienceState } from '@/lib/product-experience-task-bridge'
+import {
+  parseProductRuleRetry,
+  projectPublicProductExperienceState,
+} from '@/lib/product-experience-task-bridge'
 import {
   buildProofCanonical,
   hmacSignProof,
@@ -64,6 +67,7 @@ import {
   POLL_EXTENSION_PAIRING_QUERY,
   type PollExtensionPairingResult,
   PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
+  PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
   PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
   type PreviewPromoteTweetPricingResult,
@@ -75,6 +79,7 @@ import {
   type PromoteTweetVars,
   parseMintProductExperienceTestTicketResult,
   parseMintProductExperienceTicketResult,
+  parseProductIntegrationStatusResult,
   parseProductZkTlsRuleProgressResult,
   parseStartProductZkTlsProofResult,
   parseStartProductZkTlsTestProofResult,
@@ -414,7 +419,7 @@ function createProductExperienceController(): ProductExperienceController {
     async startZkTls({ campaignId, ruleId, ticketKind }) {
       if (ticketKind === 'TEST') {
         const result = await gql<unknown, StartProductZkTlsTestProofVariables>(
-          PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+          PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
           { campaignId, ruleId },
           productZkTlsStartGqlOptions(StartProductZkTlsTestProofOperationName),
         )
@@ -422,7 +427,7 @@ function createProductExperienceController(): ProductExperienceController {
           .startProductZkTlsTestProof
       }
       const result = await gql<unknown, StartProductZkTlsProofVariables>(
-        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+        PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
         { campaignId, ruleId },
         productZkTlsStartGqlOptions(StartProductZkTlsProofOperationName),
       )
@@ -431,12 +436,21 @@ function createProductExperienceController(): ProductExperienceController {
     proveZkTls: proveZkTlsSession,
     async readZkTlsProgress(campaignId) {
       const result = await gql<unknown, ProductZkTlsRuleProgressVariables>(
-        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
+        PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
         { campaignId },
         { operationName: ProductZkTlsRuleProgressOperationName },
       )
       return parseProductZkTlsRuleProgressResult(result)
         .productZkTlsRuleProgress
+    },
+    async readIntegration(campaignId) {
+      return parseProductIntegrationStatusResult(
+        await gql<unknown, { campaignId: string }>(
+          PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
+          { campaignId },
+          { operationName: 'ProductTrackerIntegrationStatus' },
+        ),
+      )
     },
     now: () => Date.now(),
     randomNonce: randomProofNonce,
@@ -541,8 +555,35 @@ export default defineBackground(() => {
     if (req.type === 'start-product-experience') {
       return {
         type: 'product-experience-state-result',
-        state: await productExperienceController.start(),
+        state: await productExperienceController.start({ executePlan: true }),
       }
+    }
+    if (req.type === 'retry-product-experience-rule') {
+      const parsed = parseProductRuleRetry(req)
+      const trustedUi =
+        sender.id === chrome.runtime.id &&
+        sender.url?.startsWith(chrome.runtime.getURL('')) &&
+        sender.tab === undefined
+      const trustedPage =
+        sender.id === chrome.runtime.id &&
+        sender.frameId === 0 &&
+        productRuntimeSender(sender).origin === new URL(WEB_ENDPOINT).origin
+      if (!parsed || (!trustedUi && !trustedPage)) return { type: 'ack' }
+      const state = await productExperienceController.retryRule(
+        parsed.campaignId,
+        parsed.ruleId,
+      )
+      return req.correlationId
+        ? {
+            type: 'public-product-experience-state-result',
+            correlationId: req.correlationId,
+            state: projectPublicProductExperienceState(
+              req.campaignId,
+              controllerStateToPublicSource(state),
+              chrome.runtime.getManifest().version,
+            ),
+          }
+        : { type: 'product-experience-state-result', state }
     }
     if (req.type === 'product-experience-bootstrap') {
       const response = await productExperienceController.bootstrap(

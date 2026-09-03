@@ -239,6 +239,65 @@ describe('product experience popup', () => {
     expect(container.textContent).toContain('正在注入页面监听并检查规则')
   })
 
+  it('shows terminal no as a business result and retries only the selected paused condition', async () => {
+    const { container, requests } = await renderPopup(
+      productState('observing', {
+        zkTlsProgress: [
+          {
+            ruleId: 'rule-a',
+            title: 'Balance',
+            status: 'VERIFIED_NO',
+            current: 2,
+            target: 3,
+            actual: 2,
+            required: 3,
+            comparator: 'GTE',
+            unit: null,
+          },
+        ],
+        zkTlsConditions: [
+          {
+            ruleId: 'rule-a',
+            status: 'verified_no',
+            code: null,
+            stage: null,
+            correlationId: null,
+          },
+          {
+            ruleId: 'rule-b',
+            status: 'action_required',
+            code: 'NO_REQUEST_OBSERVED',
+            stage: 'capture-failed',
+            correlationId: 'safe-correlation',
+          },
+        ],
+      }),
+    )
+    expect(container.textContent).toContain('未满足')
+    expect(container.textContent).toContain('实际 2')
+    expect(container.textContent).toContain('要求 GTE 3')
+    expect(container.textContent).toContain('NO_REQUEST_OBSERVED')
+    const button = [...container.querySelectorAll('button')].find(
+      (item) => item.textContent === '继续此条件',
+    )
+    expect(button).toBeDefined()
+    await act(async () => button?.click())
+    expect(requests).toContainEqual({
+      type: 'retry-product-experience-rule',
+      campaignId: 'campaign-product-001',
+      ruleId: 'rule-b',
+    })
+  })
+
+  it('closes mixed yes/no without a proof retry button', async () => {
+    const { container } = await renderPopup(
+      productState('observing', { zkTlsFinished: true, zkTlsProgress: [] }),
+    )
+    expect(container.textContent).toContain('验证完成，部分条件不满足')
+    expect(container.textContent).not.toContain('继续证明')
+    expect(container.textContent).not.toContain('证明失败')
+  })
+
   it('shows captured proof stages and exact safe failure details', async () => {
     const { container } = await renderPopup(
       productState('observing', {

@@ -67,6 +67,12 @@ export type MsgRequest =
       correlationId: string
     }
   | { type: 'start-product-experience' }
+  | {
+      type: 'retry-product-experience-rule'
+      campaignId: string
+      ruleId: string
+      correlationId?: string
+    }
   | { type: 'product-experience-bootstrap' }
   | { type: 'product-experience-ready'; sessionId: string }
   | {

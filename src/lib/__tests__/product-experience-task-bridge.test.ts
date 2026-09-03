@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  PRODUCT_EXPERIENCE_CAPABILITY,
+  PRODUCT_EXPERIENCE_CAPABILITIES,
   PRODUCT_EXPERIENCE_PAGE_CHANNEL,
   parseProductExperiencePageRequest,
   projectPublicProductExperienceState,
@@ -38,6 +38,44 @@ function saveRequest(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseProductExperiencePageRequest', () => {
+  it('accepts only a scoped retry and advertises discovery and execution capabilities', () => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      type: 'retry-product-experience-rule',
+      correlationId: 'retry-123456',
+      campaignId: 'campaign-a',
+      ruleId: 'rule-a',
+    }
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toEqual(request)
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent({ ...request, triggerPaths: ['/steal'] }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request, { origin: 'https://evil.example' }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+    expect(
+      projectPublicProductExperienceState('campaign-a', null, '0.2.2')
+        .capabilities,
+    ).toEqual([
+      'product-experience-v1',
+      'product-zktls-discovery-v1',
+      'product-zktls-execution-v1',
+    ])
+  })
   const discoveryRequests = [
     { type: 'start-discovery', targetUrl: 'https://app.example.com' },
     { type: 'start-discovery', targetUrl: 'https://app.example.com/account' },
@@ -406,7 +444,7 @@ describe('projectPublicProductExperienceState', () => {
       authorizationRequired: false,
       currentOriginAllowed: true,
       version: '0.2.0',
-      capabilities: [PRODUCT_EXPERIENCE_CAPABILITY],
+      capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
       error: null,
     })
     expect(Object.keys(projected).sort()).toEqual([
@@ -449,7 +487,7 @@ describe('projectPublicProductExperienceState', () => {
       authorizationRequired: false,
       currentOriginAllowed: false,
       version: '0.2.0',
-      capabilities: [PRODUCT_EXPERIENCE_CAPABILITY],
+      capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
       error: null,
     })
   })
