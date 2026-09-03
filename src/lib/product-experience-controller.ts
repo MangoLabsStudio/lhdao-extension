@@ -718,17 +718,41 @@ export class ProductExperienceController {
         Date.parse(existing.preparedZkTls.expiresAt) > this.dependencies.now()
           ? existing.preparedZkTls
           : null
+      let seedRuleId = prepared
+        ? existing?.preparedZkTls?.ruleId
+        : minted.rules[0].id
+      let initialProgress: ProductZkTlsRuleProgress[] | null = null
       if (
         !prepared &&
         (options.executePlan || !allowedOrigins.includes(origin)) &&
         minted.verificationMode === 'ZKTLS'
       ) {
         try {
-          prepared = await this.dependencies.startZkTls({
-            campaignId: currentTask.campaignId,
-            ruleId: minted.rules[0].id,
-            ticketKind: currentTask.ticketKind,
-          })
+          initialProgress = await this.dependencies.readZkTlsProgress(
+            currentTask.campaignId,
+          )
+          const latestTask = await this.dependencies.storage.getTask()
+          if (
+            this.generation !== mintGeneration ||
+            !latestTask ||
+            !sameTaskIdentity(latestTask, currentTask)
+          )
+            return this.getStateWithoutRetry()
+          seedRuleId = minted.rules.find(
+            (rule) =>
+              !initialProgress?.some(
+                (entry) =>
+                  entry.ruleId === rule.id &&
+                  (entry.status === 'VERIFIED' ||
+                    entry.status === 'VERIFIED_NO'),
+              ),
+          )?.id
+          if (seedRuleId)
+            prepared = await this.dependencies.startZkTls({
+              campaignId: currentTask.campaignId,
+              ruleId: seedRuleId,
+              ticketKind: currentTask.ticketKind,
+            })
         } catch {
           if (this.generation !== mintGeneration)
             return this.getStateWithoutRetry()
@@ -739,7 +763,11 @@ export class ProductExperienceController {
         if (this.generation !== mintGeneration)
           return this.getStateWithoutRetry()
       }
-      if (!allowedOrigins.includes(origin) && !prepared) {
+      if (
+        !allowedOrigins.includes(origin) &&
+        !prepared &&
+        !(initialProgress && !seedRuleId)
+      ) {
         return this.setTransient(this.originMismatchState(currentTask))
       }
 
@@ -761,8 +789,18 @@ export class ProductExperienceController {
         rules: clone(minted.rules),
         matches: [],
         zkTlsQueue: [],
-        verifiedRuleIds: [],
-        zkTlsProgress: [],
+        verifiedRuleIds:
+          currentTask.ticketKind === 'TEST'
+            ? []
+            : minted.rules
+                .filter((rule) =>
+                  initialProgress?.some(
+                    (entry) =>
+                      entry.ruleId === rule.id && entry.status === 'VERIFIED',
+                  ),
+                )
+                .map((rule) => rule.id),
+        zkTlsProgress: initialProgress ?? [],
         status: 'observing',
         error: null,
         zkTlsFailureCode: null,
@@ -774,13 +812,19 @@ export class ProductExperienceController {
             }
           : {}),
       }
-      if (prepared?.executionPlan) {
+      if (prepared?.executionPlan || (initialProgress && !seedRuleId)) {
         session.plannedExecution = true
-        if (prepared.executionPlan.steps.length === 0) {
+        if (
+          !prepared?.executionPlan ||
+          prepared.executionPlan.steps.length === 0
+        ) {
           try {
-            session.zkTlsProgress = await this.dependencies.readZkTlsProgress(
-              currentTask.campaignId,
-            )
+            session.zkTlsProgress =
+              initialProgress && !seedRuleId
+                ? initialProgress
+                : await this.dependencies.readZkTlsProgress(
+                    currentTask.campaignId,
+                  )
             session.verifiedRuleIds = session.rules
               .filter(
                 (rule) =>
@@ -812,7 +856,8 @@ export class ProductExperienceController {
             (item) => item.connectorId === prepared.connectorId,
           )
           if (
-            !step?.dependentRuleIds.includes(minted.rules[0].id) ||
+            !seedRuleId ||
+            !step?.dependentRuleIds.includes(seedRuleId) ||
             step.dependentRuleIds.some(
               (id) => !minted.rules.some((rule) => rule.id === id),
             )
@@ -822,7 +867,7 @@ export class ProductExperienceController {
             )
           session.zkTlsQueue = [
             {
-              ruleId: minted.rules[0].id,
+              ruleId: seedRuleId,
               status: 'queued',
               sessionId: prepared.sessionId,
               connectorId: prepared.connectorId,
@@ -851,9 +896,9 @@ export class ProductExperienceController {
           }
         }
       }
-      if (prepared && !prepared.executionPlan) {
+      if (prepared && !prepared.executionPlan && seedRuleId) {
         session.preparedZkTls = {
-          ruleId: minted.rules[0].id,
+          ruleId: seedRuleId,
           sessionId: prepared.sessionId,
           connectorId: prepared.connectorId,
           expiresAt: prepared.expiresAt,

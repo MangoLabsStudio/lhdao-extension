@@ -1052,6 +1052,149 @@ describe('ProductExperienceController zkTLS authority queue', () => {
   })
 
   it.each([
+    ['VERIFIED', false],
+    ['VERIFIED_NO', false],
+    ['VERIFIED', true],
+    ['VERIFIED_NO', true],
+  ] as const)('recovers missing local state without restarting the first %s rule (shared=%s)', async (status, shared) => {
+    const fresh = createHarness()
+    fresh.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    fresh.readZkTlsProgress.mockImplementation(async () =>
+      rules.map((rule) => ({
+        ruleId: rule.id,
+        title: rule.title,
+        status:
+          rule.id === 'rule-a'
+            ? status
+            : fresh.proveZkTls.mock.calls.length
+              ? 'VERIFIED'
+              : 'PENDING',
+        current: 1,
+        target: 1,
+        unit: null,
+      })),
+    )
+    fresh.startZkTls.mockImplementation(async ({ ruleId }) => ({
+      sessionId: `${ruleId}-proof`,
+      connectorId: shared ? 'shared' : ruleId,
+      expiresAt: '2026-07-13T10:10:00.000Z',
+      executionPlan: {
+        version: 1,
+        steps: [
+          {
+            connectorId: shared ? 'shared' : 'rule-b',
+            triggerPaths: ['/app'],
+            dependentFactIds: shared ? ['a:value', 'b:value'] : ['b:value'],
+            dependentRuleIds: shared ? ['rule-a', 'rule-b'] : ['rule-b'],
+          },
+        ],
+      },
+    }))
+    await fresh.controller.saveTask(task())
+    await fresh.controller.start({ executePlan: true })
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(fresh.startZkTls.mock.calls.map(([input]) => input.ruleId)).toEqual([
+      'rule-b',
+    ])
+    expect(fresh.proveZkTls).toHaveBeenCalledTimes(1)
+    expect(fresh.proveZkTls.mock.calls[0][0].connectorId).toBe(
+      shared ? 'shared' : 'rule-b',
+    )
+    expect(fresh.storage.session?.zkTlsProgress[0].status).toBe(status)
+    expect(await fresh.controller.getState()).toMatchObject({
+      error: null,
+      zkTlsFinished: true,
+      matchedRuleIds: status === 'VERIFIED' ? ['rule-a', 'rule-b'] : ['rule-b'],
+    })
+  })
+
+  it.each([
+    'task',
+    'tab',
+    'cancel',
+  ] as const)('does not start an old proof after a %s change during recovery preflight', async (change) => {
+    const fresh = createHarness()
+    fresh.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    let resolve!: (value: ProductZkTlsRuleProgress[]) => void
+    fresh.readZkTlsProgress.mockReturnValue(
+      new Promise((done) => {
+        resolve = done
+      }),
+    )
+    await fresh.controller.saveTask(task())
+    const starting = fresh.controller.start({ executePlan: true })
+    await vi.advanceTimersByTimeAsync(0)
+    if (change === 'task') await fresh.controller.saveTask(replacementTask())
+    else if (change === 'cancel') await fresh.controller.cancel()
+    else await fresh.controller.handleTabRemoved(7)
+    resolve([])
+    await starting
+    expect(fresh.startZkTls).not.toHaveBeenCalled()
+  })
+
+  it('fails safely and can retry when recovery progress cannot be read', async () => {
+    const fresh = createHarness()
+    fresh.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    fresh.readZkTlsProgress.mockRejectedValueOnce(new Error('offline'))
+    await fresh.controller.saveTask(task())
+    expect(await fresh.controller.start({ executePlan: true })).toMatchObject({
+      error: 'VERIFICATION_FAILED',
+    })
+    expect(fresh.startZkTls).not.toHaveBeenCalled()
+    expect(fresh.storage.session).toBeNull()
+    await fresh.controller.start({ executePlan: true })
+    expect(fresh.startZkTls).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['PARTICIPANT', 3, false, true],
+    ['TEST', 3, false, false],
+    ['TEST', 2, true, false],
+    ['TEST', 3, true, true],
+  ] as const)('restores all terminal rules without a new session (%s, version %s, passed %s)', async (kind, configVersion, experiencePassed, finished) => {
+    const fresh = createHarness()
+    fresh.activeTab.value = {
+      id: 99,
+      url: 'https://lighthouse.example/campaign',
+    }
+    fresh.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    fresh.mintTest.mockResolvedValue(ticket({ verificationMode: 'ZKTLS' }))
+    fresh.readZkTlsProgress.mockResolvedValue(
+      rules.map((rule) => ({
+        ruleId: rule.id,
+        title: rule.title,
+        status: rule.id === 'rule-a' ? 'VERIFIED' : 'VERIFIED_NO',
+        current: 1,
+        target: 2,
+        unit: null,
+      })),
+    )
+    fresh.readIntegration.mockResolvedValue({
+      configVersion,
+      experiencePassed,
+      experiencePassedAt: null,
+    })
+    await fresh.controller.saveTask(task(kind))
+    await fresh.controller.start({ executePlan: true })
+    expect(await fresh.controller.getState()).toMatchObject({
+      error: null,
+      zkTlsFinished: finished,
+      matchedRuleIds: kind === 'TEST' ? [] : ['rule-a'],
+    })
+    expect(fresh.startZkTls).not.toHaveBeenCalled()
+    expect(fresh.proveZkTls).not.toHaveBeenCalled()
+    expect(fresh.inject).not.toHaveBeenCalled()
+  })
+
+  it.each([
     'separate',
     'shared',
   ])('consumes the shared discovery %s plan once per connector through binding and terminal NO', async (variant) => {
