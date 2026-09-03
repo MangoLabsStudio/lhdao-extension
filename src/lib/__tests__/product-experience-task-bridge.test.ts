@@ -101,6 +101,116 @@ describe('parseProductExperiencePageRequest', () => {
     ).toBeNull()
   })
 
+  it.each(
+    discoveryRequests,
+  )('rejects discovery accessors without reading them: $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    for (const field of Object.keys(request)) {
+      let reads = 0
+      const candidate = { ...request }
+      Object.defineProperty(candidate, field, {
+        enumerable: true,
+        get() {
+          reads += 1
+          return reads === 1
+            ? request[field as keyof typeof request]
+            : 'javascript:alert(1)'
+        },
+      })
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent(candidate),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+      expect(reads).toBe(0)
+    }
+  })
+
+  it('rejects a targetUrl getter that changes from HTTPS to javascript without invoking it', () => {
+    let reads = 0
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      type: 'start-discovery',
+      get targetUrl() {
+        reads += 1
+        return reads === 1 ? 'https://app.example.com/' : 'javascript:alert(1)'
+      },
+    }
+    const parsed = parseProductExperiencePageRequest(
+      messageEvent(request),
+      pageWindow,
+      LIGHTHOUSE_ORIGIN,
+    )
+    expect(parsed).toBeNull()
+    expect(reads).toBe(0)
+  })
+
+  it.each(
+    discoveryRequests,
+  )('rejects discovery hidden and symbol keys: $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    for (const key of ['tabId', 'ownerTabId', Symbol('tabId')]) {
+      const candidate = Object.defineProperty({ ...request }, key, {
+        value: 4,
+        enumerable: false,
+      })
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent(candidate),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+    }
+    const candidate = Object.defineProperty({ ...request }, 'type', {
+      value: request.type,
+      enumerable: false,
+    })
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(candidate),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+  })
+
+  it.each(
+    discoveryRequests,
+  )('rejects discovery proxies and exotic prototypes: $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    const { proxy, revoke } = Proxy.revocable(request, {})
+    revoke()
+    for (const candidate of [
+      new Proxy(request, {}),
+      proxy,
+      Object.setPrototypeOf({ ...request }, { tabId: 4 }),
+    ]) {
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent(candidate),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+    }
+  })
+
   it.each([
     '',
     'http://app.example.com',

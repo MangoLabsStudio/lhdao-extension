@@ -124,6 +124,34 @@ function isDiscoveryTargetUrl(value: unknown): value is string {
   }
 }
 
+function discoverySnapshot(
+  value: Record<string, unknown>,
+  operation: string,
+): Record<string, unknown> | null {
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return null
+  const fields = [
+    'channel',
+    'type',
+    'correlationId',
+    operation === 'start-discovery' ? 'targetUrl' : 'sessionId',
+  ]
+  const ownKeys = Reflect.ownKeys(value)
+  if (ownKeys.length !== fields.length) return null
+  for (const key of ownKeys) {
+    if (typeof key !== 'string' || !fields.includes(key)) return null
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (
+      !descriptor?.enumerable ||
+      !('value' in descriptor) ||
+      typeof descriptor.value !== 'string'
+    )
+      return null
+  }
+  // Clone the original only after rejecting accessors; structuredClone rejects proxies.
+  return structuredClone(value)
+}
+
 function isSafeText(value: unknown, maximumLength: number): value is string {
   return (
     typeof value === 'string' &&
@@ -182,7 +210,20 @@ export function parseProductExperiencePageRequest(
   }
 
   try {
-    const value: unknown = event.data
+    let value: unknown = event.data
+    if (!isRecord(value)) return null
+    const operation: unknown = Object.getOwnPropertyDescriptor(
+      value,
+      'type',
+    )?.value
+    if (typeof operation !== 'string') return null
+    if (
+      operation === 'start-discovery' ||
+      operation === 'stop-discovery' ||
+      operation === 'get-discovery-snapshot'
+    ) {
+      value = discoverySnapshot(value, operation)
+    }
     if (
       !isRecord(value) ||
       value.channel !== PRODUCT_EXPERIENCE_PAGE_CHANNEL ||
@@ -191,7 +232,7 @@ export function parseProductExperiencePageRequest(
       return null
     }
 
-    if (value.type === 'save-product-experience-task') {
+    if (operation === 'save-product-experience-task') {
       if (!hasExactKeys(value, ['channel', 'correlationId', 'task', 'type'])) {
         return null
       }
@@ -205,7 +246,7 @@ export function parseProductExperiencePageRequest(
       }
     }
 
-    if (value.type === 'start-discovery') {
+    if (operation === 'start-discovery') {
       if (
         !hasExactKeys(value, [
           'channel',
@@ -218,15 +259,15 @@ export function parseProductExperiencePageRequest(
         return null
       return {
         channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-        type: value.type,
+        type: operation,
         correlationId: value.correlationId,
         targetUrl: value.targetUrl,
       }
     }
 
     if (
-      value.type === 'stop-discovery' ||
-      value.type === 'get-discovery-snapshot'
+      operation === 'stop-discovery' ||
+      operation === 'get-discovery-snapshot'
     ) {
       if (
         !hasExactKeys(value, [
@@ -240,13 +281,13 @@ export function parseProductExperiencePageRequest(
         return null
       return {
         channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-        type: value.type,
+        type: operation,
         correlationId: value.correlationId,
         sessionId: value.sessionId,
       }
     }
 
-    if (value.type === 'get-public-product-experience-state') {
+    if (operation === 'get-public-product-experience-state') {
       if (
         !hasExactKeys(value, [
           'campaignId',
