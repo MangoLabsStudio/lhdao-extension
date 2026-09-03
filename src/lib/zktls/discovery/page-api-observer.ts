@@ -91,57 +91,6 @@ function jsonContentType(value: string | null): boolean {
   return /^application\/(?:[\w.-]+\+)?json(?:\s*;|\s*$)/i.test(value ?? '')
 }
 
-// XHR's already-parsed JSON cannot be read through responseText. Copy only
-// bounded own data properties; never invoke page-provided getters/toJSON.
-function jsonObjectBody(value: unknown): Body {
-  let budget = BODY_LIMIT
-  let nodes = 0
-  const copy = (item: unknown, depth: number): unknown => {
-    if (++nodes > 8192 || depth > 32) throw new Error('oversize')
-    if (typeof item === 'string') {
-      if (item.length > budget) throw new Error('oversize')
-      budget -= encoder.encode(item).byteLength + 2
-    } else {
-      budget -= 8
-    }
-    if (budget < 0) throw new Error('oversize')
-    if (item === null || typeof item === 'string' || typeof item === 'boolean')
-      return item
-    if (typeof item === 'number' && Number.isFinite(item)) return item
-    if (!item || typeof item !== 'object') throw new Error('unsupported')
-    if (Array.isArray(item) && item.length > 8192) throw new Error('oversize')
-    const result: Record<string, unknown> | unknown[] = Array.isArray(item)
-      ? Object.setPrototypeOf(new Array(item.length), null)
-      : Object.create(null)
-    let count = 0
-    for (const key in item) {
-      if (++count > 8192 || key.length > budget) throw new Error('oversize')
-      const property = Object.getOwnPropertyDescriptor(item, key)
-      if (!property) continue
-      if (!('value' in property)) throw new Error('unsupported')
-      budget -= encoder.encode(key).byteLength + 4
-      Object.defineProperty(result, key, {
-        value: copy(property.value, depth + 1),
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      })
-    }
-    return result
-  }
-  try {
-    return parseBody(JSON.stringify(copy(value, 0)))
-  } catch (error) {
-    return {
-      state:
-        error instanceof Error && error.message === 'oversize'
-          ? 'oversize'
-          : 'unreadable',
-      bytes: 0,
-    }
-  }
-}
-
 /** Explicit activation only. Does not send requests, persist data or prove facts. */
 export function installPageApiObserver(
   options: PageApiObserverOptions,
@@ -385,8 +334,8 @@ export function installPageApiObserver(
             responseBody = { state: 'unsupported', bytes: 0 }
           else if (this.responseType === '' || this.responseType === 'text')
             responseBody = parseBody(this.responseText)
-          else if (this.responseType === 'json')
-            responseBody = jsonObjectBody(this.response)
+          // Parsed JSON has lost the original decoded byte count (including
+          // whitespace). Never reserialize it and claim the 64 KiB cap held.
           else responseBody = { state: 'unsupported', bytes: 0 }
         } catch {}
         emit(

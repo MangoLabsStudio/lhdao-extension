@@ -291,7 +291,34 @@ class FakeXhr extends EventTarget {
 }
 
 describe('XHR discovery semantics', () => {
-  it('rejects enormous sparse JSON arrays before serialization', async () => {
+  it('keeps parsed JSON metadata-only when original decoded bytes are unknown', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr)
+    const observations = start()
+    const xhr = new FakeXhr()
+    const decoded = `${' '.repeat(70_000)}{"ok":true}`
+    const pageResponse = JSON.parse(decoded)
+    xhr.responseType = 'json'
+    xhr.response = pageResponse
+    Object.defineProperty(xhr, 'responseText', {
+      get: () => {
+        throw new Error('responseText unavailable for json')
+      },
+    })
+    xhr.open('GET', API)
+    xhr.send()
+    xhr.finish()
+    await vi.waitFor(() => expect(observations).toHaveLength(1))
+    expect(observations[0]).toMatchObject({
+      responseBodyState: 'unsupported',
+      responseBodyBytes: 0,
+    })
+    expect(observations[0]).not.toHaveProperty('responseBody')
+    expect(xhr.responseType).toBe('json')
+    expect(xhr.response).toBe(pageResponse)
+    expect(xhr.response).toEqual({ ok: true })
+  })
+
+  it('keeps parsed sparse JSON arrays metadata-only without serialization', async () => {
     vi.stubGlobal('XMLHttpRequest', FakeXhr)
     const observations = start()
     const xhr = new FakeXhr()
@@ -301,7 +328,7 @@ describe('XHR discovery semantics', () => {
     xhr.send()
     xhr.finish()
     await vi.waitFor(() => expect(observations).toHaveLength(1))
-    expect(observations[0].responseBodyState).toBe('oversize')
+    expect(observations[0].responseBodyState).toBe('unsupported')
   })
 
   it('does not invoke getters in page-controlled JSON objects', async () => {
@@ -318,7 +345,7 @@ describe('XHR discovery semantics', () => {
     xhr.send()
     xhr.finish()
     await vi.waitFor(() => expect(observations).toHaveLength(1))
-    expect(observations[0].responseBodyState).toBe('unreadable')
+    expect(observations[0].responseBodyState).toBe('unsupported')
     expect(getter).not.toHaveBeenCalled()
   })
   it('preserves sync mode, timeout, return values and page event order', async () => {
@@ -364,7 +391,7 @@ describe('XHR discovery semantics', () => {
       requestBody: { first: true },
     })
     xhr.open('GET', `${API}/2`)
-    xhr.responseType = 'json'
+    xhr.responseType = 'text'
     xhr.send()
     xhr.finish()
     await vi.waitFor(() => expect(observations).toHaveLength(2))
