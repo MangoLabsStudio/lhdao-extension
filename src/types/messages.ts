@@ -290,6 +290,8 @@ export type MsgResponse =
       // 与「还没同步完」(空 = 不确定,应保持加载/重试),避免把冷启空快照
       // 误判为无任务。可选字段,老消费方忽略即可,向后兼容。
       ready?: boolean
+      /** A failed source must not be interpreted as an empty guide/task list. */
+      syncFailed?: boolean
     }
   /** [网页 gate] 某 campaign 已捕获的动作类型列表(get-captured-actions 的响应)。 */
   | { type: 'captured-actions'; actions: string[] }

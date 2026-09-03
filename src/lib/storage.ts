@@ -12,6 +12,7 @@
 import type { ProductExperienceTaskRef } from '../types/product-experience'
 import type { BinanceProbeObservation } from './binance-square-probe'
 import type { ProductExperienceSession } from './product-experience-controller'
+import type { AvailableEngagement } from './queries'
 
 export type BinanceSquareActionType = 'LIKE' | 'COMMENT' | 'SHARE' | 'FOLLOW'
 
@@ -62,6 +63,13 @@ interface LocalSchema {
 }
 
 interface SessionSchema {
+  /** Per-token sources survive worker suspension; never retain the token itself. */
+  engagementSources: {
+    owner: string
+    available: AvailableEngagement[]
+    reserved: AvailableEngagement[]
+  } | null
+
   /** Binance Square 任务的独立索引，不与 X tweet ID 缓存混用。 */
   binanceSquareTasks: BinanceSquareTaskIndex
   /** Beta 探针暂存的脱敏网络形状；不包含原始请求或响应。 */
@@ -113,7 +121,7 @@ interface SessionSchema {
    */
   rawCapturedActions: RawCapturedAction[]
   /** 上次 background SW 拉取任务的时间戳 (ms since epoch) */
-  lastSyncAt: number
+  lastSyncAt: number | null
   /** 上次同步的错误信息;成功时为 null */
   lastSyncError: string | null
   /** 上次同步的错误对应 HTTP status (401/403/...);非 HTTP 错误为 null */
@@ -170,6 +178,8 @@ export interface TweetCampaignSummary {
 }
 
 /** Sidebar 列表卡片单条数据 — 展示用,跟 chip 用的 task cache 解耦 */
+export type CommentGuideStatus = 'ready' | 'stale' | 'unavailable'
+
 export interface ActiveCampaignSummary {
   campaignId: string
   /** 用户级联后实际能拿到的总奖励 */
@@ -190,6 +200,8 @@ export interface ActiveCampaignSummary {
   tweetPreview: string | null
   /** COMMENT 类任务的关键字提示 */
   commentKeyword: string | null
+  commentGuide?: string | null
+  commentGuideStatus?: CommentGuideStatus
 }
 
 /**
@@ -214,6 +226,8 @@ export interface CampaignTaskCache {
   expectedReward: number
   /** COMMENT 类任务的关键词提示,non-comment 类型为 null */
   commentKeyword?: string | null
+  commentGuide?: string | null
+  commentGuideStatus?: CommentGuideStatus
   /** FOLLOW 任务的目标账户 handle(小写)。non-FOLLOW 为 null */
   targetUsername?: string | null
   /**
@@ -250,6 +264,9 @@ export const localStore = {
 }
 
 export const sessionStore = {
+  async patch(values: Partial<SessionSchema>) {
+    await chrome.storage.session.set(values)
+  },
   async get<K extends keyof SessionSchema>(
     key: K,
   ): Promise<SessionSchema[K] | null> {

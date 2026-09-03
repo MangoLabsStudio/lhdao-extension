@@ -970,3 +970,28 @@
   text-align: center;
   color: oklch(0.6 0.02 240);
 }
+
+.lh-cur-guide {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(45, 212, 191, 0.06);
+}
+.lh-cur-guide-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.lh-cur-guide-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.lh-cur-guide-status {
+  color: #d97706;
+  font-size: 11px;
+}

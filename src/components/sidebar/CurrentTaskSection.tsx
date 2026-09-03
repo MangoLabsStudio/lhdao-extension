@@ -52,11 +52,15 @@ export function CurrentTaskSection({
   const [focalId, setFocalId] = React.useState<string | null>(() =>
     focalIdFromUrl(),
   )
+  const accountGeneration = React.useRef(0)
+  const [accountVersion, setAccountVersion] = React.useState(0)
   const [campaign, setCampaign] = React.useState<CurrentCampaign | null>(null)
   // 显式加载态:'loading' = 正在为当前焦点推文拉/归并任务(显骨架);
   // 'ready' = 已尘埃落定(拿到任务 or 确认无任务)。此前用 campaign===null
   // 兼表两义 → 拉取窗口整段空白(「偶发性不显示加载」)。
-  const [status, setStatus] = React.useState<'loading' | 'ready'>('loading')
+  const [status, setStatus] = React.useState<'loading' | 'ready' | 'error'>(
+    'loading',
+  )
   const [detected, setDetected] = React.useState<Set<string>>(() => new Set())
   const [dwellMs, setDwellMs] = React.useState(0)
   const [phase, setPhase] = React.useState<Phase>('detecting')
@@ -68,6 +72,22 @@ export function CurrentTaskSection({
   const lastVisibleAtRef = React.useRef<number | null>(
     document.visibilityState === 'visible' ? Date.now() : null,
   )
+
+  React.useEffect(() => {
+    const onAccountChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string,
+    ) => {
+      if (area !== 'local' || !('apiToken' in changes)) return
+      accountGeneration.current++
+      setCampaign(null)
+      setDetected(new Set())
+      setPhase('detecting')
+      setAccountVersion(accountGeneration.current)
+    }
+    chrome.storage.onChanged.addListener(onAccountChange)
+    return () => chrome.storage.onChanged.removeListener(onAccountChange)
+  }, [])
 
   // ── 焦点推文轮询(URL /status/<id>) ──
   React.useEffect(() => {
@@ -99,13 +119,26 @@ export function CurrentTaskSection({
     }
 
     let cancelled = false
+    const generation = accountVersion
+    let loadSequence = 0
     // 本 focal 会话是否已拿到任务。拿到后,后续空快照(任务完成/名额变动暂时
     // 从快照消失,或 verify 成功后 force-sync 触发的 tasks-updated 回拉)不再
     // 把它清成 null —— 否则会把「进行中卡 / 成功庆祝」误清掉(自身引入的回归)。
     let gotTask = false
-    // 本 focal 是否已强制同步过预约状态(见下),只做一次,避免 tasks-updated
-    // 回拉又触发同步的自激循环。
-    let forcedSync = false
+    let forceSyncFailed = false
+    const showReadFailure = () => {
+      if (cancelled || generation !== accountGeneration.current) return
+      setCampaign((current) =>
+        current
+          ? {
+              ...current,
+              commentGuideStatus:
+                current.commentGuide === undefined ? 'unavailable' : 'stale',
+            }
+          : null,
+      )
+      setStatus(gotTask ? 'ready' : 'error')
+    }
     const hydrateDetectedActions = async (
       current: CurrentCampaign,
     ): Promise<void> => {
@@ -115,7 +148,12 @@ export function CurrentTaskSection({
           campaignId: current.campaignId,
           tweetId: focalId,
         })
-        if (cancelled || r.type !== 'captured-actions') return
+        if (
+          cancelled ||
+          generation !== accountGeneration.current ||
+          r.type !== 'captured-actions'
+        )
+          return
         const required = new Set<string>(current.requiredActions)
         setDetected((prev) => {
           const next = new Set(prev)
@@ -129,10 +167,22 @@ export function CurrentTaskSection({
       }
     }
     // 拉快照 + 归并当前推文任务。
-    const load = async (): Promise<void> => {
+    const load = async (afterSync = false): Promise<void> => {
+      const sequence = ++loadSequence
       try {
         const snap = await sendMessage({ type: 'get-tasks-snapshot' })
-        if (cancelled || snap.type !== 'tasks-snapshot') return
+        if (
+          cancelled ||
+          generation !== accountGeneration.current ||
+          sequence !== loadSequence ||
+          snap.type !== 'tasks-snapshot'
+        )
+          return
+        // Only a completed background refresh can clear a failed sync RPC;
+        // ordinary cache reads must keep the failure visible.
+        if (afterSync && snap.ready !== false && !snap.syncFailed) {
+          forceSyncFailed = false
+        }
         const author = focalAuthorFromUrl()
         // byTweet(该推文的互动单)+ byAuthor(以本推作者为目标的 FOLLOW 单);
         // groupCampaigns 会按 (campaignId, actionType) 去重两者交集。
@@ -141,17 +191,16 @@ export function CurrentTaskSection({
           ...(author ? (snap.byAuthor[author] ?? []) : []),
         ]
         const hit = groupCampaigns(tasks)[0] ?? null
-        // 这条推有任务但缓存的预约状态可能过时:你在网页刚预约的评论单,插件 60s
-        // 才轮询一次,这窗口内该单还没标 reserved → groupCampaigns 会挑奖励最高的
-        // 未预约单(如转发)而非你预约的评论 → 卡片显示错任务。故打开挂任务的推文
-        // 时强制同步一次,拿到最新预约后 tasks-updated 回拉,已预约优先纠正显示。
-        // 先用当前(可能过时)hit 立即显示、再纠正,避免闪空。
-        if (hit && !forcedSync) {
-          forcedSync = true
-          void sendMessage({ type: 'force-sync' }).catch(() => {})
-        }
         if (hit) {
-          setCampaign(hit)
+          setCampaign(
+            forceSyncFailed
+              ? {
+                  ...hit,
+                  commentGuideStatus:
+                    hit.commentGuide === undefined ? 'unavailable' : 'stale',
+                }
+              : hit,
+          )
           void hydrateDetectedActions(hit)
           setStatus('ready')
           gotTask = true
@@ -162,6 +211,10 @@ export function CurrentTaskSection({
           setStatus('ready')
           return
         }
+        if (snap.syncFailed || forceSyncFailed) {
+          setStatus('error')
+          return
+        }
         // 从没拿到:BG 已同步(ready≠false)→ 该推确实无任务,收尾 ready(→ null);
         // 冷启未同步(ready=false / 老 BG 无此字段)→ 保持 loading 骨架,靠下面的
         // backoff / tasks-updated 广播再拉,避免把冷启空快照误判成「无任务」。
@@ -170,12 +223,30 @@ export function CurrentTaskSection({
           setStatus('ready')
         }
       } catch {
-        // RPC 失败:停掉骨架避免卡死(下次焦点变化 / 广播再试)。
-        if (!cancelled) setStatus('ready')
+        if (sequence === loadSequence) showReadFailure()
       }
     }
 
+    const refresh = () => {
+      void sendMessage({ type: 'force-sync' })
+        .then(() => {
+          forceSyncFailed = false
+          return load()
+        })
+        .catch(() => {
+          forceSyncFailed = true
+          showReadFailure()
+        })
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
     void load()
+    refresh()
+    window.addEventListener('online', refresh)
+    window.addEventListener('pageshow', refresh)
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', onVisible)
     // 冷启 backoff:BG 首次 syncTasks 可能还没落库,空快照不能当「无任务」。
     // 逐次重试;命中 ready 后再跑也只是 no-op。
     const timers = [400, 1200, 2600].map((d) =>
@@ -192,7 +263,7 @@ export function CurrentTaskSection({
         m !== null &&
         (m as { type?: string }).type === 'tasks-updated'
       ) {
-        void load()
+        void load(true)
       }
     }
     try {
@@ -202,6 +273,10 @@ export function CurrentTaskSection({
     }
     return () => {
       cancelled = true
+      window.removeEventListener('online', refresh)
+      window.removeEventListener('pageshow', refresh)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', onVisible)
       for (const t of timers) clearTimeout(t)
       try {
         chrome.runtime.onMessage.removeListener(onMsg)
@@ -209,7 +284,7 @@ export function CurrentTaskSection({
         // ignore
       }
     }
-  }, [focalId])
+  }, [focalId, accountVersion])
 
   // ── 页面可见性记账(mount 一次) ──
   React.useEffect(() => {
@@ -306,6 +381,17 @@ export function CurrentTaskSection({
 
   // 加载中(拉/归并当前推文任务)→ 显骨架,别整段空白。
   if (status === 'loading') return <CurrentTaskSkeleton />
+  if (status === 'error')
+    return (
+      <section className="lh-cur-sec">
+        <div className="lh-cur-head">
+          <span className="lh-cur-eyebrow">当前任务</span>
+        </div>
+        <div className="lh-cur-card lh-cur-guide" role="status">
+          评论引导暂时无法加载
+        </div>
+      </section>
+    )
   // 已确认该推文无任务 → 整段隐藏,卡片回到原样。
   if (!campaign) return null
 
@@ -379,6 +465,33 @@ export function CurrentTaskSection({
           </div>
         </div>
         <div className="lh-cur-body">
+          {campaign.requiredActions.includes('COMMENT') &&
+          (campaign.commentGuide?.trim() ||
+            campaign.commentGuideStatus !== 'ready') ? (
+            <div className="lh-cur-guide">
+              {campaign.commentGuideStatus === 'unavailable' ? (
+                <div className="lh-cur-guide-status" role="status">
+                  评论引导暂时无法加载
+                </div>
+              ) : (
+                <>
+                  <div className="lh-cur-guide-label">
+                    评论引导
+                    {campaign.commentGuideStatus === 'stale' ? (
+                      <span className="lh-cur-guide-status" role="status">
+                        更新失败
+                      </span>
+                    ) : null}
+                  </div>
+                  {campaign.commentGuide?.trim() ? (
+                    <div className="lh-cur-guide-text">
+                      {campaign.commentGuide}
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : null}
           <div className="lh-cur-todo-label">要完成</div>
           <ul className="lh-cur-todo">
             {state.items.map((it) => (
@@ -461,7 +574,6 @@ function CurrentTaskSkeleton() {
 }
 
 function campaignBrief(c: CurrentCampaign): string {
-  if (c.commentKeyword) return `评论含「${c.commentKeyword}」`
   if (c.targetUsername && c.requiredActions.includes('FOLLOW')) {
     return `关注 @${c.targetUsername}`
   }

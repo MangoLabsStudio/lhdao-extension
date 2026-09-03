@@ -461,7 +461,8 @@ function logScanDiag(articleCount: number, matchedCount: number) {
   )
 }
 
-function scanTimeline() {
+export function scanTimeline() {
+  reconcileFocalTaskHost()
   // 没拿到任务快照前不扫(refreshTasksSnapshot 拉完会自动 scheduleScan)
   if (!tasksSnapshot) {
     // 第一次没 snapshot 时 log 一次,后续重复跳过(只在状态转变到非空时再 log)
@@ -576,6 +577,41 @@ function scanTimeline() {
   logScanDiag(articleByTweetId.size, matchedCount)
 }
 
+// The focal panel owns its loading lifecycle, independently of cached task matches.
+let focalTaskHost: {
+  article: Element
+  tweetId: string
+  host: HTMLElement
+  root: Root
+} | null = null
+
+function reconcileFocalTaskHost() {
+  const tweetId = getFocalTweetId()
+  const candidates = tweetId
+    ? [...document.querySelectorAll('article')].filter(
+        (article) =>
+          extractTweetIdFromArticle(article) === tweetId &&
+          isArticleRenderable(article),
+      )
+    : []
+  const article = candidates.at(-1)
+  if (focalTaskHost?.article === article && focalTaskHost?.tweetId === tweetId)
+    return
+  if (focalTaskHost) {
+    focalTaskHost.root.unmount()
+    focalTaskHost.host.remove()
+    focalTaskHost = null
+  }
+  const actionRow = article?.querySelector('[role="group"]')
+  if (!article || !tweetId || !actionRow?.parentElement) return
+  const host = createShadowHost('lhdao-inline-task', 'inline')
+  host.style.display = 'block'
+  host.style.width = '100%'
+  actionRow.parentElement.insertBefore(host, actionRow.nextSibling)
+  const root = renderInto(host, createElement(CurrentTaskSection), sidebarCss)
+  focalTaskHost = { article, tweetId, host, root }
+}
+
 // ── mount / unmount ─────────────────────────────────────────────────
 
 function mountArticle(
@@ -613,29 +649,6 @@ function mountArticle(
       const root = renderInto(host, createElement(MetadataBadge, { tasks }))
       state.hosts.push(host)
       state.roots.push(root)
-    }
-
-    // ②.5 Inline task card — 仅焦点推文(详情页主推文)且有任务时,把完整任务卡
-    // (检测→停留→验证发奖)内联到动作栏正下方。锚在这条推文的 DOM 上:稳定、有
-    // 上下文、不占右栏、不和其它扩展/X 布局抢位(取代旧的右栏当前任务段)。随
-    // state.hosts/roots 在 unmountArticle 一并清理;focal 变化时 scanTimeline 会
-    // unmount 重挂到新焦点推文。
-    if (isFocal && tasks.length > 0) {
-      const actionRow = article.querySelector('[role="group"]')
-      if (actionRow?.parentElement) {
-        const taskHost = createShadowHost('lhdao-inline-task', 'inline')
-        taskHost.style.display = 'block'
-        taskHost.style.width = '100%'
-        taskHost.style.margin = '8px 0 4px'
-        actionRow.parentElement.insertBefore(taskHost, actionRow.nextSibling)
-        const taskRoot = renderInto(
-          taskHost,
-          createElement(CurrentTaskSection),
-          sidebarCss,
-        )
-        state.hosts.push(taskHost)
-        state.roots.push(taskRoot)
-      }
     }
 
     // ③ Action button glow — 高亮 Twitter 原生 like/retweet/reply 按钮。
@@ -725,7 +738,12 @@ function unmountArticle(state: MountedArticle) {
   state.article.removeAttribute(ARTICLE_FLAG)
 }
 
-function unmountAll() {
+export function unmountAll() {
+  if (focalTaskHost) {
+    focalTaskHost.root.unmount()
+    focalTaskHost.host.remove()
+    focalTaskHost = null
+  }
   for (const state of mounted.values()) {
     unmountArticle(state)
   }

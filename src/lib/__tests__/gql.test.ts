@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sha256Hex } from '../canonical-json'
 import { GqlError, gql } from '../gql'
 import type {
   MintProductExperienceTestTicketVariables,
@@ -8,6 +9,7 @@ import type {
   SubmitProductExperienceProofVariables,
 } from '../queries'
 import * as productQueries from '../queries'
+import { buildPluginSignatureMessage } from '../request-signing'
 
 const mocks = vi.hoisted(() => ({
   ensureLegacyDeviceRegistered: vi.fn(),
@@ -538,12 +540,12 @@ describe('gql transport outcomes', () => {
 
     const operations = [
       {
-        id: 'engagement.available.v2',
+        id: 'engagement.available.v3',
         name: 'AvailableEngagements',
         document: productQueries.AVAILABLE_ENGAGEMENTS_QUERY,
       },
       {
-        id: 'engagement.reserved.v2',
+        id: 'engagement.reserved.v3',
         name: 'MyReservedEngagements',
         document: productQueries.MY_RESERVED_ENGAGEMENTS_QUERY,
       },
@@ -569,6 +571,31 @@ describe('gql transport outcomes', () => {
       const init = fetchMock.mock.calls[index]?.[1] as RequestInit | undefined
       const headers = new Headers(init?.headers)
       expect(headers.get('x-plugin-operation-id')).toBe(operation.id)
+      const expectedMessage = buildPluginSignatureMessage({
+        operationId: operation.id,
+        documentSha256: await sha256Hex(operation.document),
+        variablesSha256: await sha256Hex('{}'),
+        deviceId: 'device-sync-test',
+        timestamp: headers.get('x-request-timestamp')!,
+        nonce: headers.get('x-request-nonce')!,
+      })
+      const signature = Uint8Array.from(
+        atob(
+          headers
+            .get('x-device-signature')!
+            .replace(/-/g, '+')
+            .replace(/_/g, '/'),
+        ),
+        (c) => c.charCodeAt(0),
+      )
+      await expect(
+        crypto.subtle.verify(
+          { name: 'ECDSA', hash: 'SHA-256' },
+          pair.publicKey,
+          signature,
+          new TextEncoder().encode(expectedMessage),
+        ),
+      ).resolves.toBe(true)
       expect(headers.get('x-device-id')).toBe('device-sync-test')
       expect(headers.get('x-request-timestamp')).toMatch(/^\d+$/)
       expect(headers.get('x-request-nonce')).toBeTruthy()

@@ -217,3 +217,42 @@ describe('groupCampaigns', () => {
     expect(groupCampaigns([])).toEqual([])
   })
 })
+
+describe('order-scoped comment guidance', () => {
+  it('keeps same-tweet orders separate, including cached errors and known null', () => {
+    const grouped = groupCampaigns([
+      task({
+        campaignId: 'a',
+        actionType: 'COMMENT',
+        commentGuide: 'A 原文',
+        commentGuideStatus: 'stale',
+      }),
+      task({
+        campaignId: 'b',
+        actionType: 'COMMENT_LIKE',
+        commentGuide: 'B 原文',
+        commentGuideStatus: 'ready',
+      }),
+      task({
+        campaignId: 'c',
+        actionType: 'COMMENT',
+        commentGuide: null,
+        commentGuideStatus: 'ready',
+        commentKeyword: '不能替代引导',
+      }),
+      task({
+        campaignId: 'd',
+        actionType: 'COMMENT',
+        commentKeyword: '不能替代引导',
+      }),
+    ])
+    expect(
+      grouped.map((c) => [c.campaignId, c.commentGuide, c.commentGuideStatus]),
+    ).toEqual([
+      ['a', 'A 原文', 'stale'],
+      ['b', 'B 原文', 'ready'],
+      ['c', null, 'ready'],
+      ['d', undefined, 'unavailable'],
+    ])
+  })
+})

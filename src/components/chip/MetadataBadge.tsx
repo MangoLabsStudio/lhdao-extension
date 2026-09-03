@@ -7,7 +7,7 @@ interface Props {
 /**
  * 推文 handle / time 行右侧的极简徽章。**只显示奖励数字**,没有 logo
  * (放在头行容易被 Twitter 的 layout 撑大,纯文字配色就够辨识)。
- * 动作类型 + 关键字提示走 tooltip。
+ * 动作类型走 tooltip。
  */
 export function MetadataBadge({ tasks }: Props) {
   if (tasks.length === 0) return null
@@ -16,9 +16,7 @@ export function MetadataBadge({ tasks }: Props) {
   const single = tasks.length === 1 ? tasks[0] : null
 
   const tooltip = single
-    ? `Lighthouse · ${actionLabel(single.actionType)} · +${single.expectedReward} LUX${
-        single.commentKeyword ? ` · 评论需含 "${single.commentKeyword}"` : ''
-      }`
+    ? `Lighthouse · ${actionLabel(single.actionType)} · +${single.expectedReward} LUX`
     : `Lighthouse · ${tasks.length} 个任务 · 合计 +${total} LUX`
 
   const displayReward = fmtReward(single ? single.expectedReward : total)
