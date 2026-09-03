@@ -336,8 +336,15 @@ export async function verifyManifestDirectory(directory, options = {}) {
   const chromium = browser === 'chrome' || browser === 'edge'
   assertExactStringSet('permissions', manifest.permissions, [
     ...BASE_PERMISSIONS,
-    ...(chromium ? ['offscreen', 'webRequest'] : []),
+    ...(chromium ? ['offscreen', 'webRequest', 'debugger'] : []),
   ])
+  if (chromium && (
+    typeof manifest.minimum_chrome_version !== 'string' ||
+    !/^\d+(?:\.\d+){0,3}$/.test(manifest.minimum_chrome_version) ||
+    Number(manifest.minimum_chrome_version.split('.')[0]) < 118
+  )) {
+    throw new Error('minimum_chrome_version must be at least 118 for native discovery.')
+  }
   assertExactStringSet('optional_permissions', manifest.optional_permissions ?? [], [])
   assertExactStringSet(
     'host_permissions',

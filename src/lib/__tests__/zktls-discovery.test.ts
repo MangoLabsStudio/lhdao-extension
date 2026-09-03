@@ -1,8 +1,13 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CandidateStore } from '../zktls/discovery/candidate-store'
 import { safeClone } from '../zktls/discovery/redaction'
 import { parseDiscoveryResponse } from '../zktls/discovery/response-contract'
 import { DiscoverySessionManager } from '../zktls/discovery/session-manager'
+
+const discoveryFixture = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-discovery-workbench.json', 'utf8'),
+)
 
 const owner = {
   id: 'extension',
@@ -31,6 +36,25 @@ const observation = (body = { operation: 'balances', amount: 10 }) => ({
 })
 
 describe('discovery candidate privacy and inference', () => {
+  it('projects the shared synthetic observations into the exact redacted candidates', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2029-12-31T23:49:00Z'))
+    const uuid = vi.spyOn(crypto, 'randomUUID')
+    try {
+      for (const entry of [
+        ...discoveryFixture.cases.slice(0, 3),
+        discoveryFixture.unsupported,
+      ]) {
+        uuid.mockReturnValue(entry.candidate.candidateId)
+        const store = new CandidateStore()
+        expect(store.add(entry.observation)).toBe('added')
+        expect(store.snapshot().candidates).toEqual([entry.candidate])
+        store.clear()
+        expect(store.snapshot().candidates).toEqual([])
+      }
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
   it('redacts bare bearer, proxy authorization and individual cookie values in echoes', () => {
     const store = new CandidateStore()
     store.add({
@@ -460,6 +484,95 @@ describe('native discovery vertical slice', () => {
     event({ tabId: 8 }, 'Network.loadingFinished', { requestId: id })
     await vi.advanceTimersByTimeAsync(0)
   }
+  it.each([
+    discoveryFixture.cases[0],
+    discoveryFixture.cases[1],
+    discoveryFixture.cases[2],
+  ])('captures shared $resourceType/$name only after ready and explicit page activity', async (entry) => {
+    const targetUrl = entry.observation.documentUrl
+    create.mockResolvedValue({ id: 8, url: targetUrl })
+    vi.spyOn(chrome.tabs, 'get').mockImplementation((async (id: number) => ({
+      id,
+      url: id === 7 ? owner.url : targetUrl,
+    })) as never)
+    command.mockImplementation(async (_target, method) =>
+      method === 'Page.getFrameTree'
+        ? {
+            frameTree: {
+              frame: { id: 'root', loaderId: 'doc1', url: targetUrl },
+            },
+          }
+        : method === 'Network.getResponseBody'
+          ? { body: entry.responseJson, base64Encoded: false }
+          : {},
+    )
+    const result = await manager.handle({ ...start, targetUrl }, owner)
+    expect(result).toMatchObject({
+      ok: true,
+      snapshot: { status: 'ready', candidates: [] },
+    })
+    sessionId = (result as { snapshot: { sessionId: string } }).snapshot
+      .sessionId
+    expect(command.mock.calls.map((call) => call[1])).toEqual([
+      'Network.enable',
+      'Page.getFrameTree',
+    ])
+    // The user refreshes the target. The extension neither reloads nor replays a request.
+    manager.tabUpdated(8, { status: 'loading', url: targetUrl })
+    event({ tabId: 8 }, 'Network.requestWillBeSent', {
+      requestId: 'document',
+      frameId: 'root',
+      loaderId: 'doc2',
+      type: 'Document',
+      request: { url: targetUrl },
+    })
+    event({ tabId: 8 }, 'Network.requestWillBeSent', {
+      requestId: 'shared-request',
+      frameId: 'root',
+      loaderId: 'doc2',
+      documentURL: targetUrl,
+      type: entry.resourceType,
+      request: {
+        url: entry.observation.url,
+        method: entry.observation.method,
+        headers: entry.observation.requestHeaders,
+        ...(entry.observation.requestBody
+          ? { postData: entry.observation.requestBody }
+          : {}),
+      },
+    })
+    event({ tabId: 8 }, 'Network.responseReceived', {
+      requestId: 'shared-request',
+      type: entry.resourceType,
+      response: {
+        status: 200,
+        mimeType: 'application/json',
+        headers: entry.observation.responseHeaders,
+      },
+    })
+    await finish('shared-request')
+    expect(await snapshot()).toMatchObject({
+      ok: true,
+      snapshot: {
+        candidates: [
+          {
+            method: entry.observation.method,
+            path: entry.candidate.path,
+            configurable: true,
+            samples: [
+              {
+                triggerPath: entry.observedTriggerPaths[0],
+                response: entry.candidate.samples[0].response,
+              },
+            ],
+          },
+        ],
+      },
+    })
+    expect(
+      command.mock.calls.some((call) => /reload|navigate/i.test(call[1])),
+    ).toBe(false)
+  })
   it('opens and attaches exactly its new tab, enables bounded network and never reloads', async () => {
     await begin()
     expect(create).toHaveBeenCalledWith({ url: start.targetUrl, active: true })

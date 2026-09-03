@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   ProductExperienceRule,
@@ -17,6 +18,9 @@ import {
 import { clearProductExperienceStorage } from '../storage'
 
 const NOW = Date.parse('2026-07-13T10:00:00.000Z')
+const discoveryFixture = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-discovery-workbench.json', 'utf8'),
+)
 const CLIENT_ORIGIN = 'https://client.example'
 const SECOND_ORIGIN = 'https://second.example'
 
@@ -1045,6 +1049,96 @@ describe('ProductExperienceController zkTLS authority queue', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it.each([
+    'separate',
+    'shared',
+  ])('consumes the shared discovery %s plan once per connector through binding and terminal NO', async (variant) => {
+    const fresh = createHarness()
+    fresh.activeTab.value = {
+      id: 99,
+      url: 'https://lighthouse.example/campaign',
+    }
+    fresh.mintParticipant.mockResolvedValue(
+      ticket({
+        verificationMode: 'ZKTLS',
+        rules: discoveryFixture.rules,
+        allowedOrigins: ['https://app.example.com'],
+      }),
+    )
+    const policy =
+      variant === 'shared'
+        ? discoveryFixture.shared.policy
+        : discoveryFixture.policy
+    const plan =
+      variant === 'shared'
+        ? discoveryFixture.shared.executionPlan
+        : discoveryFixture.executionPlan
+    const proven = new Set<string>()
+    fresh.startZkTls.mockImplementation(async ({ ruleId }) => {
+      const binding = discoveryFixture.bindingExecutionPlan.steps[0]
+      const currentPlan = proven.has(binding.connectorId)
+        ? plan
+        : { version: 1, steps: [binding, ...plan.steps] }
+      const step = currentPlan.steps.find(
+        (item: { dependentRuleIds: string[] }) =>
+          item.dependentRuleIds.includes(ruleId),
+      )!
+      return {
+        sessionId: `${step.connectorId}-proof`,
+        connectorId: step.connectorId,
+        expiresAt: '2026-07-13T10:10:00.000Z',
+        executionPlan: currentPlan,
+      }
+    })
+    fresh.proveZkTls.mockImplementation(async (input) => {
+      proven.add(input.connectorId)
+      return {
+        type: 'zktls-prove-result',
+        correlationId: input.correlationId,
+        status: 'submitted',
+      }
+    })
+    fresh.readZkTlsProgress.mockImplementation(async () =>
+      discoveryFixture.rules.map((rule: ProductExperienceRule) => {
+        const fact = policy.facts.find(
+          (item: { ruleId: string }) => item.ruleId === rule.id,
+        )!
+        return {
+          ruleId: rule.id,
+          title: rule.title,
+          status: proven.has(fact.connectorId)
+            ? rule.id === 'rule-b'
+              ? 'VERIFIED_NO'
+              : 'VERIFIED'
+            : proven.has('account-binding') && rule.id === 'rule-a'
+              ? 'PARTIAL'
+              : 'PENDING',
+          current: null,
+          target: null,
+          unit: null,
+        }
+      }),
+    )
+    await fresh.controller.saveTask(task())
+    await fresh.controller.start({ executePlan: true })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(
+      fresh.proveZkTls.mock.calls.map(([input]) => input.connectorId),
+    ).toEqual([
+      'account-binding',
+      ...plan.steps.map((step: { connectorId: string }) => step.connectorId),
+    ])
+    expect(await fresh.controller.getState()).toMatchObject({
+      zkTlsFinished: true,
+      matchedRuleIds: ['rule-a', 'rule-c'],
+      error: null,
+    })
+    expect(fresh.storage.session?.verifiedRuleIds).not.toContain('rule-b')
+    expect(JSON.stringify(fresh.storage.session)).not.toMatch(
+      /discovery-private-canary|local-discovery-session|"(?:sent|recv|evidence|candidateId|sampleResponse)":/,
+    )
   })
 
   it('proves a shared connector once and closes terminal yes/no without claiming all rules passed', async () => {

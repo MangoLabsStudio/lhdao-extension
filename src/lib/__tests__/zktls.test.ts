@@ -9,7 +9,7 @@ import {
   transcriptRevealRanges,
   verifierUrls,
 } from '@/entrypoints/zktls-offscreen/worker'
-import { CaptureSession } from '@/lib/zktls/capture'
+import { CaptureSession, createCaptureBinding } from '@/lib/zktls/capture'
 import {
   assertConnectorAvailable,
   canonicalJson,
@@ -34,6 +34,173 @@ import {
   assertTicketAvailable,
   fetchAndVerifySignedConfig,
 } from '@/lib/zktls/signed-config'
+
+const DISCOVERY_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-discovery-workbench.json', 'utf8'),
+)
+
+test('consumes frozen discovery Ed25519 envelopes and exact disclosure transcripts', async () => {
+  for (const entry of DISCOVERY_FIXTURE.cases) {
+    const registration = entry.registration
+    const response = {
+      config_envelope: {
+        key_id: registration.keyId,
+        config: entry.connector,
+        config_digest: entry.configDigest,
+        signature: registration.configSignature,
+      },
+      ticket_envelope: {
+        key_id: registration.keyId,
+        ticket: registration.ticket,
+        signature: registration.ticketSignature,
+      },
+    }
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+    try {
+      const verified = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        {
+          publicKeys: {
+            [registration.keyId]: {
+              kty: 'OKP',
+              crv: 'Ed25519',
+              x: registration.publicKeyBase64url,
+            },
+          },
+          now: '2029-12-31T23:52:00.000Z',
+          local: true,
+        },
+      )
+      expect(canonicalJson(verified.config)).toBe(entry.connectorCanonicalJson)
+      expect(Object.isFrozen(verified.config)).toBe(true)
+      await expect(configDigest(verified.config)).resolves.toBe(
+        entry.configDigest,
+      )
+      const sent = new Uint8Array(
+        Buffer.from(entry.requestBase64url, 'base64url'),
+      )
+      const recv = new Uint8Array(
+        Buffer.from(entry.responseBase64url, 'base64url'),
+      )
+      const requestUrl = new URL(entry.observation.url)
+      if (verified.config.interpreter_version !== 4)
+        throw new Error('expected V4 fixture')
+      const message = {
+        id: 'discovery-worker',
+        type: 'zktls-worker-prove' as const,
+        connectorId: verified.config.connector_id,
+        sessionId: registration.ticket.session_id,
+        ...verified,
+        config: verified.config,
+        captured: {
+          method: entry.connector.request.method,
+          path: requestUrl.pathname + requestUrl.search,
+          secrets: {},
+          ...(entry.observation.requestBody
+            ? {
+                body: entry.observation.requestBody,
+                content_type: 'application/json' as const,
+              }
+            : {}),
+        },
+      }
+      await expect(
+        transcriptRevealRanges(message, sent, recv),
+      ).resolves.toEqual({
+        sent: [{ start: 0, end: sent.length }],
+        recv: [{ start: 0, end: recv.length }],
+      })
+      const registrationPayload = sessionRegistrationPayload(message)
+      expect(registrationPayload).toMatchObject({
+        config_envelope: { config_digest: entry.configDigest },
+      })
+      fetch.mockResolvedValue(
+        jsonResponse({
+          ...response,
+          config_envelope: { ...response.config_envelope, signature: 'bad' },
+        }),
+      )
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys: {
+            [registration.keyId]: {
+              kty: 'OKP',
+              crv: 'Ed25519',
+              x: registration.publicKeyBase64url,
+            },
+          },
+          now: '2029-12-31T23:52:00.000Z',
+          local: true,
+        }),
+      ).rejects.toThrow()
+    } finally {
+      fetch.mockRestore()
+    }
+  }
+})
+
+test('matches shared discovery GET/JSON POST only through signed exact capture', () => {
+  for (const entry of DISCOVERY_FIXTURE.cases) {
+    const config = entry.connector
+    const capture = new CaptureSession(
+      createCaptureBinding({
+        interpreterVersion: 4,
+        maxSentData: 8192,
+        tabId: 7,
+        frameId: 0,
+        sessionId: entry.registration.ticket.session_id,
+        providerId: config.connector_id,
+        revision: 1,
+        pageOrigin: config.page_origin,
+        targetOrigin: config.origin,
+        method: config.request.method,
+        matcher: config.request.matcher,
+        ...(config.request.body
+          ? {
+              template: config.request.body,
+              contentType: config.request.content_type,
+            }
+          : {}),
+        variables: config.variables,
+        resolvedVariables: config.resolved_variables,
+      }),
+    )
+    const request = {
+      requestId: 'discovery-request',
+      tabId: 7,
+      frameId: 0,
+      method: config.request.method,
+      url: entry.observation.url,
+      type: entry.resourceType === 'XHR' ? 'xmlhttprequest' : 'fetch',
+      initiator: config.page_origin,
+      requestHeaders: Object.entries(entry.observation.requestHeaders).map(
+        ([name, value]) => ({ name, value: String(value) }),
+      ),
+    }
+    capture.observe({ ...request, url: `${config.origin}/wrong` })
+    expect(() => capture.take()).toThrow()
+    if (entry.observation.requestBody)
+      capture.observeBody({
+        ...request,
+        requestBody: {
+          raw: [
+            {
+              bytes: new TextEncoder().encode(entry.observation.requestBody)
+                .buffer,
+            },
+          ],
+        },
+      })
+    capture.observe(request)
+    const url = new URL(entry.observation.url)
+    expect(capture.take()).toMatchObject({
+      path: url.pathname + url.search,
+      secrets: {},
+    })
+  }
+})
 
 const connector = {
   interpreter_version: 1,
@@ -2803,11 +2970,21 @@ describe('zkTLS strict boundaries', () => {
 })
 
 describe('zkTLS V4 page and target permissions', () => {
-  test('arms exact capture before visiting only signed triggers and pauses after the bounded sequence', async () => {
+  test.each([
+    undefined,
+    DISCOVERY_FIXTURE.cases[3],
+  ])('arms exact capture before visiting only signed triggers and pauses after the bounded sequence %#', async (entry) => {
     vi.useFakeTimers()
-    const raw = { ...v4Connector(), trigger_paths: ['/balances', '/history'] }
+    const raw = entry?.connector ?? {
+      ...v4Connector(),
+      trigger_paths: ['/balances', '/history'],
+    }
     const config = validateConnector(raw)
     const signed = await signedV4Envelopes(raw)
+    signed.ticket_envelope.ticket.connector_id = config.connector_id
+    signed.ticket_envelope.signature = await signed.signTicket(
+      signed.ticket_envelope.ticket,
+    )
     vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
       config,
       ticket: signed.ticket_envelope.ticket,
@@ -2844,7 +3021,7 @@ describe('zkTLS V4 page and target permissions', () => {
     const result = proveZkTlsSession({
       correlationId: 'signed-trigger',
       sessionId: 's1',
-      connectorId: 'product-volume',
+      connectorId: config.connector_id,
       onDiagnostic: diagnostics,
     })
     await vi.advanceTimersByTimeAsync(1)
@@ -2853,14 +3030,14 @@ describe('zkTLS V4 page and target permissions', () => {
         'permission',
         'about:blank',
         'capture-ready',
-        'https://app.example.com/balances',
+        `${raw.page_origin}${raw.trigger_paths[0]}`,
       ]),
     )
     expect(order.indexOf('capture-ready')).toBeLessThan(
-      order.indexOf('https://app.example.com/balances'),
+      order.indexOf(`${raw.page_origin}${raw.trigger_paths[0]}`),
     )
     await vi.advanceTimersByTimeAsync(30_000)
-    expect(order).toContain('https://app.example.com/history')
+    expect(order).toContain(`${raw.page_origin}${raw.trigger_paths[1]}`)
     await vi.advanceTimersByTimeAsync(30_000)
     await expect(result).resolves.toMatchObject({
       status: 'action_required',

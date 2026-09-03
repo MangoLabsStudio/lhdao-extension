@@ -40,6 +40,7 @@ function validManifest(overrides = {}) {
     manifest_version: 3,
     name: 'Lighthouse',
     version: '0.2.2',
+    minimum_chrome_version: '118',
     permissions: [
       'storage',
       'alarms',
@@ -47,6 +48,7 @@ function validManifest(overrides = {}) {
       'scripting',
       'offscreen',
       'webRequest',
+      'debugger',
     ],
     host_permissions: PRODUCTION_HOSTS,
     optional_host_permissions: ['https://*/*'],
@@ -87,6 +89,7 @@ async function manifestDirectory(manifest = validManifest(), withRuntime = true)
       join(contentScripts, 'product-experience.js'),
       '/* runtime evaluator */\n',
     )
+    if (withRuntime === 'firefox') return directory
     await writeFile(join(directory, 'tlsn_wasm.js'), '/* wasm loader */\n')
     await writeFile(join(directory, 'tlsn_wasm_bg.wasm'), 'wasm')
     await writeFile(join(directory, 'spawn.js'), '/* spawn */\n')
@@ -143,6 +146,35 @@ test('accepts an exact production MV3 manifest with a runtime evaluator', async 
   const directory = await manifestDirectory()
 
   await assert.doesNotReject(verify(directory))
+})
+
+test.each(['chrome', 'edge'])('requires the native discovery contract on %s', async (browser) => {
+  const verify = productionManifestVerifier()
+  await assert.doesNotReject(verify(await manifestDirectory(), { browser }))
+  await assert.doesNotReject(verify(await manifestDirectory(validManifest({ minimum_chrome_version: '119' })), { browser }))
+  for (const minimum_chrome_version of [undefined, '117', 'invalid']) {
+    await assert.rejects(
+      verify(await manifestDirectory(validManifest({ minimum_chrome_version })), { browser }),
+      /minimum_chrome_version.*118/i,
+    )
+  }
+  await assert.rejects(
+    verify(await manifestDirectory(validManifest({ permissions: validManifest().permissions.filter(value => value !== 'debugger') })), { browser }),
+    /permissions.*debugger/i,
+  )
+})
+
+test('keeps native discovery permission out of Firefox', async () => {
+  const verify = productionManifestVerifier()
+  const manifest = validManifest({
+    permissions: ['storage', 'alarms', 'activeTab', 'scripting'],
+    optional_host_permissions: [],
+    minimum_chrome_version: undefined,
+    content_security_policy: undefined,
+  })
+  await assert.doesNotReject(verify(await manifestDirectory(manifest, 'firefox'), { browser: 'firefox' }))
+  manifest.permissions.push('debugger')
+  await assert.rejects(verify(await manifestDirectory(manifest, 'firefox'), { browser: 'firefox' }), /permissions.*debugger/i)
 })
 
 test('accepts the exact beta endpoint pair and manifest surfaces', async () => {
