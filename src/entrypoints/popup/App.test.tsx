@@ -298,6 +298,38 @@ describe('product experience popup', () => {
     expect(container.textContent).not.toContain('证明失败')
   })
 
+  it('labels unexecuted conditions as unnecessary after authoritative overall completion', async () => {
+    const { container } = await renderPopup(
+      productState('verified', {
+        zkTlsFinished: true,
+        matchedRuleIds: ['rule-a'],
+        zkTlsProgress: [
+          {
+            ruleId: 'rule-b',
+            title: 'Unexecuted',
+            status: 'PENDING',
+            current: null,
+            target: true,
+            unit: null,
+          },
+        ],
+        zkTlsConditions: [
+          {
+            ruleId: 'rule-b',
+            status: 'pending',
+            code: null,
+            stage: null,
+            correlationId: null,
+          },
+        ],
+      }),
+    )
+    expect(container.textContent).toContain('未验证，无需继续')
+    expect(container.textContent).not.toContain('等待证明')
+    expect(container.textContent).not.toContain('重试此条件')
+    expect(container.textContent).not.toContain('继续此条件')
+  })
+
   it('shows captured proof stages and exact safe failure details', async () => {
     const { container } = await renderPopup(
       productState('observing', {

@@ -350,7 +350,12 @@ export function ProductExperienceCard({
                     {displayText(entry.title)}
                   </span>
                   <span className="max-w-[56%] truncate text-right font-bold tabular-nums text-teal-200">
-                    {progressLabel(entry)}
+                    {state.zkTlsFinished &&
+                    state.status === 'verified' &&
+                    entry.status !== 'VERIFIED' &&
+                    entry.status !== 'VERIFIED_NO'
+                      ? '未验证，无需继续'
+                      : progressLabel(entry)}
                   </span>
                 </li>
               )
@@ -368,7 +373,12 @@ export function ProductExperienceCard({
               <li key={condition.ruleId}>
                 <span>
                   {displayText(condition.ruleId)} ·{' '}
-                  {displayText(condition.stage ?? condition.status)}
+                  {state.zkTlsFinished &&
+                  state.status === 'verified' &&
+                  condition.status !== 'verified' &&
+                  condition.status !== 'verified_no'
+                    ? '未验证，无需继续'
+                    : displayText(condition.stage ?? condition.status)}
                 </span>
                 {condition.code && (
                   <p className="font-mono text-amber-200">{condition.code}</p>
@@ -387,6 +397,7 @@ export function ProductExperienceCard({
                   </p>
                 ))}
                 {onRetryRule &&
+                  !state.zkTlsFinished &&
                   (condition.status === 'failed' ||
                     condition.status === 'action_required') && (
                     <button

@@ -11,6 +11,7 @@ import type {
   ProductZkTlsScalar,
   ProductZkTlsSession,
 } from '../types/product-experience'
+import { GqlError } from './gql'
 import type { ProductExperienceCanonicalInput } from './product-experience-proof'
 import type {
   ProductExperiencePublicError,
@@ -29,6 +30,21 @@ import type { ZkTlsRunRequest, ZkTlsRunResult } from './zktls/runtime'
 
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 const PATH_HASH_PATTERN = /^[a-f0-9]{64}$/
+
+function backendConfirmsExperience(
+  error: unknown,
+  kind: ProductTicketKind,
+): boolean {
+  return (
+    kind === 'PARTICIPANT' &&
+    error instanceof GqlError &&
+    error.graphqlErrors?.some(
+      (entry) =>
+        entry.extensions?.code ===
+        'PRODUCT_REPORT_ZKTLS_EXPERIENCE_ALREADY_VERIFIED',
+    ) === true
+  )
+}
 
 export type ProductZkTlsFailureCode =
   | 'INSUFFICIENT_DATA'
@@ -201,6 +217,8 @@ export interface ProductExperienceSession {
   >
   plannedExecution?: boolean
   zkTlsTestPassed?: boolean
+  // Backend-wide participant confirmation; never substitute per-rule YES.
+  zkTlsExperiencePassed?: boolean
   verifiedRuleIds: string[]
   zkTlsProgress: ProductZkTlsRuleProgress[]
   zkTlsDiagnostic?: ProductZkTlsDiagnostic
@@ -361,6 +379,7 @@ function allZkTlsConditionsFinished(
   session: ProductExperienceSession,
 ): boolean {
   if (session.ticketKind === 'TEST') return session.zkTlsTestPassed === true
+  if (session.zkTlsExperiencePassed) return true
   const terminal = terminalRuleIds(session)
   return (
     session.rules.length > 0 &&
@@ -722,6 +741,7 @@ export class ProductExperienceController {
         ? existing?.preparedZkTls?.ruleId
         : minted.rules[0].id
       let initialProgress: ProductZkTlsRuleProgress[] | null = null
+      let backendVerified = false
       if (
         !prepared &&
         (options.executePlan || !allowedOrigins.includes(origin)) &&
@@ -747,12 +767,20 @@ export class ProductExperienceController {
                     entry.status === 'VERIFIED_NO'),
               ),
           )?.id
-          if (seedRuleId)
-            prepared = await this.dependencies.startZkTls({
-              campaignId: currentTask.campaignId,
-              ruleId: seedRuleId,
-              ticketKind: currentTask.ticketKind,
-            })
+          if (seedRuleId) {
+            prepared = await this.dependencies
+              .startZkTls({
+                campaignId: currentTask.campaignId,
+                ruleId: seedRuleId,
+                ticketKind: currentTask.ticketKind,
+              })
+              .catch((error: unknown) => {
+                if (!backendConfirmsExperience(error, currentTask.ticketKind))
+                  throw error
+                backendVerified = true
+                return null
+              })
+          }
         } catch {
           if (this.generation !== mintGeneration)
             return this.getStateWithoutRetry()
@@ -766,7 +794,8 @@ export class ProductExperienceController {
       if (
         !allowedOrigins.includes(origin) &&
         !prepared &&
-        !(initialProgress && !seedRuleId)
+        !(initialProgress && !seedRuleId) &&
+        !backendVerified
       ) {
         return this.setTransient(this.originMismatchState(currentTask))
       }
@@ -811,6 +840,10 @@ export class ProductExperienceController {
               pendingSubmit: null,
             }
           : {}),
+      }
+      if (backendVerified) {
+        session.plannedExecution = true
+        session.zkTlsExperiencePassed = true
       }
       if (prepared?.executionPlan || (initialProgress && !seedRuleId)) {
         session.plannedExecution = true
@@ -1577,6 +1610,7 @@ export class ProductExperienceController {
     if (active) {
       const session = await this.dependencies.storage.getSession()
       if (!isZkTlsSession(session) || session.sessionId !== sessionId) return
+      if (allZkTlsConditionsFinished(session)) return
       const current = this.zkTlsFlight
       if (current?.sessionId === sessionId) {
         if (hasNewQueuedWork) current.drainRequested = true
@@ -1604,6 +1638,7 @@ export class ProductExperienceController {
     while (true) {
       const session = await this.dependencies.storage.getSession()
       if (!isZkTlsSession(session) || session.sessionId !== sessionId) return
+      if (allZkTlsConditionsFinished(session)) return
       if (
         session.status === 'reauthorize' ||
         (!session.currentOriginAllowed && !session.plannedExecution) ||
@@ -1611,13 +1646,12 @@ export class ProductExperienceController {
       )
         return
       const item =
+        // Participant completion can close ANY before another proof is allowed.
+        // TEST metrics still submit once and wait on the versioned integration check.
         session.zkTlsQueue.find(
           (entry) =>
-            entry.binding &&
             entry.status === 'submitted' &&
-            !this.exhaustedZkTlsPolls.has(
-              this.zkTlsPollKey(session.sessionId, entry.ruleId),
-            ),
+            (session.ticketKind === 'PARTICIPANT' || entry.binding),
         ) ??
         session.zkTlsQueue.find(
           (entry) => entry.status === 'queued' || entry.status === 'proving',
@@ -1632,6 +1666,12 @@ export class ProductExperienceController {
       if (!item) return
 
       if (item.status === 'submitted') {
+        if (
+          this.exhaustedZkTlsPolls.has(
+            this.zkTlsPollKey(session.sessionId, item.ruleId),
+          )
+        )
+          return
         if (
           !(await this.pollZkTlsProgress(
             session.sessionId,
@@ -1694,6 +1734,19 @@ export class ProductExperienceController {
             ticketKind: session.ticketKind,
           })
         } catch (error) {
+          if (backendConfirmsExperience(error, session.ticketKind)) {
+            await this.mutateZkTlsSession(session.sessionId, (current) => {
+              current.status = 'observing'
+              current.zkTlsExperiencePassed = true
+              current.error = null
+              current.zkTlsFailureCode = null
+              current.zkTlsQueue = current.zkTlsQueue.filter(
+                (entry) => entry.status === 'completed',
+              )
+            })
+            await this.notify()
+            return
+          }
           await this.resetZkTlsItem(
             session.sessionId,
             item.ruleId,
@@ -1923,13 +1976,12 @@ export class ProductExperienceController {
     this.exhaustedZkTlsPolls.delete(pollKey)
     for (const delayMs of [1_000, 2_000, 4_000, 8_000, 15_000]) {
       await wait(delayMs)
-      if (flight.drainRequested) {
-        return false
-      }
       const beforePoll = await this.dependencies.storage.getSession()
       if (!isZkTlsSession(beforePoll) || beforePoll.sessionId !== sessionId) {
         return false
       }
+      if (flight.drainRequested && beforePoll.ticketKind === 'TEST')
+        return false
       const active = beforePoll.zkTlsQueue.find(
         (item) => item.ruleId === activeRuleId,
       )
@@ -2130,7 +2182,11 @@ export class ProductExperienceController {
         await this.notify()
         return false
       }
-      if (!updated.zkTlsQueue.some((item) => item.ruleId === activeRuleId))
+      if (
+        !updated.zkTlsQueue.some(
+          (item) => item.ruleId === activeRuleId && item.status === 'submitted',
+        )
+      )
         return true
     }
     this.exhaustedZkTlsPolls.add(pollKey)
@@ -2503,7 +2559,8 @@ export class ProductExperienceController {
     const status =
       isZkTlsSession(session) &&
       allZkTlsConditionsFinished(session) &&
-      session.verifiedRuleIds.length === session.rules.length
+      (session.zkTlsExperiencePassed ||
+        session.verifiedRuleIds.length === session.rules.length)
         ? 'verified'
         : authorizationRequired
           ? 'reauthorize'
