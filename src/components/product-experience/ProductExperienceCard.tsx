@@ -75,6 +75,8 @@ function actionLabel(state: ProductExperienceControllerState): string | null {
     return '检查当前网站'
   }
   if (status === 'reauthorize') return '重新授权'
+  if (status === 'submitting' && state.zkTlsProgress !== undefined)
+    return '查询证明结果'
   if (
     state.zkTlsConditions?.some(
       (item) => item.status === 'failed' || item.status === 'action_required',

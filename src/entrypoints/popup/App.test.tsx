@@ -620,6 +620,17 @@ describe('product experience popup', () => {
     })
   })
 
+  it('offers an explicit confirmation query for a submitted proof', async () => {
+    const harness = await renderPopup(
+      productState('submitting', { zkTlsProgress: [] }),
+    )
+    await act(async () => findButton(harness.container, '查询证明结果').click())
+    expect(harness.requests).toContainEqual({
+      type: 'start-product-experience',
+    })
+    expect(harness.container.textContent).not.toContain('重试证明')
+  })
+
   it('shows verified only for the authoritative verified state', async () => {
     const harness = await renderPopup(
       productState('submitting', {

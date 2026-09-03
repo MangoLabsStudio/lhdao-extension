@@ -679,8 +679,7 @@ export class ProductExperienceController {
           sessionGeneration,
         )
         if (isZkTlsSession(existing) && existing.zkTlsQueue.length > 0) {
-          if (awaitingBackend) void this.drainZkTlsQueue(existing.sessionId)
-          else void this.drainZkTlsQueueAfterCurrentFlight(existing.sessionId)
+          void this.drainZkTlsQueueAfterCurrentFlight(existing.sessionId)
         }
         return state
       }
@@ -1553,7 +1552,7 @@ export class ProductExperienceController {
       (current) => {
         const item = current.zkTlsQueue.find(
           (entry) =>
-            entry.status === 'paused' &&
+            (entry.status === 'paused' || entry.status === 'submitted') &&
             (entry.dependentRuleIds ?? [entry.ruleId]).includes(ruleId),
         )
         if (
@@ -1562,6 +1561,11 @@ export class ProductExperienceController {
           (!current.currentOriginAllowed && !current.plannedExecution)
         )
           return false
+        if (item.status === 'submitted') {
+          return this.exhaustedZkTlsPolls.delete(
+            this.zkTlsPollKey(current.sessionId, item.ruleId),
+          )
+        }
         item.ruleId = ruleId
         item.status = 'queued'
         item.failureCode = null
@@ -1585,6 +1589,13 @@ export class ProductExperienceController {
     const session = await this.mutateZkTlsSession(sessionId, (current) => {
       let resumed = false
       for (const item of current.zkTlsQueue) {
+        if (item.status === 'submitted') {
+          resumed =
+            this.exhaustedZkTlsPolls.delete(
+              this.zkTlsPollKey(current.sessionId, item.ruleId),
+            ) || resumed
+          continue
+        }
         if (item.status !== 'paused') continue
         item.status = 'queued'
         resumed = true

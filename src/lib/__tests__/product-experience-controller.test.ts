@@ -3887,6 +3887,73 @@ describe('ProductExperienceController zkTLS authority queue', () => {
   })
 
   it.each([
+    ['start', true],
+    ['rule', true],
+    ['legacy-start', true],
+    ['start', false],
+    ['rule', false],
+    ['legacy-start', false],
+  ] as const)('reopens one exhausted confirmation budget on explicit %s (recovered=%s)', async (entry, recovered) => {
+    const session = harness.storage.session!
+    session.plannedExecution = entry !== 'legacy-start'
+    session.zkTlsQueue = [
+      {
+        ruleId: 'rule-a',
+        dependentRuleIds: ['rule-a'],
+        status: 'submitted',
+        sessionId: 'submitted-a',
+        connectorId: 'connector-a',
+        expiresAt: '2026-07-13T10:10:00.000Z',
+      },
+      {
+        ruleId: 'rule-b',
+        status: 'queued',
+        sessionId: null,
+        connectorId: null,
+        expiresAt: null,
+      },
+    ]
+    await harness.storage.setSession(session)
+    await harness.controller.resumePendingSubmit()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+    expect(harness.proveZkTls).not.toHaveBeenCalled()
+    if (recovered)
+      harness.readZkTlsProgress.mockImplementation(async () =>
+        rules.map((rule) => ({
+          ruleId: rule.id,
+          title: rule.title,
+          status:
+            rule.id === 'rule-a' || harness.proveZkTls.mock.calls.length
+              ? 'VERIFIED'
+              : 'PENDING',
+          current: null,
+          target: true,
+          unit: null,
+        })),
+      )
+    else harness.readZkTlsProgress.mockRejectedValue(new Error('offline'))
+    await harness.controller.getState()
+    await harness.controller.getState()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(5)
+    if (entry === 'rule')
+      await harness.controller.retryRule(task().campaignId, 'rule-a')
+    else await harness.controller.start({ executePlan: true })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(recovered ? 7 : 10)
+    expect(harness.startZkTls).toHaveBeenCalledTimes(recovered ? 1 : 0)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(recovered ? 1 : 0)
+    if (recovered) {
+      expect(harness.startZkTls.mock.calls[0][0].ruleId).toBe('rule-b')
+      expect((await harness.controller.getState()).zkTlsFinished).toBe(true)
+    }
+    await harness.controller.getState()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(harness.readZkTlsProgress).toHaveBeenCalledTimes(recovered ? 7 : 10)
+  })
+
+  it.each([
     'pending',
     'read-failure',
   ])('blocks new proofs behind an exhausted submitted %s poll', async (kind) => {
