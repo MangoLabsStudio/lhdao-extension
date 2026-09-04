@@ -162,7 +162,7 @@ describe('PLUGIN_OPERATIONS', () => {
     }
   })
 
-  it('versions the expanded engagement documents as v2 operations', () => {
+  it('versions the comment-guide engagement documents as v3 operations', () => {
     expect(PLUGIN_OPERATIONS.map((operation) => operation.id)).not.toContain(
       'engagement.available.v1',
     )
@@ -174,13 +174,13 @@ describe('PLUGIN_OPERATIONS', () => {
         AVAILABLE_ENGAGEMENTS_QUERY,
         'AvailableEngagements',
       )?.id,
-    ).toBe('engagement.available.v2')
+    ).toBe('engagement.available.v3')
     expect(
       getPluginOperationByDocument(
         MY_RESERVED_ENGAGEMENTS_QUERY,
         'MyReservedEngagements',
       )?.id,
-    ).toBe('engagement.reserved.v2')
+    ).toBe('engagement.reserved.v3')
   })
 
   it('does not match a document with an added field or alias', () => {

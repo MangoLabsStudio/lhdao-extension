@@ -1,7 +1,7 @@
 // [任务引导] 纯逻辑:任务要求哪些动作 / 检测到哪些 / 停留够没 / 能否验证。
 // 无副作用,content 与组件共用,便于单测。sidebar「当前任务」段 + (历史)悬浮窗共享。
 
-import type { CampaignTaskCache } from '@/lib/storage'
+import type { CampaignTaskCache, CommentGuideStatus } from '@/lib/storage'
 
 export type GuideAction = 'LIKE' | 'RT' | 'COMMENT' | 'FOLLOW'
 
@@ -105,6 +105,8 @@ export interface CurrentCampaign {
   totalReward: number
   /** COMMENT 类关键字(首个非空) */
   commentKeyword: string | null
+  commentGuide?: string | null
+  commentGuideStatus: CommentGuideStatus
   /** FOLLOW 目标 handle(首个非空,小写) */
   targetUsername: string | null
   /** 该 campaign 是否为当前用户已预约(RESERVED)。挑选「当前任务」时已预约的优先。 */
@@ -138,10 +140,18 @@ export function groupCampaigns(tasks: CampaignTaskCache[]): CurrentCampaign[] {
         requiredActions: [],
         totalReward: 0,
         commentKeyword: null,
+        commentGuide: undefined,
+        commentGuideStatus: 'unavailable',
         targetUsername: null,
         reserved: false,
       }
       map.set(t.campaignId, v)
+    }
+    if (t.actionType === 'COMMENT' || t.actionType === 'COMMENT_LIKE') {
+      v.commentGuide = t.commentGuide
+      v.commentGuideStatus =
+        t.commentGuideStatus ??
+        (t.commentGuide === undefined ? 'unavailable' : 'ready')
     }
     v.actionTypes.push(t.actionType)
     v.totalReward += Number.isFinite(t.expectedReward) ? t.expectedReward : 0

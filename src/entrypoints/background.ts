@@ -6,6 +6,7 @@ import {
   indexBinanceSquareTasks,
   reservedBinanceProbeTargets,
 } from '@/lib/binance-square-tasks'
+import { sha256Hex } from '@/lib/canonical-json'
 import { CAPTURE_DEBUG, dbg } from '@/lib/capture-debug'
 import { getOrCreateDeviceIdentity } from '@/lib/device-key'
 import {
@@ -114,7 +115,6 @@ import {
   type RawCapturedAction,
   sessionStore,
   type TweetCampaignSummary,
-  type UserProfile,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import { DiscoverySessionManager } from '@/lib/zktls/discovery/session-manager'
@@ -631,23 +631,16 @@ export default defineBackground(() => {
       return { type: 'product-experience-ack' }
     }
     if (req.type === 'get-tasks-for-tweet') {
-      const map = (await sessionStore.get('tasksByTweetId')) ?? {}
-      return { type: 'tasks', tasks: map[req.tweetId] ?? [] }
+      const snapshot = await readTasksSnapshot()
+      return { type: 'tasks', tasks: snapshot.byTweet[req.tweetId] ?? [] }
     }
     if (req.type === 'get-tasks-for-author') {
-      const map = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
+      const snapshot = await readTasksSnapshot()
       const handle = req.authorHandle.toLowerCase()
-      return { type: 'tasks', tasks: map[handle] ?? [] }
+      return { type: 'tasks', tasks: snapshot.byAuthor[handle] ?? [] }
     }
     if (req.type === 'get-tasks-snapshot') {
-      // 整体快照 — content script 启动 + tasks-updated 时各拉一次,本地缓存
-      // 后 scan 直接同步查,避免 per-article RPC 串行 await 的肉眼延迟。
-      const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
-      const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
-      // ready = 是否至少同步成功过一次。消费方(CurrentTaskSection)用它区分
-      // 「冷启未同步的空快照」与「已同步的真·无任务」,避免把前者误判成后者。
-      const ready = (await sessionStore.get('lastSyncAt')) != null
-      return { type: 'tasks-snapshot', byTweet, byAuthor, ready }
+      return readTasksSnapshot()
     }
     if (req.type === 'get-captured-actions') {
       // [网页 gate] 返回某 campaign 已捕获的动作类型。网页验证前预检:没捕获就
@@ -837,134 +830,260 @@ export default defineBackground(() => {
   // 不必等下一个 60s alarm 才看到任务)
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && 'apiToken' in changes) {
-      void syncTasks()
+      void handleTaskTokenChange()
     }
   })
 })
 
 // ── sync ─────────────────────────────────────────────────────────────
 
-let syncInFlight: Promise<void> | null = null
-let syncRetryTimer: ReturnType<typeof setTimeout> | null = null
-
-function syncTasks(): Promise<void> {
-  if (syncInFlight) return syncInFlight
-  syncInFlight = performSyncTasks().finally(() => {
-    syncInFlight = null
-  })
-  return syncInFlight
+export async function readTasksSnapshot(): Promise<
+  Extract<MsgResponse, { type: 'tasks-snapshot' }>
+> {
+  const generation = syncGeneration
+  await syncReset
+  const token = await localStore.get('apiToken')
+  const [sources, byTweet, byAuthor, lastSyncAt, lastSyncError] =
+    await Promise.all([
+      sessionStore.get('engagementSources'),
+      sessionStore.get('tasksByTweetId'),
+      sessionStore.get('tasksByAuthorHandle'),
+      sessionStore.get('lastSyncAt'),
+      sessionStore.get('lastSyncError'),
+    ])
+  const owner = token ? await sha256Hex(token) : null
+  const currentToken = await localStore.get('apiToken')
+  if (
+    !owner ||
+    sources?.owner !== owner ||
+    currentToken !== token ||
+    generation !== syncGeneration
+  ) {
+    return {
+      type: 'tasks-snapshot',
+      byTweet: {},
+      byAuthor: {},
+      ready: !currentToken,
+    }
+  }
+  return {
+    type: 'tasks-snapshot',
+    byTweet: byTweet ?? {},
+    byAuthor: byAuthor ?? {},
+    ready: lastSyncAt != null,
+    syncFailed: lastSyncError != null,
+  }
 }
 
-async function performSyncTasks(): Promise<void> {
+let syncGeneration = 0
+let syncInFlight: {
+  token: string | null
+  generation: number
+  promise: Promise<void>
+} | null = null
+let syncReset: Promise<void> = Promise.resolve()
+let syncRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+async function clearTaskCache(): Promise<void> {
+  await sessionStore.patch({
+    engagementSources: null,
+    tasksByTweetId: {},
+    tasksByAuthorHandle: {},
+    binanceSquareTasks: { byContentId: {}, byAuthorId: {} },
+    activeCampaigns: [],
+    tweetCampaigns: [],
+    userProfile: null,
+    capturedActions: {},
+    rawCapturedActions: [],
+    lastSyncAt: null,
+    lastSyncError: null,
+    lastSyncHttpStatus: null,
+  })
+  broadcastToContent({ type: 'tasks-updated' })
+}
+
+/** Invalidate immediately, including A -> B -> A transitions while requests run. */
+export function handleTaskTokenChange(): Promise<void> {
+  syncGeneration++
+  syncInFlight = null
+  if (syncRetryTimer) clearTimeout(syncRetryTimer)
+  syncRetryTimer = null
+  syncReset = syncReset.then(clearTaskCache)
+  return syncReset.then(syncTasks)
+}
+
+export async function syncTasks(): Promise<void> {
+  const generation = syncGeneration
+  await syncReset
   const token = await localStore.get('apiToken')
-  if (!token) {
-    // 没 token 就清空所有缓存,避免遗留旧任务/旧余额误导
-    await sessionStore.set('tasksByTweetId', {})
-    await sessionStore.set('tasksByAuthorHandle', {})
-    await sessionStore.set('binanceSquareTasks', {
-      byContentId: {},
-      byAuthorId: {},
-    })
-    await sessionStore.set('activeCampaigns', [])
-    await sessionStore.set('tweetCampaigns', [])
-    await sessionStore.set('userProfile', null)
-    await sessionStore.set('lastSyncError', 'No API token configured')
-    await sessionStore.set('lastSyncHttpStatus', null)
+  if (generation !== syncGeneration) return syncTasks()
+  if (syncInFlight?.token === token && syncInFlight.generation === generation) {
+    return syncInFlight.promise
+  }
+  // A force-sync can arrive before storage.onChanged is delivered.
+  if (syncInFlight && syncInFlight.token !== token) syncGeneration++
+  const flight = {
+    token,
+    generation: syncGeneration,
+    promise: Promise.resolve(),
+  }
+  flight.promise = performSyncTasks(token, flight.generation).finally(() => {
+    if (syncInFlight === flight) syncInFlight = null
+  })
+  syncInFlight = flight
+  return flight.promise
+}
+
+async function performSyncTasks(
+  token: string | null,
+  generation: number,
+): Promise<void> {
+  const isCurrent = async () => {
+    const currentToken = await localStore.get('apiToken')
+    return generation === syncGeneration && currentToken === token
+  }
+  const owner = token ? await sha256Hex(token) : null
+  let cached = await sessionStore.get('engagementSources')
+  if (!(await isCurrent())) return
+  if (!token || cached?.owner !== owner) {
+    await clearTaskCache()
+    cached = null
+    if (!(await isCurrent())) return
+  }
+  if (!token || !owner) {
+    await sessionStore.patch({ lastSyncError: 'No API token configured' })
     return
   }
 
-  // 并行拉,allSettled 让部分失败不阻塞其他成功的结果。
-  // engagements(可参与)+ reserved(我已预约)→ chip / 卡片当前任务;
-  // tweets → sidebar 列表;me → sidebar 个人面板。
-  // reserved 是关键:预约后该单会从 availableEngagements 消失,但卡片"当前任务"
-  // 段需要它(打开推文=已预约)。两者合并进 tasksByTweetId。
   const [engRes, reservedRes, tweetsRes, meRes] = await Promise.allSettled([
     gql<AvailableEngagementsResult>(AVAILABLE_ENGAGEMENTS_QUERY),
     gql<MyReservedEngagementsResult>(MY_RESERVED_ENGAGEMENTS_QUERY),
     gql<AvailableTweetsResult>(AVAILABLE_TWEETS_QUERY),
     gql<MeResult>(ME_QUERY),
   ])
+  if (!(await isCurrent())) return
 
-  // —— engagement(available + 我已预约)→ chip / card / activeCampaigns ——
-  if (engRes.status === 'fulfilled') {
-    const available = engRes.value.availableEngagements
-    const reserved =
-      reservedRes.status === 'fulfilled'
-        ? reservedRes.value.myReservedEngagements
-        : []
-    if (reservedRes.status !== 'fulfilled') {
-      console.warn('[lhdao] myReservedEngagements failed', reservedRes.reason)
+  const available =
+    engRes.status === 'fulfilled'
+      ? engRes.value.availableEngagements
+      : (cached?.available ?? [])
+  const reserved =
+    reservedRes.status === 'fulfilled'
+      ? reservedRes.value.myReservedEngagements
+      : (cached?.reserved ?? [])
+  // During a partial refresh, a missing order may have moved to the failed source.
+  const incomplete =
+    engRes.status === 'rejected' || reservedRes.status === 'rejected'
+  const retained = incomplete
+    ? [...(cached?.available ?? []), ...(cached?.reserved ?? [])]
+    : []
+  // A fresh order wins over a failed source's old copy during reservation changes.
+  const fresh = new Set(
+    [
+      ...(engRes.status === 'fulfilled' ? available : []),
+      ...(reservedRes.status === 'fulfilled' ? reserved : []),
+    ].map((c) => c.id),
+  )
+  const stale = new Set(
+    [
+      ...retained,
+      ...(engRes.status === 'rejected' ? available : []),
+      ...(reservedRes.status === 'rejected' ? reserved : []),
+    ]
+      .filter((c) => !fresh.has(c.id))
+      .map((c) => c.id),
+  )
+  const merged = [
+    ...new Map(
+      [
+        ...retained,
+        ...available,
+        ...reserved,
+        ...(engRes.status === 'fulfilled' ? available : []),
+        ...(reservedRes.status === 'fulfilled' ? reserved : []),
+      ].map((c) => [c.id, c]),
+    ).values(),
+  ]
+  const reservedIds = new Set(reserved.map((c) => c.id))
+  const { byTweet, byAuthor } = flattenTasks(merged, reservedIds)
+  const activeCampaigns = buildActiveCampaignSummaries(merged)
+  for (const task of [
+    ...Object.values(byTweet).flat(),
+    ...Object.values(byAuthor).flat(),
+    ...activeCampaigns,
+  ]) {
+    if (stale.has(task.campaignId)) {
+      task.commentGuideStatus =
+        task.commentGuide === undefined ? 'unavailable' : 'stale'
     }
-    const merged = [...available, ...reserved]
-    // 已预约的 campaignId 集合 → flattenTasks 标进 task.reserved,让同推文多单时
-    // 「当前任务」优先显示用户实际预约的那个(修 NO_ACTIVE_RESERVATION)。
-    const reservedIds = new Set<string>(reserved.map((c) => c.id))
-    const { byTweet, byAuthor } = flattenTasks(merged, reservedIds)
-    const binanceIndex = indexBinanceSquareTasks(merged, reservedIds)
-    const activeCampaigns = buildActiveCampaignSummaries(merged)
-    await sessionStore.set('tasksByTweetId', byTweet)
-    await sessionStore.set('tasksByAuthorHandle', byAuthor)
-    await sessionStore.set('binanceSquareTasks', binanceIndex)
-    await sessionStore.set('activeCampaigns', activeCampaigns)
-  } else {
-    console.warn('[lhdao] availableEngagements failed', engRes.reason)
   }
-
-  // —— tweets → sidebar 任务列表 ——
-  if (tweetsRes.status === 'fulfilled') {
-    const summaries = buildTweetCampaignSummaries(
+  const failure =
+    engRes.status === 'rejected'
+      ? engRes
+      : reservedRes.status === 'rejected'
+        ? reservedRes
+        : null
+  const reason = failure?.reason
+  const values: Parameters<typeof sessionStore.patch>[0] = {
+    engagementSources: {
+      owner,
+      available: incomplete
+        ? [
+            ...new Map(
+              [...(cached?.available ?? []), ...available].map((c) => [
+                c.id,
+                c,
+              ]),
+            ).values(),
+          ]
+        : available,
+      reserved: incomplete
+        ? [
+            ...new Map(
+              [...(cached?.reserved ?? []), ...reserved].map((c) => [c.id, c]),
+            ).values(),
+          ]
+        : reserved,
+    },
+    tasksByTweetId: byTweet,
+    tasksByAuthorHandle: byAuthor,
+    binanceSquareTasks: indexBinanceSquareTasks(merged, reservedIds),
+    activeCampaigns,
+    lastSyncError: failure
+      ? reason instanceof Error
+        ? reason.message
+        : String(reason)
+      : null,
+    lastSyncHttpStatus:
+      reason instanceof GqlError ? (reason.httpStatus ?? null) : null,
+  }
+  if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
+    values.lastSyncAt = Date.now()
+  if (tweetsRes.status === 'fulfilled')
+    values.tweetCampaigns = buildTweetCampaignSummaries(
       tweetsRes.value.availableTweets,
     )
-    await sessionStore.set('tweetCampaigns', summaries)
-  } else {
-    console.warn('[lhdao] availableTweets failed', tweetsRes.reason)
-    // 保留旧缓存 — 网络抖动时旧数据比空数据更可用
-  }
-
-  // —— me → sidebar 个人面板 ——
   if (meRes.status === 'fulfilled' && meRes.value.me) {
     const m = meRes.value.me
-    // displayName 优先级: nickname > username > twitterUsername > null
-    // (nickname 是用户主动设的;username 是登录名;twitter handle 兜底)
-    const displayName = m.nickname ?? m.username ?? m.twitterUsername ?? null
-    const profile: UserProfile = {
+    values.userProfile = {
       id: m.id,
-      displayName,
+      displayName: m.nickname ?? m.username ?? m.twitterUsername ?? null,
       avatar: m.avatar ?? null,
       twitterHandle: m.twitterUsername ?? null,
       tier: m.tier ?? null,
-      // newLux 是 GraphQLDecimal scalar,后端传 string;显式转 number,
-      // 不可解析(空串 / null / NaN)统一归一为 null,前端 formatBalance
-      // 才能正确识别"无数据"显示横杠,而不是把 string "520" 当成 NaN
       newLux: parseNumber(m.newLux),
-      // todayEarnings 后端 ResolveField 已 .toNumber(),是 number,直接用
       todayEarnings: m.todayEarnings ?? null,
     }
-    await sessionStore.set('userProfile', profile)
-  } else if (meRes.status === 'rejected') {
-    console.warn('[lhdao] me failed', meRes.reason)
   }
-
-  // —— 全局 sync 状态:任一关键 query 成功就算"同步过" ——
-  // engagement 是 chip 的核心,优先用它的成功/失败做主判断;
-  // 单 me 或 tweets 失败不算整体失败(部分降级展示)。
-  if (engRes.status === 'fulfilled') {
-    await sessionStore.set('lastSyncAt', Date.now())
-    await sessionStore.set('lastSyncError', null)
-    await sessionStore.set('lastSyncHttpStatus', null)
+  // One storage write: no old-session continuation can write another field after reset.
+  if (!(await isCurrent())) return
+  await sessionStore.patch(values)
+  if (!(await isCurrent())) return
+  if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
     queueRawCaptureReconcile()
-    broadcastToContent({ type: 'tasks-updated' })
-  } else {
-    const reason = engRes.reason
-    const msg = reason instanceof Error ? reason.message : String(reason)
-    const httpStatus =
-      reason instanceof GqlError ? (reason.httpStatus ?? null) : null
-    await sessionStore.set('lastSyncError', msg)
-    await sessionStore.set('lastSyncHttpStatus', httpStatus)
-    if (reason instanceof GqlError && reason.retryAfterMs !== undefined) {
-      scheduleSyncRetry(reason.retryAfterMs)
-    }
-  }
+  broadcastToContent({ type: 'tasks-updated' })
+  if (reason instanceof GqlError && reason.retryAfterMs !== undefined)
+    scheduleSyncRetry(reason.retryAfterMs)
 }
 
 function scheduleSyncRetry(retryAfterMs: number): void {
@@ -1076,6 +1195,9 @@ export function buildActiveCampaignSummaries(
       authorAvatar: c.tweetAuthorAvatar ?? null,
       tweetPreview,
       commentKeyword,
+      commentGuide: isCommentish ? c.commentGuide : null,
+      commentGuideStatus:
+        isCommentish && c.commentGuide === undefined ? 'unavailable' : 'ready',
     })
   }
   // 按奖励降序排,高价值任务靠前
@@ -1137,6 +1259,11 @@ export function flattenTasks(
         actionType: a.actionType,
         expectedReward: perAction ?? a.baseReward,
         commentKeyword: isCommentish ? firstKeyword : null,
+        commentGuide: isCommentish ? c.commentGuide : null,
+        commentGuideStatus:
+          isCommentish && c.commentGuide === undefined
+            ? 'unavailable'
+            : 'ready',
         targetUsername: isFollow ? targetUsername : null,
         authorName: c.tweetAuthorName ?? null,
         authorHandle: c.tweetAuthorHandle ?? null,

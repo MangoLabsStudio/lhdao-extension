@@ -100,6 +100,7 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       tweetAuthorAvatar
       targetUsername
       keywords
+      commentGuide
       expectedReward
       myExpectedReward
       effectiveTier
@@ -143,6 +144,8 @@ export interface AvailableEngagement {
    */
   targetUsername: string | null
   keywords: string[]
+  /** Missing means unread/legacy data; null means no guide. */
+  commentGuide?: string | null
   /** 用户级联后实际能拿到的总奖励 (LUX),后端 listAvailableCampaigns 计算 */
   expectedReward: number | null
   /** 当前用户 tier / 已预约 rewardTier 下的精确预期奖励;展示优先用它。 */
@@ -183,6 +186,7 @@ export const MY_RESERVED_ENGAGEMENTS_QUERY = `
       tweetAuthorAvatar
       targetUsername
       keywords
+      commentGuide
       expectedReward
       myExpectedReward
       effectiveTier

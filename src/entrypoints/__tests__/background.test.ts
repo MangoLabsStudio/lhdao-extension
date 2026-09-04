@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AvailableEngagement } from '@/lib/queries'
+import {
+  AVAILABLE_ENGAGEMENTS_QUERY,
+  type AvailableEngagement,
+  MY_RESERVED_ENGAGEMENTS_QUERY,
+} from '@/lib/queries'
 import { CaptureSession } from '@/lib/zktls/capture'
 import { validateConnector } from '@/lib/zktls/interpreter'
 import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
@@ -85,6 +89,67 @@ describe('X task indexes', () => {
       byTweet: {},
       byAuthor: {},
     })
+  })
+})
+
+describe('comment guidance propagation', () => {
+  const campaign = (
+    id: string,
+    commentGuide: string | null,
+  ): AvailableEngagement => ({
+    ...binanceLikeCampaign,
+    id,
+    platform: 'X',
+    tweetId: '123456',
+    commentGuide,
+    keywords: ['not a guide'],
+    actions: [{ actionType: 'COMMENT_LIKE', baseReward: 1, targetCount: 1 }],
+  })
+
+  it('requests commentGuide for both available and reserved orders', () => {
+    expect(AVAILABLE_ENGAGEMENTS_QUERY).toContain('commentGuide')
+    expect(MY_RESERVED_ENGAGEMENTS_QUERY).toContain('commentGuide')
+  })
+
+  it('preserves full guides by campaign across task indexes and summaries', () => {
+    const longGuide = `${'旧订单完整内容不截断'.repeat(8)}\n第二行`
+    const orders = [campaign('a', longGuide), campaign('b', '另一个方向')]
+    const tasks = flattenTasks(orders, new Set(['a'])).byTweet['123456']
+    expect(
+      tasks.map((t) => [
+        t.campaignId,
+        t.commentGuide,
+        t.commentGuideStatus,
+        t.reserved,
+      ]),
+    ).toEqual([
+      ['a', longGuide, 'ready', true],
+      ['b', '另一个方向', 'ready', false],
+    ])
+    expect(
+      buildActiveCampaignSummaries(orders).map((t) => [
+        t.campaignId,
+        t.commentGuide,
+      ]),
+    ).toEqual([
+      ['a', longGuide],
+      ['b', '另一个方向'],
+    ])
+  })
+
+  it('separates an absent field from a known null and never uses keywords', () => {
+    const unknown = campaign('unknown', null)
+    delete unknown.commentGuide
+    const orders = [campaign('empty', null), unknown]
+    expect(
+      flattenTasks(orders).byTweet['123456'].map((t) => [
+        t.commentGuide,
+        t.commentGuideStatus,
+      ]),
+    ).toEqual([
+      [null, 'ready'],
+      [undefined, 'unavailable'],
+    ])
   })
 })
 
