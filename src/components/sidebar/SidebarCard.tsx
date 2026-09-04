@@ -2,7 +2,11 @@ import * as React from 'react'
 import { LighthouseSelectedText } from '@/components/lighthouse/LighthouseSelectedText'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { sendMessage } from '@/lib/messaging'
-import type { TweetCampaignSummary, UserProfile } from '@/lib/storage'
+import type {
+  LighthouseSelectedStatus,
+  TweetCampaignSummary,
+  UserProfile,
+} from '@/lib/storage'
 
 /**
  * Sidebar 卡片 v3 — Lighthouse mini-dashboard 嵌入 X 右侧栏
@@ -23,12 +27,14 @@ interface SidebarData {
   profile: UserProfile | null
   tweetCampaigns: TweetCampaignSummary[] | null
   tokenConfigured: boolean
+  lighthouseSelectedStatus: LighthouseSelectedStatus
 }
 
 const INITIAL: SidebarData = {
   profile: null,
   tweetCampaigns: null,
   tokenConfigured: false,
+  lighthouseSelectedStatus: 'loading',
 }
 
 export function SidebarCard() {
@@ -43,6 +49,7 @@ export function SidebarCard() {
         profile: r.profile,
         tweetCampaigns: r.tweetCampaigns,
         tokenConfigured: r.tokenConfigured,
+        lighthouseSelectedStatus: r.lighthouseSelectedStatus,
       })
       setLoading(false)
       setLastSyncAt(Date.now())
@@ -70,10 +77,18 @@ export function SidebarCard() {
   return (
     <section className="lh-card">
       <BrandBar lastSyncAt={lastSyncAt} />
-      <IdentityCard profile={data.profile} />
+      <IdentityCard
+        profile={data.profile}
+        lighthouseSelectedStatus={data.lighthouseSelectedStatus}
+      />
       {/* 当前任务卡已改为内联到推文详情页动作栏下方(content.ts mountArticle),
           不再嵌在右栏卡里 —— 避免右栏被其它扩展/X 布局挤位。右栏卡现只留身份 +
           指标 + 发布任务入口。 */}
+      {campaigns.some(
+        (campaign) => campaign.lighthouseSelectedOnly === true,
+      ) ? (
+        <LighthouseSelectedText kind="order" />
+      ) : null}
       <FooterStats profile={data.profile} taskCount={campaigns.length} />
       <CtaRow />
     </section>
@@ -104,7 +119,13 @@ function BrandBar({ lastSyncAt }: { lastSyncAt: number }) {
 
 // ── ② Identity card — 内嵌 teal-tinted box ──────────────────────────
 
-function IdentityCard({ profile }: { profile: UserProfile | null }) {
+function IdentityCard({
+  profile,
+  lighthouseSelectedStatus,
+}: {
+  profile: UserProfile | null
+  lighthouseSelectedStatus: LighthouseSelectedStatus
+}) {
   const name = profile?.displayName ?? '灯塔任务'
   const handle = profile?.twitterHandle ?? null
   const balance = profile?.newLux ?? null
@@ -118,6 +139,9 @@ function IdentityCard({ profile }: { profile: UserProfile | null }) {
           <div className="lh-identity-name">{name}</div>
           {profile?.lighthouseSelected === true ? (
             <LighthouseSelectedText kind="current" />
+          ) : null}
+          {lighthouseSelectedStatus !== 'available' ? (
+            <LighthouseSelectedText kind={lighthouseSelectedStatus} />
           ) : null}
           {handle && <div className="lh-identity-handle">@{handle}</div>}
         </div>

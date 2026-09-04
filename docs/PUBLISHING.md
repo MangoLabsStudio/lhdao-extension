@@ -63,15 +63,15 @@ release owner gives explicit approval. Only after that approval:
 
 ```bash
 git tag -a v0.3.0 -m "release: extension v0.3.0"
-git push origin v0.2.0
+git push origin v0.3.0
 ```
 
 `.github/workflows/release.yml` repeats compile, test, typecheck, lint, three
 production zip builds, extraction, and manifest verification. It uploads only:
 
-- `lhdao-extension-0.2.0-chrome.zip`
-- `lhdao-extension-0.2.0-edge.zip`
-- `lhdao-extension-0.2.0-firefox.zip`
+- `lhdao-extension-0.3.0-chrome.zip`
+- `lhdao-extension-0.3.0-edge.zip`
+- `lhdao-extension-0.3.0-firefox.zip`
 
 The Firefox sources zip is not a store artifact and must not be uploaded as one.
 

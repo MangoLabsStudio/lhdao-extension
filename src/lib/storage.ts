@@ -132,7 +132,11 @@ interface SessionSchema {
   tweetCampaigns: TweetCampaignSummary[]
   /** [v2] 个人面板数据:余额 / Tier / 今日收益 — sidebar 顶部三件套 */
   userProfile: UserProfile | null
+  /** 当前 token 的严选资格查询状态;null 表示尚未完成本轮确认。 */
+  lighthouseSelectedStatus: LighthouseSelectedStatus | null
 }
+
+export type LighthouseSelectedStatus = 'available' | 'loading' | 'unavailable'
 
 /** Sidebar v2 顶部个人面板用 — 全是 me query 拉来的字段 */
 export interface UserProfile {

@@ -21,6 +21,7 @@ import type {
 import type {
   ActiveCampaignSummary,
   CampaignTaskCache,
+  LighthouseSelectedStatus,
   TweetCampaignSummary,
   UserProfile,
 } from '@/lib/storage'
@@ -348,6 +349,8 @@ export type MsgResponse =
       tweetCampaigns: TweetCampaignSummary[] | null
       /** 是否已配置 plugin token — sidebar 据此渲染 unauth 态 */
       tokenConfigured: boolean
+      /** 严选资格本轮确认状态;confirmed false 仍为 available。 */
+      lighthouseSelectedStatus: LighthouseSelectedStatus
     }
   | {
       type: 'popup-data'

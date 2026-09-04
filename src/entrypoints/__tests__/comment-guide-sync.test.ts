@@ -13,6 +13,8 @@ import {
 import { localStore, sessionStore } from '@/lib/storage'
 import {
   handleTaskTokenChange,
+  readPopupData,
+  readSidebarData,
   readTasksSnapshot,
   syncTasks,
 } from '../background'
@@ -103,6 +105,13 @@ describe('comment guide sync', () => {
     const profile = await sessionStore.get('userProfile')
     expect(profile).toMatchObject({ id: 'user-a' })
     expect(profile).not.toHaveProperty('lighthouseSelected')
+    expect(await sessionStore.get('lighthouseSelectedStatus')).toBe(
+      'unavailable',
+    )
+    expect(await readSidebarData()).toMatchObject({
+      profile: { id: 'user-a' },
+      lighthouseSelectedStatus: 'unavailable',
+    })
     expect((await tasks()).map((task) => task.campaignId)).toEqual([
       'available',
       'reserved',
@@ -123,6 +132,9 @@ describe('comment guide sync', () => {
     await syncTasks()
     expect(await sessionStore.get('userProfile')).not.toHaveProperty(
       'lighthouseSelected',
+    )
+    expect(await sessionStore.get('lighthouseSelectedStatus')).toBe(
+      'unavailable',
     )
   })
 
@@ -153,6 +165,10 @@ describe('comment guide sync', () => {
         lighthouseSelectedAtClaim: true,
       }),
     )
+    expect(await readSidebarData()).toMatchObject({
+      lighthouseSelectedStatus: 'available',
+      profile: { lighthouseSelected: false },
+    })
   })
   it('retains reserved guides with update failure while refreshing available orders', async () => {
     await syncTasks()
@@ -251,6 +267,151 @@ describe('comment guide sync', () => {
     await syncTasks()
     await localStore.set('apiToken', 'account-b')
     expect((await readTasksSnapshot()).byTweet).toEqual({})
+  })
+
+  it('waits for a deferred account reset and never serves the old sidebar or popup identity', async () => {
+    me = {
+      id: 'user-a',
+      username: 'old-name',
+      nickname: null,
+      avatar: null,
+      tier: 'A',
+      newLux: 99,
+      todayEarnings: 1,
+      twitterUsername: 'old-handle',
+      lighthouseSelected: true,
+    }
+    await syncTasks()
+    await localStore.set('apiToken', 'account-b')
+
+    let releaseReset!: () => void
+    const resetGate = new Promise<void>((resolve) => {
+      releaseReset = resolve
+    })
+    const patch = sessionStore.patch.bind(sessionStore)
+    vi.spyOn(sessionStore, 'patch').mockImplementationOnce(async (values) => {
+      await resetGate
+      await patch(values)
+    })
+
+    me = {
+      id: 'user-b',
+      username: 'new-name',
+      nickname: null,
+      avatar: null,
+      tier: 'B',
+      newLux: 2,
+      todayEarnings: 0,
+      twitterUsername: 'new-handle',
+      lighthouseSelected: false,
+    }
+    const reset = handleTaskTokenChange()
+    const sidebarPromise = readSidebarData()
+    const popupPromise = readPopupData()
+    let sidebarSettled = false
+    void sidebarPromise.then(() => {
+      sidebarSettled = true
+    })
+    await Promise.resolve()
+    expect(sidebarSettled).toBe(false)
+
+    releaseReset()
+    const [sidebar, popup] = await Promise.all([
+      sidebarPromise,
+      popupPromise,
+      reset,
+    ])
+    expect(sidebar.profile?.id).not.toBe('user-a')
+    expect(sidebar.profile?.displayName).not.toBe('old-name')
+    expect(sidebar.profile?.newLux).not.toBe(99)
+    expect(sidebar.profile?.lighthouseSelected).not.toBe(true)
+    expect(popup.profile?.id).not.toBe('user-a')
+    expect(popup.profile?.displayName).not.toBe('old-name')
+    expect(popup.profile?.newLux).not.toBe(99)
+    expect(popup.profile?.lighthouseSelected).not.toBe(true)
+  })
+
+  it('returns an empty current-owner snapshot while the replacement account sync is deferred', async () => {
+    me = {
+      id: 'user-a',
+      username: 'old-name',
+      nickname: null,
+      avatar: null,
+      tier: 'A',
+      newLux: 99,
+      todayEarnings: 1,
+      twitterUsername: 'old-handle',
+      lighthouseSelected: true,
+    }
+    await syncTasks()
+
+    let resolveNewMe!: (value: unknown) => void
+    await localStore.set('apiToken', 'account-b')
+    vi.mocked(gqlApi.gql).mockImplementation(async (query) => {
+      if (query === AVAILABLE_ENGAGEMENTS_QUERY)
+        return { availableEngagements: [] }
+      if (query === MY_RESERVED_ENGAGEMENTS_QUERY)
+        return { myReservedEngagements: [] }
+      if (query === AVAILABLE_TWEETS_QUERY) return { availableTweets: [] }
+      if (query === ME_QUERY) {
+        return new Promise((resolve) => {
+          resolveNewMe = resolve
+        })
+      }
+      throw new Error('unexpected query')
+    })
+    const replacing = handleTaskTokenChange()
+    await vi.waitFor(() => expect(resolveNewMe).toBeDefined())
+
+    const sidebar = await readSidebarData()
+    const popup = await readPopupData()
+    expect(sidebar).toMatchObject({
+      tokenConfigured: true,
+      profile: null,
+      lighthouseSelectedStatus: 'loading',
+    })
+    expect(popup).toMatchObject({ hasToken: true, profile: null })
+
+    resolveNewMe({
+      me: {
+        id: 'user-b',
+        username: 'new-name',
+        nickname: null,
+        avatar: null,
+        tier: 'B',
+        newLux: 2,
+        todayEarnings: 0,
+        twitterUsername: 'new-handle',
+        lighthouseSelected: false,
+      },
+    })
+    await replacing
+  })
+
+  it('never serves an old identity after logout', async () => {
+    me = {
+      id: 'user-a',
+      username: 'old-name',
+      nickname: null,
+      avatar: null,
+      tier: 'A',
+      newLux: 99,
+      todayEarnings: 1,
+      twitterUsername: 'old-handle',
+      lighthouseSelected: true,
+    }
+    await syncTasks()
+    await localStore.remove('apiToken')
+    await handleTaskTokenChange()
+
+    expect(await readSidebarData()).toMatchObject({
+      tokenConfigured: false,
+      profile: null,
+    })
+    expect(await readPopupData()).toMatchObject({
+      hasToken: false,
+      profile: null,
+    })
   })
 
   it('clears old-account cache even if new-account queries fail', async () => {

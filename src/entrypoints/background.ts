@@ -105,6 +105,7 @@ import {
 import {
   type ActiveCampaignSummary,
   type CampaignTaskCache,
+  type LighthouseSelectedStatus,
   localStore,
   productExperienceStore,
   type RawCapturedAction,
@@ -667,46 +668,14 @@ export default defineBackground(() => {
       return { type: 'active-campaigns', campaigns }
     }
     if (req.type === 'get-sidebar-data') {
-      const token = await localStore.get('apiToken')
-      const tokenConfigured = !!token
-      const profile = (await sessionStore.get('userProfile')) ?? null
-      const tweetCampaigns = (await sessionStore.get('tweetCampaigns')) ?? null
-      return {
-        type: 'sidebar-data',
-        profile,
-        tweetCampaigns,
-        tokenConfigured,
-      }
+      return readSidebarData()
     }
     if (req.type === 'has-token') {
       const token = await localStore.get('apiToken')
       return { type: 'token-status', configured: !!token }
     }
     if (req.type === 'get-popup-data') {
-      // popup 一次拿全:token / profile / 任务计数 / sync 状态
-      const token = await localStore.get('apiToken')
-      const profile = (await sessionStore.get('userProfile')) ?? null
-      const map = (await sessionStore.get('tasksByTweetId')) ?? {}
-      let taskCount = 0
-      let tweetCount = 0
-      for (const arr of Object.values(map)) {
-        if (arr.length > 0) {
-          tweetCount += 1
-          taskCount += arr.length
-        }
-      }
-      return {
-        type: 'popup-data',
-        hasToken: !!token,
-        tokenMasked: token ? maskToken(token) : null,
-        profile,
-        taskCount,
-        tweetCount,
-        lastSyncAt: (await sessionStore.get('lastSyncAt')) ?? null,
-        lastSyncError: (await sessionStore.get('lastSyncError')) ?? null,
-        lastSyncHttpStatus:
-          (await sessionStore.get('lastSyncHttpStatus')) ?? null,
-      }
+      return readPopupData()
     }
     if (req.type === 'open-task-hall') {
       // [B3] 验证成功后去任务广场:先查已开的本站标签页——
@@ -787,41 +756,130 @@ export default defineBackground(() => {
 
 // ── sync ─────────────────────────────────────────────────────────────
 
-export async function readTasksSnapshot(): Promise<
-  Extract<MsgResponse, { type: 'tasks-snapshot' }>
-> {
+async function readOwnedSessionSnapshot<T>(
+  read: () => Promise<T>,
+): Promise<{ token: string | null; owned: boolean; value: T | null }> {
   const generation = syncGeneration
   await syncReset
   const token = await localStore.get('apiToken')
-  const [sources, byTweet, byAuthor, lastSyncAt, lastSyncError] =
-    await Promise.all([
-      sessionStore.get('engagementSources'),
+  const [sources, value] = await Promise.all([
+    sessionStore.get('engagementSources'),
+    read(),
+  ])
+  const owner = token ? await sha256Hex(token) : null
+  const currentToken = await localStore.get('apiToken')
+  const owned =
+    owner != null &&
+    sources?.owner === owner &&
+    currentToken === token &&
+    generation === syncGeneration
+  return { token: currentToken, owned, value: owned ? value : null }
+}
+
+export async function readSidebarData(): Promise<
+  Extract<MsgResponse, { type: 'sidebar-data' }>
+> {
+  const snapshot = await readOwnedSessionSnapshot(async () => {
+    const [profile, tweetCampaigns, lighthouseSelectedStatus] =
+      await Promise.all([
+        sessionStore.get('userProfile'),
+        sessionStore.get('tweetCampaigns'),
+        sessionStore.get('lighthouseSelectedStatus'),
+      ])
+    return { profile, tweetCampaigns, lighthouseSelectedStatus }
+  })
+  const tokenConfigured = !!snapshot.token
+  if (!snapshot.owned || !snapshot.value) {
+    return {
+      type: 'sidebar-data',
+      profile: null,
+      tweetCampaigns: null,
+      tokenConfigured,
+      lighthouseSelectedStatus: tokenConfigured ? 'loading' : 'unavailable',
+    }
+  }
+  const { profile, tweetCampaigns } = snapshot.value
+  const lighthouseSelectedStatus: LighthouseSelectedStatus =
+    snapshot.value.lighthouseSelectedStatus ??
+    (typeof profile?.lighthouseSelected === 'boolean' ? 'available' : 'loading')
+  return {
+    type: 'sidebar-data',
+    profile: profile ?? null,
+    tweetCampaigns: tweetCampaigns ?? null,
+    tokenConfigured,
+    lighthouseSelectedStatus,
+  }
+}
+
+export async function readPopupData(): Promise<
+  Extract<MsgResponse, { type: 'popup-data' }>
+> {
+  const snapshot = await readOwnedSessionSnapshot(async () => {
+    const [profile, map, lastSyncAt, lastSyncError, lastSyncHttpStatus] =
+      await Promise.all([
+        sessionStore.get('userProfile'),
+        sessionStore.get('tasksByTweetId'),
+        sessionStore.get('lastSyncAt'),
+        sessionStore.get('lastSyncError'),
+        sessionStore.get('lastSyncHttpStatus'),
+      ])
+    return { profile, map, lastSyncAt, lastSyncError, lastSyncHttpStatus }
+  })
+  const empty = {
+    profile: null,
+    map: {} as Record<string, CampaignTaskCache[]>,
+    lastSyncAt: null,
+    lastSyncError: null,
+    lastSyncHttpStatus: null,
+  }
+  const values = snapshot.value ?? empty
+  let taskCount = 0
+  let tweetCount = 0
+  for (const arr of Object.values(values.map ?? {})) {
+    if (arr.length > 0) {
+      tweetCount += 1
+      taskCount += arr.length
+    }
+  }
+  return {
+    type: 'popup-data',
+    hasToken: !!snapshot.token,
+    tokenMasked: snapshot.token ? maskToken(snapshot.token) : null,
+    profile: values.profile ?? null,
+    taskCount,
+    tweetCount,
+    lastSyncAt: values.lastSyncAt ?? null,
+    lastSyncError: values.lastSyncError ?? null,
+    lastSyncHttpStatus: values.lastSyncHttpStatus ?? null,
+  }
+}
+
+export async function readTasksSnapshot(): Promise<
+  Extract<MsgResponse, { type: 'tasks-snapshot' }>
+> {
+  const snapshot = await readOwnedSessionSnapshot(async () => {
+    const [byTweet, byAuthor, lastSyncAt, lastSyncError] = await Promise.all([
       sessionStore.get('tasksByTweetId'),
       sessionStore.get('tasksByAuthorHandle'),
       sessionStore.get('lastSyncAt'),
       sessionStore.get('lastSyncError'),
     ])
-  const owner = token ? await sha256Hex(token) : null
-  const currentToken = await localStore.get('apiToken')
-  if (
-    !owner ||
-    sources?.owner !== owner ||
-    currentToken !== token ||
-    generation !== syncGeneration
-  ) {
+    return { byTweet, byAuthor, lastSyncAt, lastSyncError }
+  })
+  if (!snapshot.owned || !snapshot.value) {
     return {
       type: 'tasks-snapshot',
       byTweet: {},
       byAuthor: {},
-      ready: !currentToken,
+      ready: !snapshot.token,
     }
   }
   return {
     type: 'tasks-snapshot',
-    byTweet: byTweet ?? {},
-    byAuthor: byAuthor ?? {},
-    ready: lastSyncAt != null,
-    syncFailed: lastSyncError != null,
+    byTweet: snapshot.value.byTweet ?? {},
+    byAuthor: snapshot.value.byAuthor ?? {},
+    ready: snapshot.value.lastSyncAt != null,
+    syncFailed: snapshot.value.lastSyncError != null,
   }
 }
 
@@ -843,6 +901,7 @@ async function clearTaskCache(): Promise<void> {
     activeCampaigns: [],
     tweetCampaigns: [],
     userProfile: null,
+    lighthouseSelectedStatus: null,
     capturedActions: {},
     rawCapturedActions: [],
     lastSyncAt: null,
@@ -1007,6 +1066,11 @@ async function performSyncTasks(
       : null,
     lastSyncHttpStatus:
       reason instanceof GqlError ? (reason.httpStatus ?? null) : null,
+    lighthouseSelectedStatus:
+      meRes.status === 'fulfilled' &&
+      typeof meRes.value.me?.lighthouseSelected === 'boolean'
+        ? 'available'
+        : 'unavailable',
   }
   if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
     values.lastSyncAt = Date.now()
