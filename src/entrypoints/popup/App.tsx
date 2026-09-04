@@ -131,6 +131,25 @@ export function App() {
     await sendMessage({ type: 'cancel-pairing' })
   }, [])
 
+  const retryProductRule = React.useCallback(
+    async (ruleId: string) => {
+      if (startingProduct || !productState?.campaignId) return
+      setStartingProduct(true)
+      try {
+        const response = await sendMessage({
+          type: 'retry-product-experience-rule',
+          campaignId: productState.campaignId,
+          ruleId,
+        })
+        if (response.type === 'product-experience-state-result')
+          setProductState(response.state)
+      } finally {
+        setStartingProduct(false)
+      }
+    },
+    [startingProduct, productState?.campaignId],
+  )
+
   const startProductExperience = React.useCallback(async () => {
     if (startingProduct) return
     setStartingProduct(true)
@@ -155,6 +174,7 @@ export function App() {
       <Header connected={!!data?.hasToken} hasData={!!data} />
       {productState && productState.status !== 'idle' && (
         <ProductExperienceCard
+          onRetryRule={retryProductRule}
           state={productState}
           busy={startingProduct}
           onStart={startProductExperience}

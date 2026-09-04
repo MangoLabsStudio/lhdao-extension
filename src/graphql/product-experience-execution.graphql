@@ -1,0 +1,55 @@
+mutation StartProductZkTlsProof($campaignId: String!, $ruleId: String!) {
+  startProductZkTlsProof(campaignId: $campaignId, ruleId: $ruleId) {
+    sessionId
+    connectorId
+    expiresAt
+    executionPlan {
+      version
+      steps {
+        connectorId
+        triggerPaths
+        dependentFactIds
+        dependentRuleIds
+      }
+    }
+  }
+}
+
+mutation StartProductZkTlsTestProof($campaignId: String!, $ruleId: String!) {
+  startProductZkTlsTestProof(campaignId: $campaignId, ruleId: $ruleId) {
+    sessionId
+    connectorId
+    expiresAt
+    executionPlan {
+      version
+      steps {
+        connectorId
+        triggerPaths
+        dependentFactIds
+        dependentRuleIds
+      }
+    }
+  }
+}
+
+query ProductZkTlsRuleProgress($campaignId: String!) {
+  productZkTlsRuleProgress(campaignId: $campaignId) {
+    ruleId
+    title
+    status
+    current
+    target
+    unit
+    actual
+    required
+    comparator
+  }
+}
+
+query ProductTrackerIntegrationStatus($campaignId: String!) {
+  productTrackerIntegrationStatus(campaignId: $campaignId) {
+    configVersion
+    experiencePassed
+    experiencePassedAt
+  }
+}

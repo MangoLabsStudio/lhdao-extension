@@ -74,6 +74,16 @@ describe('X task indexes', () => {
       message: '需灯塔严选资格',
     })
   })
+  it('routes discovery RPC to an isolated native session and declares Chrome lifetime support', async () => {
+    const source = (await import('../background?raw')).default
+    expect(source).toContain(
+      'new DiscoverySessionManager(new URL(WEB_ENDPOINT).origin)',
+    )
+    expect(source).toContain('return discovery.handle(req, sender)')
+    const manifest = (await import('../../../wxt.config?raw')).default
+    expect(manifest).toContain("minimum_chrome_version: '118'")
+    expect(manifest).toContain("'debugger'")
+  })
   it('rejects Binance campaigns carrying stale X tweet targets', () => {
     expect(buildActiveCampaignSummaries([binanceLikeCampaign])).toEqual([])
     expect(flattenTasks([binanceLikeCampaign], new Set())).toEqual({

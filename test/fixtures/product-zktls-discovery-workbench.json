@@ -1,0 +1,2260 @@
+{
+  "schema": 1,
+  "description": "Synthetic offline discovery-to-signed-proof contract; no browser TLSNotary claim.",
+  "hmacTestSecret": "completion-test-secret",
+  "privacyCanaries": [
+    "discovery-private-canary",
+    "local-discovery-session",
+    "acct-1"
+  ],
+  "conditions": [
+    {
+      "connector": {
+        "connectorId": "metric-a",
+        "title": "Condition a",
+        "pageOrigin": "https://app.example.com",
+        "targetOrigin": "https://api.example.com",
+        "triggerRuleId": "rule-a",
+        "triggerPaths": [
+          "/overview"
+        ],
+        "credentialMode": "NONE",
+        "purpose": "METRIC",
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "request": {
+          "method": "GET",
+          "path": "/v1/balance",
+          "query": {
+            "account": {
+              "$var": "accountId"
+            }
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY"
+        },
+        "response": {
+          "format": "JSON",
+          "maxBytes": 65536,
+          "pipelines": [
+            {
+              "output": "amountA",
+              "sourcePath": "$.value",
+              "cast": "DECIMAL",
+              "valueUnit": "USDT",
+              "outputUnit": "USDT"
+            }
+          ]
+        }
+      },
+      "fact": {
+        "ruleId": "rule-a",
+        "connectorId": "metric-a",
+        "output": "amountA",
+        "valueType": "number",
+        "unit": "USDT"
+      },
+      "compare": {
+        "op": "GTE",
+        "value": "100",
+        "unit": "USDT"
+      },
+      "rule": {
+        "id": "rule-a",
+        "title": "Condition a",
+        "urlPattern": "https://app.example.com/*",
+        "selector": "body",
+        "condition": {
+          "type": "ELEMENT_EXISTS"
+        }
+      }
+    },
+    {
+      "connector": {
+        "connectorId": "metric-b",
+        "title": "Condition b",
+        "pageOrigin": "https://app.example.com",
+        "targetOrigin": "https://api.example.com",
+        "triggerRuleId": "rule-b",
+        "triggerPaths": [
+          "/history"
+        ],
+        "credentialMode": "NONE",
+        "purpose": "METRIC",
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "request": {
+          "method": "POST",
+          "path": "/v1/history",
+          "contentType": "application/json",
+          "body": {
+            "account": {
+              "$var": "accountId"
+            }
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY"
+        },
+        "response": {
+          "format": "JSON",
+          "maxBytes": 65536,
+          "contentEncoding": "GZIP",
+          "maxDecodedBytes": 65536,
+          "pipelines": [
+            {
+              "output": "amountB",
+              "sourcePath": "$.value",
+              "cast": "DECIMAL",
+              "valueUnit": "USDT",
+              "outputUnit": "USDT"
+            }
+          ]
+        }
+      },
+      "fact": {
+        "ruleId": "rule-b",
+        "connectorId": "metric-b",
+        "output": "amountB",
+        "valueType": "number",
+        "unit": "USDT"
+      },
+      "compare": {
+        "op": "GTE",
+        "value": "100",
+        "unit": "USDT"
+      },
+      "rule": {
+        "id": "rule-b",
+        "title": "Condition b",
+        "urlPattern": "https://app.example.com/*",
+        "selector": "body",
+        "condition": {
+          "type": "ELEMENT_EXISTS"
+        }
+      }
+    },
+    {
+      "connector": {
+        "connectorId": "metric-c",
+        "title": "Condition c",
+        "pageOrigin": "https://app.example.com",
+        "targetOrigin": "https://api.example.com",
+        "triggerRuleId": "rule-c",
+        "triggerPaths": [
+          "/activity"
+        ],
+        "credentialMode": "NONE",
+        "purpose": "METRIC",
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "request": {
+          "method": "GET",
+          "path": "/v1/activity",
+          "query": {
+            "account": {
+              "$var": "accountId"
+            }
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY"
+        },
+        "response": {
+          "format": "JSON",
+          "maxBytes": 65536,
+          "pipelines": [
+            {
+              "output": "amountC",
+              "sourcePath": "$.value",
+              "cast": "DECIMAL",
+              "valueUnit": "USDT",
+              "outputUnit": "USDT"
+            }
+          ]
+        }
+      },
+      "fact": {
+        "ruleId": "rule-c",
+        "connectorId": "metric-c",
+        "output": "amountC",
+        "valueType": "number",
+        "unit": "USDT"
+      },
+      "compare": {
+        "op": "GTE",
+        "value": "2",
+        "unit": "USDT"
+      },
+      "rule": {
+        "id": "rule-c",
+        "title": "Condition c",
+        "urlPattern": "https://app.example.com/*",
+        "selector": "body",
+        "condition": {
+          "type": "ELEMENT_EXISTS"
+        }
+      }
+    }
+  ],
+  "binding": {
+    "connectorId": "account-binding",
+    "title": "Bind account",
+    "pageOrigin": "https://app.example.com",
+    "targetOrigin": "https://api.example.com",
+    "triggerRuleId": "rule-a",
+    "credentialMode": "NONE",
+    "purpose": "ACCOUNT_BINDING",
+    "accountBinding": {
+      "providerKey": "example",
+      "accountVariable": "accountId",
+      "walletOutput": "walletAddress",
+      "addressType": "EVM"
+    },
+    "variables": [
+      {
+        "name": "accountId",
+        "scalarType": "STRING",
+        "source": {
+          "kind": "CAPTURED_REQUEST",
+          "location": "QUERY",
+          "selector": "account"
+        },
+        "constraints": {
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "ACCOUNT_ID"
+        }
+      }
+    ],
+    "request": {
+      "method": "GET",
+      "path": "/v1/account",
+      "query": {
+        "account": {
+          "$var": "accountId"
+        }
+      },
+      "replay": "EXACT_CAPTURE",
+      "semantics": "READ_ONLY_QUERY"
+    },
+    "response": {
+      "format": "JSON",
+      "maxBytes": 65536,
+      "pipelines": [
+        {
+          "output": "walletAddress",
+          "sourcePath": "$.wallet.address",
+          "cast": "STRING"
+        }
+      ]
+    },
+    "triggerPaths": [
+      "/account"
+    ]
+  },
+  "policy": {
+    "version": 2,
+    "postReplayAcknowledgement": "READ_ONLY_QUERY_REPLAY_V1",
+    "connectors": [
+      {
+        "connectorId": "account-binding",
+        "title": "Bind account",
+        "pageOrigin": "https://app.example.com",
+        "targetOrigin": "https://api.example.com",
+        "triggerRuleId": "rule-a",
+        "triggerPaths": [
+          "/account"
+        ],
+        "credentialMode": "NONE",
+        "purpose": "ACCOUNT_BINDING",
+        "accountBinding": {
+          "providerKey": "example",
+          "accountVariable": "accountId",
+          "walletOutput": "walletAddress",
+          "addressType": "EVM"
+        },
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "CAPTURED_REQUEST",
+              "location": "QUERY",
+              "selector": "account"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "request": {
+          "method": "GET",
+          "path": "/v1/account",
+          "query": {
+            "account": {
+              "$var": "accountId"
+            }
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY"
+        },
+        "response": {
+          "format": "JSON",
+          "maxBytes": 65536,
+          "pipelines": [
+            {
+              "output": "walletAddress",
+              "sourcePath": "$.wallet.address",
+              "cast": "STRING"
+            }
+          ]
+        }
+      },
+      {
+        "connectorId": "metric-a",
+        "title": "Condition a",
+        "pageOrigin": "https://app.example.com",
+        "targetOrigin": "https://api.example.com",
+        "triggerRuleId": "rule-a",
+        "triggerPaths": [
+          "/overview"
+        ],
+        "credentialMode": "NONE",
+        "purpose": "METRIC",
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "request": {
+          "method": "GET",
+          "path": "/v1/balance",
+          "query": {
+            "account": {
+              "$var": "accountId"
+            }
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY"
+        },
+        "response": {
+          "format": "JSON",
+          "maxBytes": 65536,
+          "pipelines": [
+            {
+              "output": "amountA",
+              "sourcePath": "$.value",
+              "cast": "DECIMAL",
+              "valueUnit": "USDT",
+              "outputUnit": "USDT"
+            }
+          ]
+        }
+      },
+      {
+        "connectorId": "metric-b",
+        "title": "Condition b",
+        "pageOrigin": "https://app.example.com",
+        "targetOrigin": "https://api.example.com",
+        "triggerRuleId": "rule-b",
+        "triggerPaths": [
+          "/history"
+        ],
+        "credentialMode": "NONE",
+        "purpose": "METRIC",
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "request": {
+          "method": "POST",
+          "path": "/v1/history",
+          "contentType": "application/json",
+          "body": {
+            "account": {
+              "$var": "accountId"
+            }
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY"
+        },
+        "response": {
+          "format": "JSON",
+          "maxBytes": 65536,
+          "contentEncoding": "GZIP",
+          "maxDecodedBytes": 65536,
+          "pipelines": [
+            {
+              "output": "amountB",
+              "sourcePath": "$.value",
+              "cast": "DECIMAL",
+              "valueUnit": "USDT",
+              "outputUnit": "USDT"
+            }
+          ]
+        }
+      },
+      {
+        "connectorId": "metric-c",
+        "title": "Condition c",
+        "pageOrigin": "https://app.example.com",
+        "targetOrigin": "https://api.example.com",
+        "triggerRuleId": "rule-c",
+        "triggerPaths": [
+          "/activity"
+        ],
+        "credentialMode": "NONE",
+        "purpose": "METRIC",
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "request": {
+          "method": "GET",
+          "path": "/v1/activity",
+          "query": {
+            "account": {
+              "$var": "accountId"
+            }
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY"
+        },
+        "response": {
+          "format": "JSON",
+          "maxBytes": 65536,
+          "pipelines": [
+            {
+              "output": "amountC",
+              "sourcePath": "$.value",
+              "cast": "DECIMAL",
+              "valueUnit": "USDT",
+              "outputUnit": "USDT"
+            }
+          ]
+        }
+      }
+    ],
+    "facts": [
+      {
+        "ruleId": "rule-a",
+        "connectorId": "metric-a",
+        "output": "amountA",
+        "valueType": "number",
+        "unit": "USDT"
+      },
+      {
+        "ruleId": "rule-b",
+        "connectorId": "metric-b",
+        "output": "amountB",
+        "valueType": "number",
+        "unit": "USDT"
+      },
+      {
+        "ruleId": "rule-c",
+        "connectorId": "metric-c",
+        "output": "amountC",
+        "valueType": "number",
+        "unit": "USDT"
+      }
+    ],
+    "completion": {
+      "kind": "ALL",
+      "expressions": [
+        {
+          "kind": "FACT_COMPARE",
+          "ruleId": "rule-a",
+          "compare": {
+            "op": "GTE",
+            "value": "100",
+            "unit": "USDT"
+          }
+        },
+        {
+          "kind": "FACT_COMPARE",
+          "ruleId": "rule-b",
+          "compare": {
+            "op": "GTE",
+            "value": "100",
+            "unit": "USDT"
+          }
+        },
+        {
+          "kind": "FACT_COMPARE",
+          "ruleId": "rule-c",
+          "compare": {
+            "op": "GTE",
+            "value": "2",
+            "unit": "USDT"
+          }
+        }
+      ]
+    }
+  },
+  "rules": [
+    {
+      "id": "rule-a",
+      "title": "Condition a",
+      "urlPattern": "https://app.example.com/*",
+      "selector": "body",
+      "condition": {
+        "type": "ELEMENT_EXISTS"
+      }
+    },
+    {
+      "id": "rule-b",
+      "title": "Condition b",
+      "urlPattern": "https://app.example.com/*",
+      "selector": "body",
+      "condition": {
+        "type": "ELEMENT_EXISTS"
+      }
+    },
+    {
+      "id": "rule-c",
+      "title": "Condition c",
+      "urlPattern": "https://app.example.com/*",
+      "selector": "body",
+      "condition": {
+        "type": "ELEMENT_EXISTS"
+      }
+    }
+  ],
+  "shared": {
+    "conditions": [
+      {
+        "connector": {
+          "connectorId": "metric-a",
+          "title": "Condition a",
+          "pageOrigin": "https://app.example.com",
+          "targetOrigin": "https://api.example.com",
+          "triggerRuleId": "rule-a",
+          "triggerPaths": [
+            "/overview"
+          ],
+          "credentialMode": "NONE",
+          "purpose": "METRIC",
+          "variables": [
+            {
+              "name": "accountId",
+              "scalarType": "STRING",
+              "source": {
+                "kind": "BOUND_ACCOUNT",
+                "bindingKey": "example"
+              },
+              "constraints": {
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "ACCOUNT_ID"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "path": "/v1/balance",
+            "query": {
+              "account": {
+                "$var": "accountId"
+              }
+            },
+            "replay": "EXACT_CAPTURE",
+            "semantics": "READ_ONLY_QUERY"
+          },
+          "response": {
+            "format": "JSON",
+            "maxBytes": 65536,
+            "pipelines": [
+              {
+                "output": "amountA",
+                "sourcePath": "$.value",
+                "cast": "DECIMAL",
+                "valueUnit": "USDT",
+                "outputUnit": "USDT"
+              }
+            ]
+          }
+        },
+        "fact": {
+          "ruleId": "rule-a",
+          "connectorId": "metric-a",
+          "output": "amountA",
+          "valueType": "number",
+          "unit": "USDT"
+        },
+        "compare": {
+          "op": "GTE",
+          "value": "100",
+          "unit": "USDT"
+        },
+        "rule": {
+          "id": "rule-a",
+          "title": "Condition a",
+          "urlPattern": "https://app.example.com/*",
+          "selector": "body",
+          "condition": {
+            "type": "ELEMENT_EXISTS"
+          }
+        }
+      },
+      {
+        "connector": {
+          "connectorId": "metric-b",
+          "title": "Condition a",
+          "pageOrigin": "https://app.example.com",
+          "targetOrigin": "https://api.example.com",
+          "triggerRuleId": "rule-b",
+          "triggerPaths": [
+            "/details"
+          ],
+          "credentialMode": "NONE",
+          "purpose": "METRIC",
+          "variables": [
+            {
+              "name": "accountId",
+              "scalarType": "STRING",
+              "source": {
+                "kind": "BOUND_ACCOUNT",
+                "bindingKey": "example"
+              },
+              "constraints": {
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "ACCOUNT_ID"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "path": "/v1/balance",
+            "query": {
+              "account": {
+                "$var": "accountId"
+              }
+            },
+            "replay": "EXACT_CAPTURE",
+            "semantics": "READ_ONLY_QUERY"
+          },
+          "response": {
+            "format": "JSON",
+            "maxBytes": 65536,
+            "pipelines": [
+              {
+                "output": "amountB",
+                "sourcePath": "$.other",
+                "cast": "DECIMAL",
+                "valueUnit": "USDT",
+                "outputUnit": "USDT"
+              }
+            ]
+          }
+        },
+        "fact": {
+          "ruleId": "rule-b",
+          "connectorId": "metric-b",
+          "output": "amountB",
+          "valueType": "number",
+          "unit": "USDT"
+        },
+        "compare": {
+          "op": "GTE",
+          "value": "100",
+          "unit": "USDT"
+        },
+        "rule": {
+          "id": "rule-b",
+          "title": "Condition b",
+          "urlPattern": "https://app.example.com/*",
+          "selector": "body",
+          "condition": {
+            "type": "ELEMENT_EXISTS"
+          }
+        }
+      },
+      {
+        "connector": {
+          "connectorId": "metric-c",
+          "title": "Condition c",
+          "pageOrigin": "https://app.example.com",
+          "targetOrigin": "https://api.example.com",
+          "triggerRuleId": "rule-c",
+          "triggerPaths": [
+            "/activity"
+          ],
+          "credentialMode": "NONE",
+          "purpose": "METRIC",
+          "variables": [
+            {
+              "name": "accountId",
+              "scalarType": "STRING",
+              "source": {
+                "kind": "BOUND_ACCOUNT",
+                "bindingKey": "example"
+              },
+              "constraints": {
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "ACCOUNT_ID"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "path": "/v1/activity",
+            "query": {
+              "account": {
+                "$var": "accountId"
+              }
+            },
+            "replay": "EXACT_CAPTURE",
+            "semantics": "READ_ONLY_QUERY"
+          },
+          "response": {
+            "format": "JSON",
+            "maxBytes": 65536,
+            "pipelines": [
+              {
+                "output": "amountC",
+                "sourcePath": "$.value",
+                "cast": "DECIMAL",
+                "valueUnit": "USDT",
+                "outputUnit": "USDT"
+              }
+            ]
+          }
+        },
+        "fact": {
+          "ruleId": "rule-c",
+          "connectorId": "metric-c",
+          "output": "amountC",
+          "valueType": "number",
+          "unit": "USDT"
+        },
+        "compare": {
+          "op": "GTE",
+          "value": "2",
+          "unit": "USDT"
+        },
+        "rule": {
+          "id": "rule-c",
+          "title": "Condition c",
+          "urlPattern": "https://app.example.com/*",
+          "selector": "body",
+          "condition": {
+            "type": "ELEMENT_EXISTS"
+          }
+        }
+      }
+    ],
+    "policy": {
+      "version": 2,
+      "connectors": [
+        {
+          "connectorId": "account-binding",
+          "title": "Bind account",
+          "pageOrigin": "https://app.example.com",
+          "targetOrigin": "https://api.example.com",
+          "triggerRuleId": "rule-a",
+          "triggerPaths": [
+            "/account"
+          ],
+          "credentialMode": "NONE",
+          "purpose": "ACCOUNT_BINDING",
+          "accountBinding": {
+            "providerKey": "example",
+            "accountVariable": "accountId",
+            "walletOutput": "walletAddress",
+            "addressType": "EVM"
+          },
+          "variables": [
+            {
+              "name": "accountId",
+              "scalarType": "STRING",
+              "source": {
+                "kind": "CAPTURED_REQUEST",
+                "location": "QUERY",
+                "selector": "account"
+              },
+              "constraints": {
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "ACCOUNT_ID"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "path": "/v1/account",
+            "query": {
+              "account": {
+                "$var": "accountId"
+              }
+            },
+            "replay": "EXACT_CAPTURE",
+            "semantics": "READ_ONLY_QUERY"
+          },
+          "response": {
+            "format": "JSON",
+            "maxBytes": 65536,
+            "pipelines": [
+              {
+                "output": "walletAddress",
+                "sourcePath": "$.wallet.address",
+                "cast": "STRING"
+              }
+            ]
+          }
+        },
+        {
+          "connectorId": "metric-a",
+          "title": "Condition a",
+          "pageOrigin": "https://app.example.com",
+          "targetOrigin": "https://api.example.com",
+          "triggerRuleId": "rule-a",
+          "triggerPaths": [
+            "/overview",
+            "/details"
+          ],
+          "credentialMode": "NONE",
+          "purpose": "METRIC",
+          "variables": [
+            {
+              "name": "accountId",
+              "scalarType": "STRING",
+              "source": {
+                "kind": "BOUND_ACCOUNT",
+                "bindingKey": "example"
+              },
+              "constraints": {
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "ACCOUNT_ID"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "path": "/v1/balance",
+            "query": {
+              "account": {
+                "$var": "accountId"
+              }
+            },
+            "replay": "EXACT_CAPTURE",
+            "semantics": "READ_ONLY_QUERY"
+          },
+          "response": {
+            "format": "JSON",
+            "maxBytes": 65536,
+            "pipelines": [
+              {
+                "output": "amountA",
+                "sourcePath": "$.value",
+                "cast": "DECIMAL",
+                "valueUnit": "USDT",
+                "outputUnit": "USDT"
+              },
+              {
+                "output": "amountB",
+                "sourcePath": "$.other",
+                "cast": "DECIMAL",
+                "valueUnit": "USDT",
+                "outputUnit": "USDT"
+              }
+            ]
+          }
+        },
+        {
+          "connectorId": "metric-c",
+          "title": "Condition c",
+          "pageOrigin": "https://app.example.com",
+          "targetOrigin": "https://api.example.com",
+          "triggerRuleId": "rule-c",
+          "triggerPaths": [
+            "/activity"
+          ],
+          "credentialMode": "NONE",
+          "purpose": "METRIC",
+          "variables": [
+            {
+              "name": "accountId",
+              "scalarType": "STRING",
+              "source": {
+                "kind": "BOUND_ACCOUNT",
+                "bindingKey": "example"
+              },
+              "constraints": {
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "ACCOUNT_ID"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "path": "/v1/activity",
+            "query": {
+              "account": {
+                "$var": "accountId"
+              }
+            },
+            "replay": "EXACT_CAPTURE",
+            "semantics": "READ_ONLY_QUERY"
+          },
+          "response": {
+            "format": "JSON",
+            "maxBytes": 65536,
+            "pipelines": [
+              {
+                "output": "amountC",
+                "sourcePath": "$.value",
+                "cast": "DECIMAL",
+                "valueUnit": "USDT",
+                "outputUnit": "USDT"
+              }
+            ]
+          }
+        }
+      ],
+      "facts": [
+        {
+          "ruleId": "rule-a",
+          "connectorId": "metric-a",
+          "output": "amountA",
+          "valueType": "number",
+          "unit": "USDT"
+        },
+        {
+          "ruleId": "rule-b",
+          "connectorId": "metric-a",
+          "output": "amountB",
+          "valueType": "number",
+          "unit": "USDT"
+        },
+        {
+          "ruleId": "rule-c",
+          "connectorId": "metric-c",
+          "output": "amountC",
+          "valueType": "number",
+          "unit": "USDT"
+        }
+      ],
+      "completion": {
+        "kind": "ANY",
+        "expressions": [
+          {
+            "kind": "FACT_COMPARE",
+            "ruleId": "rule-a",
+            "compare": {
+              "op": "GTE",
+              "value": "100",
+              "unit": "USDT"
+            }
+          },
+          {
+            "kind": "FACT_COMPARE",
+            "ruleId": "rule-b",
+            "compare": {
+              "op": "GTE",
+              "value": "100",
+              "unit": "USDT"
+            }
+          },
+          {
+            "kind": "FACT_COMPARE",
+            "ruleId": "rule-c",
+            "compare": {
+              "op": "GTE",
+              "value": "2",
+              "unit": "USDT"
+            }
+          }
+        ]
+      }
+    },
+    "executionPlan": {
+      "version": 1,
+      "steps": [
+        {
+          "connectorId": "metric-a",
+          "triggerPaths": [
+            "/overview",
+            "/details"
+          ],
+          "dependentFactIds": [
+            "metric-a:amountA",
+            "metric-a:amountB"
+          ],
+          "dependentRuleIds": [
+            "rule-a",
+            "rule-b"
+          ]
+        },
+        {
+          "connectorId": "metric-c",
+          "triggerPaths": [
+            "/activity"
+          ],
+          "dependentFactIds": [
+            "metric-c:amountC"
+          ],
+          "dependentRuleIds": [
+            "rule-c"
+          ]
+        }
+      ]
+    }
+  },
+  "executionPlan": {
+    "version": 1,
+    "steps": [
+      {
+        "connectorId": "metric-a",
+        "triggerPaths": [
+          "/overview"
+        ],
+        "dependentFactIds": [
+          "metric-a:amountA"
+        ],
+        "dependentRuleIds": [
+          "rule-a"
+        ]
+      },
+      {
+        "connectorId": "metric-b",
+        "triggerPaths": [
+          "/history"
+        ],
+        "dependentFactIds": [
+          "metric-b:amountB"
+        ],
+        "dependentRuleIds": [
+          "rule-b"
+        ]
+      },
+      {
+        "connectorId": "metric-c",
+        "triggerPaths": [
+          "/activity"
+        ],
+        "dependentFactIds": [
+          "metric-c:amountC"
+        ],
+        "dependentRuleIds": [
+          "rule-c"
+        ]
+      }
+    ]
+  },
+  "bindingExecutionPlan": {
+    "version": 1,
+    "steps": [
+      {
+        "connectorId": "account-binding",
+        "triggerPaths": [
+          "/account"
+        ],
+        "dependentFactIds": [],
+        "dependentRuleIds": [
+          "rule-a",
+          "rule-b",
+          "rule-c"
+        ]
+      },
+      {
+        "connectorId": "metric-a",
+        "triggerPaths": [
+          "/overview"
+        ],
+        "dependentFactIds": [
+          "metric-a:amountA"
+        ],
+        "dependentRuleIds": [
+          "rule-a"
+        ]
+      },
+      {
+        "connectorId": "metric-b",
+        "triggerPaths": [
+          "/history"
+        ],
+        "dependentFactIds": [
+          "metric-b:amountB"
+        ],
+        "dependentRuleIds": [
+          "rule-b"
+        ]
+      },
+      {
+        "connectorId": "metric-c",
+        "triggerPaths": [
+          "/activity"
+        ],
+        "dependentFactIds": [
+          "metric-c:amountC"
+        ],
+        "dependentRuleIds": [
+          "rule-c"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "perCondition": [
+      "VERIFIED",
+      "VERIFIED_NO",
+      "VERIFIED"
+    ],
+    "ALL": false,
+    "ANY": true,
+    "technicalFailure": "PRODUCT_ZKTLS_PREVIEW_MASKED_VALUE"
+  },
+  "unsupported": {
+    "observation": {
+      "method": "GET",
+      "url": "https://api.example.com/v1/balance?account=acct-1&cursor=opaque-cursor",
+      "documentUrl": "https://app.example.com/overview",
+      "requestHeaders": {},
+      "responseBody": "{\"value\":\"125.5\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+      "responseHeaders": {
+        "Content-Type": "application/json"
+      },
+      "contentType": "application/json",
+      "status": 200
+    },
+    "candidate": {
+      "candidateId": "af637d3f-d6b5-497d-8541-f02604d0be37",
+      "method": "GET",
+      "origin": "https://api.example.com",
+      "path": "/v1/balance",
+      "queryNames": [
+        "account",
+        "cursor"
+      ],
+      "contentType": "application/json",
+      "requestContentType": "",
+      "occurrences": 1,
+      "firstSeenAt": 1893455340000,
+      "lastSeenAt": 1893455340000,
+      "samples": [
+        {
+          "at": 1893455340000,
+          "pageOrigin": "https://app.example.com",
+          "triggerPath": "/overview",
+          "triggerPathSafe": true,
+          "request": {
+            "method": "GET",
+            "url": "https://api.example.com/v1/balance?account=acct-1&cursor=opaque-cursor",
+            "contentType": "",
+            "headers": {},
+            "body": null,
+            "bodyState": "empty",
+            "bodyBytes": 0
+          },
+          "response": {
+            "value": "125.5",
+            "other": "2",
+            "private_note": "discovery-private-canary"
+          },
+          "responseHeaders": {
+            "content-type": "application/json"
+          },
+          "responseBodyState": "json",
+          "responseBodyBytes": 71,
+          "status": 200
+        }
+      ],
+      "inference": {
+        "requestShape": {
+          "query": "object",
+          "query.account": "string",
+          "query.cursor": "string",
+          "request": "null"
+        },
+        "responseShape": {
+          "response": "object",
+          "response.other": "string",
+          "response.private_note": "string",
+          "response.value": "string"
+        },
+        "dynamicFields": [
+          "query.account",
+          "query.cursor"
+        ],
+        "stableEnums": {}
+      },
+      "configurable": true,
+      "unsupportedReason": null
+    },
+    "field": "query.cursor",
+    "reason": "NO_RUNTIME_SOURCE"
+  },
+  "cases": [
+    {
+      "name": "a",
+      "resourceType": "Fetch",
+      "observation": {
+        "method": "GET",
+        "url": "https://api.example.com/v1/balance?account=acct-1",
+        "documentUrl": "https://app.example.com/overview",
+        "requestHeaders": {},
+        "responseBody": "{\"value\":\"125.5\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+        "responseHeaders": {
+          "Content-Type": "application/json"
+        },
+        "contentType": "application/json",
+        "status": 200
+      },
+      "candidate": {
+        "candidateId": "5821503d-b345-42bf-905b-e86bc04046d4",
+        "method": "GET",
+        "origin": "https://api.example.com",
+        "path": "/v1/balance",
+        "queryNames": [
+          "account"
+        ],
+        "contentType": "application/json",
+        "requestContentType": "",
+        "occurrences": 1,
+        "firstSeenAt": 1893455340000,
+        "lastSeenAt": 1893455340000,
+        "samples": [
+          {
+            "at": 1893455340000,
+            "pageOrigin": "https://app.example.com",
+            "triggerPath": "/overview",
+            "triggerPathSafe": true,
+            "request": {
+              "method": "GET",
+              "url": "https://api.example.com/v1/balance?account=acct-1",
+              "contentType": "",
+              "headers": {},
+              "body": null,
+              "bodyState": "empty",
+              "bodyBytes": 0
+            },
+            "response": {
+              "value": "125.5",
+              "other": "2",
+              "private_note": "discovery-private-canary"
+            },
+            "responseHeaders": {
+              "content-type": "application/json"
+            },
+            "responseBodyState": "json",
+            "responseBodyBytes": 71,
+            "status": 200
+          }
+        ],
+        "inference": {
+          "requestShape": {
+            "query": "object",
+            "query.account": "string",
+            "request": "null"
+          },
+          "responseShape": {
+            "response": "object",
+            "response.other": "string",
+            "response.private_note": "string",
+            "response.value": "string"
+          },
+          "dynamicFields": [
+            "query.account"
+          ],
+          "stableEnums": {}
+        },
+        "configurable": true,
+        "unsupportedReason": null
+      },
+      "buyer": {
+        "connectorId": "metric-a",
+        "title": "Condition a",
+        "triggerRuleId": "rule-a",
+        "sessionId": "local-discovery-session",
+        "triggerPaths": [
+          "/overview"
+        ],
+        "mappings": {
+          "query.account": {
+            "confirmed": true,
+            "choice": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example",
+              "variableName": "accountId"
+            }
+          }
+        },
+        "mode": {
+          "purpose": "METRIC",
+          "pipeline": {
+            "output": "amountA",
+            "sourcePath": "$.value",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          }
+        }
+      },
+      "responseJson": "{\"value\":\"125.5\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+      "observedTriggerPaths": [
+        "/overview"
+      ],
+      "expectedFacts": {
+        "amountA": {
+          "type": "number",
+          "value": "125.5",
+          "unit": "USDT"
+        }
+      },
+      "expectedBusinessPassed": true,
+      "connector": {
+        "interpreter_version": 4,
+        "connector_id": "metric-a",
+        "revision": 1,
+        "disabled": false,
+        "purpose": "METRIC",
+        "page_origin": "https://app.example.com",
+        "trigger_paths": [
+          "/overview"
+        ],
+        "origin": "https://api.example.com",
+        "request": {
+          "method": "GET",
+          "matcher": {
+            "path": {
+              "kind": "exact",
+              "value": "/v1/balance"
+            },
+            "query": {
+              "required": {
+                "account": {
+                  "$var": "accountId"
+                }
+              },
+              "optional": {},
+              "capture": {}
+            },
+            "resource_types": [
+              "main_frame",
+              "xmlhttprequest",
+              "fetch"
+            ]
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY",
+          "secret_headers": [],
+          "max_sent_data": 8192,
+          "max_recv_data": 65536
+        },
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "resolved_variables": {
+          "accountId": {
+            "type": "STRING",
+            "value": "acct-1"
+          }
+        },
+        "response_format": "json",
+        "response_status": 200,
+        "disclosure": {
+          "key_paths": [
+            "$.value"
+          ],
+          "scalar_paths": [
+            "$.value"
+          ],
+          "collection_paths": [],
+          "max_elements": 200
+        },
+        "pipelines": [
+          {
+            "output": "amountA",
+            "sourcePath": "$.value",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          }
+        ],
+        "expires_at": "2030-01-01T00:00:00.000Z",
+        "verifier_profile_id": "lighthouse-v1"
+      },
+      "connectorCanonicalJson": "{\"connector_id\":\"metric-a\",\"disabled\":false,\"disclosure\":{\"collection_paths\":[],\"key_paths\":[\"$.value\"],\"max_elements\":200,\"scalar_paths\":[\"$.value\"]},\"expires_at\":\"2030-01-01T00:00:00.000Z\",\"interpreter_version\":4,\"origin\":\"https://api.example.com\",\"page_origin\":\"https://app.example.com\",\"pipelines\":[{\"cast\":\"DECIMAL\",\"output\":\"amountA\",\"outputUnit\":\"USDT\",\"sourcePath\":\"$.value\",\"valueUnit\":\"USDT\"}],\"purpose\":\"METRIC\",\"request\":{\"matcher\":{\"path\":{\"kind\":\"exact\",\"value\":\"/v1/balance\"},\"query\":{\"capture\":{},\"optional\":{},\"required\":{\"account\":{\"$var\":\"accountId\"}}},\"resource_types\":[\"main_frame\",\"xmlhttprequest\",\"fetch\"]},\"max_recv_data\":65536,\"max_sent_data\":8192,\"method\":\"GET\",\"replay\":\"EXACT_CAPTURE\",\"secret_headers\":[],\"semantics\":\"READ_ONLY_QUERY\"},\"resolved_variables\":{\"accountId\":{\"type\":\"STRING\",\"value\":\"acct-1\"}},\"response_format\":\"json\",\"response_status\":200,\"revision\":1,\"trigger_paths\":[\"/overview\"],\"variables\":[{\"constraints\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"ACCOUNT_ID\"},\"name\":\"accountId\",\"scalarType\":\"STRING\",\"source\":{\"bindingKey\":\"example\",\"kind\":\"BOUND_ACCOUNT\"}}],\"verifier_profile_id\":\"lighthouse-v1\"}",
+      "configDigest": "98f46254c2800b21995199095443cf184d9b01ebed469a940d7af83a52d04727",
+      "requestBase64url": "R0VUIC92MS9iYWxhbmNlP2FjY291bnQ9YWNjdC0xIEhUVFAvMS4xDQpIb3N0OiBhcGkuZXhhbXBsZS5jb20NCkNvbm5lY3Rpb246IGNsb3NlDQoNCg",
+      "responseBase64url": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24NCkNvbnRlbnQtTGVuZ3RoOiA3MQ0KDQp7InZhbHVlIjoiMTI1LjUiLCJvdGhlciI6IjIiLCJwcml2YXRlX25vdGUiOiJkaXNjb3ZlcnktcHJpdmF0ZS1jYW5hcnkifQ",
+      "hashes": {
+        "request": "0bddaf10289427c9220bd56954737c5bea692afa5ad0792970965d426340de9d",
+        "response": "ccde8955ee086f687ef8c40d4ffc86223c0bac657b638522112ae1e86b38e5c9",
+        "decoded": "bfde4d99349b4d57fde5c2e6fb9fe17aeeebe553ae6c9377111dee16ba64c711"
+      },
+      "registration": {
+        "keyId": "discovery-fixture-key",
+        "publicKeyBase64url": "Zr5-Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo",
+        "configSignature": "-CP6yAluRIjp-Dmm4jhWGs20YvDV-sD3-BHXPd_aqmhuxC4MjkGfJyX8c_DHAwpCkPYj9xsfOOiXu_msDjXzDQ",
+        "ticket": {
+          "schema": 1,
+          "session_id": "11111111111111111111111111111111",
+          "connector_id": "metric-a",
+          "revision": 1,
+          "interpreter_version": 4,
+          "config_digest": "98f46254c2800b21995199095443cf184d9b01ebed469a940d7af83a52d04727",
+          "issued_at": "2029-12-31T23:50:00.000Z",
+          "expires_at": "2030-01-01T00:00:00.000Z",
+          "nonce": "55555555555555555555555555555555"
+        },
+        "ticketSignature": "mQw0fLzh8svXDfO1J_kzn8WTvzeEm3-we1TFdiegRqiBbJiplNGvYhLYh_2yw5MhLq0ZXE2VNdOjmIAMxpUZCQ",
+        "sessionData": {
+          "session_id": "11111111111111111111111111111111",
+          "connector_id": "metric-a",
+          "revision": "1",
+          "interpreter_version": "4",
+          "config_digest": "98f46254c2800b21995199095443cf184d9b01ebed469a940d7af83a52d04727",
+          "nonce": "55555555555555555555555555555555"
+        }
+      },
+      "callback": {
+        "completionId": "382b88d44faece5432777aa4ea1ca5d75eabda261add3b191f6ec6695f736abf",
+        "rawBodyBase64url": "eyJ2ZXJpZmllcl9jb21wbGV0aW9uX2lkIjoiMzgyYjg4ZDQ0ZmFlY2U1NDMyNzc3YWE0ZWExY2E1ZDc1ZWFiZGEyNjFhZGQzYjE5MWY2ZWM2Njk1ZjczNmFiZiIsInNlc3Npb25faWQiOiIxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMSIsImNvbm5lY3Rvcl9pZCI6Im1ldHJpYy1hIiwicmV2aXNpb24iOjEsImludGVycHJldGVyX3ZlcnNpb24iOjQsImNvbmZpZ19kaWdlc3QiOiI5OGY0NjI1NGMyODAwYjIxOTk1MTk5MDk1NDQzY2YxODRkOWIwMWViZWQ0NjlhOTQwZDdhZjgzYTUyZDA0NzI3Iiwibm9uY2UiOiI1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NSIsInN0YXR1cyI6InZlcmlmaWVkIiwiZXZpZGVuY2UiOnsic2VudCI6IlIwVlVJQzkyTVM5aVlXeGhibU5sUDJGalkyOTFiblE5WVdOamRDMHhJRWhVVkZBdk1TNHhEUXBJYjNOME9pQmhjR2t1WlhoaGJYQnNaUzVqYjIwTkNrTnZibTVsWTNScGIyNDZJR05zYjNObERRb05DZyIsInJlY3YiOiJTRlJVVUM4eExqRWdNakF3SUU5TERRcERiMjUwWlc1MExWUjVjR1U2SUdGd2NHeHBZMkYwYVc5dUwycHpiMjROQ2tOdmJuUmxiblF0VEdWdVozUm9PaUEzTVEwS0RRcDdJblpoYkhWbElqb2lNVEkxTGpVaUxDSnZkR2hsY2lJNklqSWlMQ0p3Y21sMllYUmxYMjV2ZEdVaU9pSmthWE5qYjNabGNua3RjSEpwZG1GMFpTMWpZVzVoY25raWZRIiwic2VudF9sZW5ndGgiOjg1LCJyZWN2X2xlbmd0aCI6MTQyfX0",
+        "signature": "de8f2e54b4e8875f56a68e1662c43facddf903170d689ebe3843d007b7afcd56",
+        "bodyDigest": "3bad0551a7b3730a5e31a04a549990a6900f4ae9614102965e09d8be28b55b25"
+      }
+    },
+    {
+      "name": "b",
+      "resourceType": "XHR",
+      "observation": {
+        "method": "POST",
+        "url": "https://api.example.com/v1/history",
+        "documentUrl": "https://app.example.com/history",
+        "requestHeaders": {
+          "Content-Type": "application/json"
+        },
+        "requestBody": "{\"account\":\"acct-1\"}",
+        "responseBody": "{\"value\":\"50\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+        "responseHeaders": {
+          "Content-Type": "application/json",
+          "Content-Encoding": "gzip"
+        },
+        "contentType": "application/json",
+        "status": 200
+      },
+      "candidate": {
+        "candidateId": "ac3feab8-c847-4644-ab0e-fc3928c61545",
+        "method": "POST",
+        "origin": "https://api.example.com",
+        "path": "/v1/history",
+        "queryNames": [],
+        "contentType": "application/json",
+        "requestContentType": "application/json",
+        "occurrences": 1,
+        "firstSeenAt": 1893455340000,
+        "lastSeenAt": 1893455340000,
+        "samples": [
+          {
+            "at": 1893455340000,
+            "pageOrigin": "https://app.example.com",
+            "triggerPath": "/history",
+            "triggerPathSafe": true,
+            "request": {
+              "method": "POST",
+              "url": "https://api.example.com/v1/history",
+              "contentType": "application/json",
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": {
+                "account": "acct-1"
+              },
+              "bodyState": "json",
+              "bodyBytes": 20
+            },
+            "response": {
+              "value": "50",
+              "other": "2",
+              "private_note": "discovery-private-canary"
+            },
+            "responseHeaders": {
+              "content-encoding": "gzip",
+              "content-type": "application/json"
+            },
+            "responseBodyState": "json",
+            "responseBodyBytes": 68,
+            "status": 200
+          }
+        ],
+        "inference": {
+          "requestShape": {
+            "query": "object",
+            "request": "object",
+            "request.account": "string"
+          },
+          "responseShape": {
+            "response": "object",
+            "response.other": "string",
+            "response.private_note": "string",
+            "response.value": "string"
+          },
+          "dynamicFields": [
+            "request.account"
+          ],
+          "stableEnums": {}
+        },
+        "configurable": true,
+        "unsupportedReason": null
+      },
+      "buyer": {
+        "connectorId": "metric-b",
+        "title": "Condition b",
+        "triggerRuleId": "rule-b",
+        "sessionId": "local-discovery-session",
+        "triggerPaths": [
+          "/history"
+        ],
+        "mappings": {
+          "request.account": {
+            "confirmed": true,
+            "choice": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example",
+              "variableName": "accountId"
+            }
+          }
+        },
+        "mode": {
+          "purpose": "METRIC",
+          "pipeline": {
+            "output": "amountB",
+            "sourcePath": "$.value",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          }
+        }
+      },
+      "responseJson": "{\"value\":\"50\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+      "observedTriggerPaths": [
+        "/history"
+      ],
+      "expectedFacts": {
+        "amountB": {
+          "type": "number",
+          "value": "50",
+          "unit": "USDT"
+        }
+      },
+      "expectedBusinessPassed": false,
+      "connector": {
+        "interpreter_version": 4,
+        "connector_id": "metric-b",
+        "revision": 1,
+        "disabled": false,
+        "purpose": "METRIC",
+        "page_origin": "https://app.example.com",
+        "trigger_paths": [
+          "/history"
+        ],
+        "origin": "https://api.example.com",
+        "request": {
+          "method": "POST",
+          "matcher": {
+            "path": {
+              "kind": "exact",
+              "value": "/v1/history"
+            },
+            "query": {
+              "required": {},
+              "optional": {},
+              "capture": {}
+            },
+            "resource_types": [
+              "main_frame",
+              "xmlhttprequest",
+              "fetch"
+            ]
+          },
+          "body": {
+            "account": {
+              "$var": "accountId"
+            }
+          },
+          "content_type": "application/json",
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY",
+          "secret_headers": [],
+          "max_sent_data": 8192,
+          "max_recv_data": 65536
+        },
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "resolved_variables": {
+          "accountId": {
+            "type": "STRING",
+            "value": "acct-1"
+          }
+        },
+        "response_format": "json",
+        "response_status": 200,
+        "response_content_encoding": "gzip",
+        "max_decoded_data": 65536,
+        "disclosure": {
+          "key_paths": [
+            "$.value"
+          ],
+          "scalar_paths": [
+            "$.value"
+          ],
+          "collection_paths": [],
+          "max_elements": 200
+        },
+        "pipelines": [
+          {
+            "output": "amountB",
+            "sourcePath": "$.value",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          }
+        ],
+        "expires_at": "2030-01-01T00:00:00.000Z",
+        "verifier_profile_id": "lighthouse-v1"
+      },
+      "connectorCanonicalJson": "{\"connector_id\":\"metric-b\",\"disabled\":false,\"disclosure\":{\"collection_paths\":[],\"key_paths\":[\"$.value\"],\"max_elements\":200,\"scalar_paths\":[\"$.value\"]},\"expires_at\":\"2030-01-01T00:00:00.000Z\",\"interpreter_version\":4,\"max_decoded_data\":65536,\"origin\":\"https://api.example.com\",\"page_origin\":\"https://app.example.com\",\"pipelines\":[{\"cast\":\"DECIMAL\",\"output\":\"amountB\",\"outputUnit\":\"USDT\",\"sourcePath\":\"$.value\",\"valueUnit\":\"USDT\"}],\"purpose\":\"METRIC\",\"request\":{\"body\":{\"account\":{\"$var\":\"accountId\"}},\"content_type\":\"application/json\",\"matcher\":{\"path\":{\"kind\":\"exact\",\"value\":\"/v1/history\"},\"query\":{\"capture\":{},\"optional\":{},\"required\":{}},\"resource_types\":[\"main_frame\",\"xmlhttprequest\",\"fetch\"]},\"max_recv_data\":65536,\"max_sent_data\":8192,\"method\":\"POST\",\"replay\":\"EXACT_CAPTURE\",\"secret_headers\":[],\"semantics\":\"READ_ONLY_QUERY\"},\"resolved_variables\":{\"accountId\":{\"type\":\"STRING\",\"value\":\"acct-1\"}},\"response_content_encoding\":\"gzip\",\"response_format\":\"json\",\"response_status\":200,\"revision\":1,\"trigger_paths\":[\"/history\"],\"variables\":[{\"constraints\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"ACCOUNT_ID\"},\"name\":\"accountId\",\"scalarType\":\"STRING\",\"source\":{\"bindingKey\":\"example\",\"kind\":\"BOUND_ACCOUNT\"}}],\"verifier_profile_id\":\"lighthouse-v1\"}",
+      "configDigest": "8cba1bd122bde42d11afbe031edc347377fa6f9c352b4fb5f7f61017826af3a2",
+      "requestBase64url": "UE9TVCAvdjEvaGlzdG9yeSBIVFRQLzEuMQ0KSG9zdDogYXBpLmV4YW1wbGUuY29tDQpDb25uZWN0aW9uOiBjbG9zZQ0KQ29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uDQpDb250ZW50LUxlbmd0aDogMjANCkFjY2VwdC1FbmNvZGluZzogZ3ppcA0KDQp7ImFjY291bnQiOiJhY2N0LTEifQ",
+      "responseBase64url": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANCkNvbnRlbnQtTGVuZ3RoOiA4MA0KDQofiwgAAAAAAAATq1YqS8wpTVWyUjI1UNJRyi_JSC1SslIyUtJRKijKLEssSY3Pyy8ByadkFifnl6UWVepCJXSTE_MSiyqVagFdWOUDRAAAAA",
+      "hashes": {
+        "request": "5dead0a8e238b610b7a899d6047f57faa128524089ea79de4e30fa6ea8589e56",
+        "response": "a7a63d88b4c4bb50afd6e48032be8a6b35a0cd9d700182396a8c084f0550faf0",
+        "decoded": "098ab262e71df7a26fff8c6ade04658f18f87e5ad5ae81ae472432ff2f86d208"
+      },
+      "registration": {
+        "keyId": "discovery-fixture-key",
+        "publicKeyBase64url": "Zr5-Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo",
+        "configSignature": "XorKC5kPte9RPu0Ph5A01wz3LVIclri_wiVappQStjJRDeF96cqZaUW2vmDIlAfvixMNLqOc5h816NDATkISAw",
+        "ticket": {
+          "schema": 1,
+          "session_id": "22222222222222222222222222222222",
+          "connector_id": "metric-b",
+          "revision": 1,
+          "interpreter_version": 4,
+          "config_digest": "8cba1bd122bde42d11afbe031edc347377fa6f9c352b4fb5f7f61017826af3a2",
+          "issued_at": "2029-12-31T23:50:00.000Z",
+          "expires_at": "2030-01-01T00:00:00.000Z",
+          "nonce": "66666666666666666666666666666666"
+        },
+        "ticketSignature": "-zEUP3yWjS-p0kQNMIQ96lDS4beb144aIXZn8I1kuRXfxPDzawS62ruAgpNFQ6GC-4jTRBdn8RgWxqQK_5eOAA",
+        "sessionData": {
+          "session_id": "22222222222222222222222222222222",
+          "connector_id": "metric-b",
+          "revision": "1",
+          "interpreter_version": "4",
+          "config_digest": "8cba1bd122bde42d11afbe031edc347377fa6f9c352b4fb5f7f61017826af3a2",
+          "nonce": "66666666666666666666666666666666"
+        }
+      },
+      "callback": {
+        "completionId": "55162a23f6445c9fcd77daf0d9024d2975f1b306a85c799853c90c414a4b1e9b",
+        "rawBodyBase64url": "eyJ2ZXJpZmllcl9jb21wbGV0aW9uX2lkIjoiNTUxNjJhMjNmNjQ0NWM5ZmNkNzdkYWYwZDkwMjRkMjk3NWYxYjMwNmE4NWM3OTk4NTNjOTBjNDE0YTRiMWU5YiIsInNlc3Npb25faWQiOiIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMiIsImNvbm5lY3Rvcl9pZCI6Im1ldHJpYy1iIiwicmV2aXNpb24iOjEsImludGVycHJldGVyX3ZlcnNpb24iOjQsImNvbmZpZ19kaWdlc3QiOiI4Y2JhMWJkMTIyYmRlNDJkMTFhZmJlMDMxZWRjMzQ3Mzc3ZmE2ZjljMzUyYjRmYjVmN2Y2MTAxNzgyNmFmM2EyIiwibm9uY2UiOiI2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NiIsInN0YXR1cyI6InZlcmlmaWVkIiwiZXZpZGVuY2UiOnsic2VudCI6IlVFOVRWQ0F2ZGpFdmFHbHpkRzl5ZVNCSVZGUlFMekV1TVEwS1NHOXpkRG9nWVhCcExtVjRZVzF3YkdVdVkyOXREUXBEYjI1dVpXTjBhVzl1T2lCamJHOXpaUTBLUTI5dWRHVnVkQzFVZVhCbE9pQmhjSEJzYVdOaGRHbHZiaTlxYzI5dURRcERiMjUwWlc1MExVeGxibWQwYURvZ01qQU5Da0ZqWTJWd2RDMUZibU52WkdsdVp6b2daM3BwY0EwS0RRcDdJbUZqWTI5MWJuUWlPaUpoWTJOMExURWlmUSIsInJlY3YiOiJTRlJVVUM4eExqRWdNakF3SUU5TERRcERiMjUwWlc1MExWUjVjR1U2SUdGd2NHeHBZMkYwYVc5dUwycHpiMjROQ2tOdmJuUmxiblF0Ulc1amIyUnBibWM2SUdkNmFYQU5Da052Ym5SbGJuUXRUR1Z1WjNSb09pQTRNQTBLRFFvZml3Z0FBQUFBQUFBVHExWXFTOHdwVFZXeVVqSTFVTkpSeWlfSlNDMVNzbEl5VXRKUktpaktMRXNzU1kzUHl5OEJ5YWRrRmlmbmw2VVdWZXBDSlhTVEVfTVNpeXFWYWdGZFdPVURSQUFBQUEiLCJzZW50X2xlbmd0aCI6MTY2LCJyZWN2X2xlbmd0aCI6MTc1fX0",
+        "signature": "841bd56ee3a36a966a1fdeea7471238009d5554e7e3394118f4f5e37d4cf95cc",
+        "bodyDigest": "5011650bfa2462bf54b698b74399a80b81262cde7a66785f427bb97e515444fe"
+      }
+    },
+    {
+      "name": "c",
+      "resourceType": "Fetch",
+      "observation": {
+        "method": "GET",
+        "url": "https://api.example.com/v1/activity?account=acct-1",
+        "documentUrl": "https://app.example.com/activity",
+        "requestHeaders": {},
+        "responseBody": "{\"value\":\"3\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+        "responseHeaders": {
+          "Content-Type": "application/json"
+        },
+        "contentType": "application/json",
+        "status": 200
+      },
+      "candidate": {
+        "candidateId": "73c4a576-ec89-4474-a9a9-9446d38e53c2",
+        "method": "GET",
+        "origin": "https://api.example.com",
+        "path": "/v1/activity",
+        "queryNames": [
+          "account"
+        ],
+        "contentType": "application/json",
+        "requestContentType": "",
+        "occurrences": 1,
+        "firstSeenAt": 1893455340000,
+        "lastSeenAt": 1893455340000,
+        "samples": [
+          {
+            "at": 1893455340000,
+            "pageOrigin": "https://app.example.com",
+            "triggerPath": "/activity",
+            "triggerPathSafe": true,
+            "request": {
+              "method": "GET",
+              "url": "https://api.example.com/v1/activity?account=acct-1",
+              "contentType": "",
+              "headers": {},
+              "body": null,
+              "bodyState": "empty",
+              "bodyBytes": 0
+            },
+            "response": {
+              "value": "3",
+              "other": "2",
+              "private_note": "discovery-private-canary"
+            },
+            "responseHeaders": {
+              "content-type": "application/json"
+            },
+            "responseBodyState": "json",
+            "responseBodyBytes": 67,
+            "status": 200
+          }
+        ],
+        "inference": {
+          "requestShape": {
+            "query": "object",
+            "query.account": "string",
+            "request": "null"
+          },
+          "responseShape": {
+            "response": "object",
+            "response.other": "string",
+            "response.private_note": "string",
+            "response.value": "string"
+          },
+          "dynamicFields": [
+            "query.account"
+          ],
+          "stableEnums": {}
+        },
+        "configurable": true,
+        "unsupportedReason": null
+      },
+      "buyer": {
+        "connectorId": "metric-c",
+        "title": "Condition c",
+        "triggerRuleId": "rule-c",
+        "sessionId": "local-discovery-session",
+        "triggerPaths": [
+          "/activity"
+        ],
+        "mappings": {
+          "query.account": {
+            "confirmed": true,
+            "choice": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example",
+              "variableName": "accountId"
+            }
+          }
+        },
+        "mode": {
+          "purpose": "METRIC",
+          "pipeline": {
+            "output": "amountC",
+            "sourcePath": "$.value",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          }
+        }
+      },
+      "responseJson": "{\"value\":\"3\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+      "observedTriggerPaths": [
+        "/activity"
+      ],
+      "expectedFacts": {
+        "amountC": {
+          "type": "number",
+          "value": "3",
+          "unit": "USDT"
+        }
+      },
+      "expectedBusinessPassed": true,
+      "connector": {
+        "interpreter_version": 4,
+        "connector_id": "metric-c",
+        "revision": 1,
+        "disabled": false,
+        "purpose": "METRIC",
+        "page_origin": "https://app.example.com",
+        "trigger_paths": [
+          "/activity"
+        ],
+        "origin": "https://api.example.com",
+        "request": {
+          "method": "GET",
+          "matcher": {
+            "path": {
+              "kind": "exact",
+              "value": "/v1/activity"
+            },
+            "query": {
+              "required": {
+                "account": {
+                  "$var": "accountId"
+                }
+              },
+              "optional": {},
+              "capture": {}
+            },
+            "resource_types": [
+              "main_frame",
+              "xmlhttprequest",
+              "fetch"
+            ]
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY",
+          "secret_headers": [],
+          "max_sent_data": 8192,
+          "max_recv_data": 65536
+        },
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "resolved_variables": {
+          "accountId": {
+            "type": "STRING",
+            "value": "acct-1"
+          }
+        },
+        "response_format": "json",
+        "response_status": 200,
+        "disclosure": {
+          "key_paths": [
+            "$.value"
+          ],
+          "scalar_paths": [
+            "$.value"
+          ],
+          "collection_paths": [],
+          "max_elements": 200
+        },
+        "pipelines": [
+          {
+            "output": "amountC",
+            "sourcePath": "$.value",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          }
+        ],
+        "expires_at": "2030-01-01T00:00:00.000Z",
+        "verifier_profile_id": "lighthouse-v1"
+      },
+      "connectorCanonicalJson": "{\"connector_id\":\"metric-c\",\"disabled\":false,\"disclosure\":{\"collection_paths\":[],\"key_paths\":[\"$.value\"],\"max_elements\":200,\"scalar_paths\":[\"$.value\"]},\"expires_at\":\"2030-01-01T00:00:00.000Z\",\"interpreter_version\":4,\"origin\":\"https://api.example.com\",\"page_origin\":\"https://app.example.com\",\"pipelines\":[{\"cast\":\"DECIMAL\",\"output\":\"amountC\",\"outputUnit\":\"USDT\",\"sourcePath\":\"$.value\",\"valueUnit\":\"USDT\"}],\"purpose\":\"METRIC\",\"request\":{\"matcher\":{\"path\":{\"kind\":\"exact\",\"value\":\"/v1/activity\"},\"query\":{\"capture\":{},\"optional\":{},\"required\":{\"account\":{\"$var\":\"accountId\"}}},\"resource_types\":[\"main_frame\",\"xmlhttprequest\",\"fetch\"]},\"max_recv_data\":65536,\"max_sent_data\":8192,\"method\":\"GET\",\"replay\":\"EXACT_CAPTURE\",\"secret_headers\":[],\"semantics\":\"READ_ONLY_QUERY\"},\"resolved_variables\":{\"accountId\":{\"type\":\"STRING\",\"value\":\"acct-1\"}},\"response_format\":\"json\",\"response_status\":200,\"revision\":1,\"trigger_paths\":[\"/activity\"],\"variables\":[{\"constraints\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"ACCOUNT_ID\"},\"name\":\"accountId\",\"scalarType\":\"STRING\",\"source\":{\"bindingKey\":\"example\",\"kind\":\"BOUND_ACCOUNT\"}}],\"verifier_profile_id\":\"lighthouse-v1\"}",
+      "configDigest": "54313019030aaec8ea0221072b92ba1bda339cb6e8bc7d9e827d9906dcf5dab0",
+      "requestBase64url": "R0VUIC92MS9hY3Rpdml0eT9hY2NvdW50PWFjY3QtMSBIVFRQLzEuMQ0KSG9zdDogYXBpLmV4YW1wbGUuY29tDQpDb25uZWN0aW9uOiBjbG9zZQ0KDQo",
+      "responseBase64url": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24NCkNvbnRlbnQtTGVuZ3RoOiA2Nw0KDQp7InZhbHVlIjoiMyIsIm90aGVyIjoiMiIsInByaXZhdGVfbm90ZSI6ImRpc2NvdmVyeS1wcml2YXRlLWNhbmFyeSJ9",
+      "hashes": {
+        "request": "8f53cec77f302a5c93c58e00620244105adc2b73380d4572b6b55930aa5c5109",
+        "response": "897cb46bea70cda6480a71ac16f0600fe70c5ef543a24b17818d046a3d9cfbf1",
+        "decoded": "f56da58d057b53782fae019e3aa4a632d732fec2551a3bbaa9fb488db5dcc5ef"
+      },
+      "registration": {
+        "keyId": "discovery-fixture-key",
+        "publicKeyBase64url": "Zr5-Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo",
+        "configSignature": "T8Woiv7VLKXtLgzkk1saM5_wgjBmGUHLSmk6ID8b2NN6mESzuwlQRKfni8XupStVmy4-c_j2GHQcCrxrusDmBA",
+        "ticket": {
+          "schema": 1,
+          "session_id": "33333333333333333333333333333333",
+          "connector_id": "metric-c",
+          "revision": 1,
+          "interpreter_version": 4,
+          "config_digest": "54313019030aaec8ea0221072b92ba1bda339cb6e8bc7d9e827d9906dcf5dab0",
+          "issued_at": "2029-12-31T23:50:00.000Z",
+          "expires_at": "2030-01-01T00:00:00.000Z",
+          "nonce": "77777777777777777777777777777777"
+        },
+        "ticketSignature": "bkVMHgpANI3K2xeYPMeOs7dGy4vHCQ_LcBi9uly8mfBVVNzmfiviWNh-Fj0bbCxBlfMqZ3_WEBdIwA6-EAPIAg",
+        "sessionData": {
+          "session_id": "33333333333333333333333333333333",
+          "connector_id": "metric-c",
+          "revision": "1",
+          "interpreter_version": "4",
+          "config_digest": "54313019030aaec8ea0221072b92ba1bda339cb6e8bc7d9e827d9906dcf5dab0",
+          "nonce": "77777777777777777777777777777777"
+        }
+      },
+      "callback": {
+        "completionId": "50b936f642afe827b8622a33c9a84a77462f724f46b23ec20cc07802b7296259",
+        "rawBodyBase64url": "eyJ2ZXJpZmllcl9jb21wbGV0aW9uX2lkIjoiNTBiOTM2ZjY0MmFmZTgyN2I4NjIyYTMzYzlhODRhNzc0NjJmNzI0ZjQ2YjIzZWMyMGNjMDc4MDJiNzI5NjI1OSIsInNlc3Npb25faWQiOiIzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMyIsImNvbm5lY3Rvcl9pZCI6Im1ldHJpYy1jIiwicmV2aXNpb24iOjEsImludGVycHJldGVyX3ZlcnNpb24iOjQsImNvbmZpZ19kaWdlc3QiOiI1NDMxMzAxOTAzMGFhZWM4ZWEwMjIxMDcyYjkyYmExYmRhMzM5Y2I2ZThiYzdkOWU4MjdkOTkwNmRjZjVkYWIwIiwibm9uY2UiOiI3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3NyIsInN0YXR1cyI6InZlcmlmaWVkIiwiZXZpZGVuY2UiOnsic2VudCI6IlIwVlVJQzkyTVM5aFkzUnBkbWwwZVQ5aFkyTnZkVzUwUFdGalkzUXRNU0JJVkZSUUx6RXVNUTBLU0c5emREb2dZWEJwTG1WNFlXMXdiR1V1WTI5dERRcERiMjV1WldOMGFXOXVPaUJqYkc5elpRMEtEUW8iLCJyZWN2IjoiU0ZSVVVDOHhMakVnTWpBd0lFOUxEUXBEYjI1MFpXNTBMVlI1Y0dVNklHRndjR3hwWTJGMGFXOXVMMnB6YjI0TkNrTnZiblJsYm5RdFRHVnVaM1JvT2lBMk53MEtEUXA3SW5aaGJIVmxJam9pTXlJc0ltOTBhR1Z5SWpvaU1pSXNJbkJ5YVhaaGRHVmZibTkwWlNJNkltUnBjMk52ZG1WeWVTMXdjbWwyWVhSbExXTmhibUZ5ZVNKOSIsInNlbnRfbGVuZ3RoIjo4NiwicmVjdl9sZW5ndGgiOjEzOH19",
+        "signature": "f7abb697eda3e528374432784ebb6adb5ed5aac09afb791d8663ef2baf9d2efa",
+        "bodyDigest": "0164a661affd6055cfcf10409a23e05a4e755217615c3b8ed5549829aa894455"
+      }
+    },
+    {
+      "name": "shared",
+      "resourceType": "Fetch",
+      "observation": {
+        "method": "GET",
+        "url": "https://api.example.com/v1/balance?account=acct-1",
+        "documentUrl": "https://app.example.com/overview",
+        "requestHeaders": {},
+        "responseBody": "{\"value\":\"125.5\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+        "responseHeaders": {
+          "Content-Type": "application/json"
+        },
+        "contentType": "application/json",
+        "status": 200
+      },
+      "candidate": {
+        "candidateId": "5821503d-b345-42bf-905b-e86bc04046d4",
+        "method": "GET",
+        "origin": "https://api.example.com",
+        "path": "/v1/balance",
+        "queryNames": [
+          "account"
+        ],
+        "contentType": "application/json",
+        "requestContentType": "",
+        "occurrences": 1,
+        "firstSeenAt": 1893455340000,
+        "lastSeenAt": 1893455340000,
+        "samples": [
+          {
+            "at": 1893455340000,
+            "pageOrigin": "https://app.example.com",
+            "triggerPath": "/overview",
+            "triggerPathSafe": true,
+            "request": {
+              "method": "GET",
+              "url": "https://api.example.com/v1/balance?account=acct-1",
+              "contentType": "",
+              "headers": {},
+              "body": null,
+              "bodyState": "empty",
+              "bodyBytes": 0
+            },
+            "response": {
+              "value": "125.5",
+              "other": "2",
+              "private_note": "discovery-private-canary"
+            },
+            "responseHeaders": {
+              "content-type": "application/json"
+            },
+            "responseBodyState": "json",
+            "responseBodyBytes": 71,
+            "status": 200
+          }
+        ],
+        "inference": {
+          "requestShape": {
+            "query": "object",
+            "query.account": "string",
+            "request": "null"
+          },
+          "responseShape": {
+            "response": "object",
+            "response.other": "string",
+            "response.private_note": "string",
+            "response.value": "string"
+          },
+          "dynamicFields": [
+            "query.account"
+          ],
+          "stableEnums": {}
+        },
+        "configurable": true,
+        "unsupportedReason": null
+      },
+      "buyer": {
+        "connectorId": "metric-a",
+        "title": "Condition a",
+        "triggerRuleId": "rule-a",
+        "sessionId": "local-discovery-session",
+        "triggerPaths": [
+          "/overview"
+        ],
+        "mappings": {
+          "query.account": {
+            "confirmed": true,
+            "choice": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example",
+              "variableName": "accountId"
+            }
+          }
+        },
+        "mode": {
+          "purpose": "METRIC",
+          "pipeline": {
+            "output": "amountA",
+            "sourcePath": "$.value",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          }
+        }
+      },
+      "responseJson": "{\"value\":\"125.5\",\"other\":\"2\",\"private_note\":\"discovery-private-canary\"}",
+      "observedTriggerPaths": [
+        "/overview",
+        "/details"
+      ],
+      "expectedFacts": {
+        "amountA": {
+          "type": "number",
+          "value": "125.5",
+          "unit": "USDT"
+        },
+        "amountB": {
+          "type": "number",
+          "value": "2",
+          "unit": "USDT"
+        }
+      },
+      "expectedBusinessPassed": true,
+      "connector": {
+        "interpreter_version": 4,
+        "connector_id": "metric-a",
+        "revision": 1,
+        "disabled": false,
+        "purpose": "METRIC",
+        "page_origin": "https://app.example.com",
+        "trigger_paths": [
+          "/overview",
+          "/details"
+        ],
+        "origin": "https://api.example.com",
+        "request": {
+          "method": "GET",
+          "matcher": {
+            "path": {
+              "kind": "exact",
+              "value": "/v1/balance"
+            },
+            "query": {
+              "required": {
+                "account": {
+                  "$var": "accountId"
+                }
+              },
+              "optional": {},
+              "capture": {}
+            },
+            "resource_types": [
+              "main_frame",
+              "xmlhttprequest",
+              "fetch"
+            ]
+          },
+          "replay": "EXACT_CAPTURE",
+          "semantics": "READ_ONLY_QUERY",
+          "secret_headers": [],
+          "max_sent_data": 8192,
+          "max_recv_data": 65536
+        },
+        "variables": [
+          {
+            "name": "accountId",
+            "scalarType": "STRING",
+            "source": {
+              "kind": "BOUND_ACCOUNT",
+              "bindingKey": "example"
+            },
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "ACCOUNT_ID"
+            }
+          }
+        ],
+        "resolved_variables": {
+          "accountId": {
+            "type": "STRING",
+            "value": "acct-1"
+          }
+        },
+        "response_format": "json",
+        "response_status": 200,
+        "disclosure": {
+          "key_paths": [
+            "$.other",
+            "$.value"
+          ],
+          "scalar_paths": [
+            "$.other",
+            "$.value"
+          ],
+          "collection_paths": [],
+          "max_elements": 200
+        },
+        "pipelines": [
+          {
+            "output": "amountA",
+            "sourcePath": "$.value",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          },
+          {
+            "output": "amountB",
+            "sourcePath": "$.other",
+            "cast": "DECIMAL",
+            "valueUnit": "USDT",
+            "outputUnit": "USDT"
+          }
+        ],
+        "expires_at": "2030-01-01T00:00:00.000Z",
+        "verifier_profile_id": "lighthouse-v1"
+      },
+      "connectorCanonicalJson": "{\"connector_id\":\"metric-a\",\"disabled\":false,\"disclosure\":{\"collection_paths\":[],\"key_paths\":[\"$.other\",\"$.value\"],\"max_elements\":200,\"scalar_paths\":[\"$.other\",\"$.value\"]},\"expires_at\":\"2030-01-01T00:00:00.000Z\",\"interpreter_version\":4,\"origin\":\"https://api.example.com\",\"page_origin\":\"https://app.example.com\",\"pipelines\":[{\"cast\":\"DECIMAL\",\"output\":\"amountA\",\"outputUnit\":\"USDT\",\"sourcePath\":\"$.value\",\"valueUnit\":\"USDT\"},{\"cast\":\"DECIMAL\",\"output\":\"amountB\",\"outputUnit\":\"USDT\",\"sourcePath\":\"$.other\",\"valueUnit\":\"USDT\"}],\"purpose\":\"METRIC\",\"request\":{\"matcher\":{\"path\":{\"kind\":\"exact\",\"value\":\"/v1/balance\"},\"query\":{\"capture\":{},\"optional\":{},\"required\":{\"account\":{\"$var\":\"accountId\"}}},\"resource_types\":[\"main_frame\",\"xmlhttprequest\",\"fetch\"]},\"max_recv_data\":65536,\"max_sent_data\":8192,\"method\":\"GET\",\"replay\":\"EXACT_CAPTURE\",\"secret_headers\":[],\"semantics\":\"READ_ONLY_QUERY\"},\"resolved_variables\":{\"accountId\":{\"type\":\"STRING\",\"value\":\"acct-1\"}},\"response_format\":\"json\",\"response_status\":200,\"revision\":1,\"trigger_paths\":[\"/overview\",\"/details\"],\"variables\":[{\"constraints\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"ACCOUNT_ID\"},\"name\":\"accountId\",\"scalarType\":\"STRING\",\"source\":{\"bindingKey\":\"example\",\"kind\":\"BOUND_ACCOUNT\"}}],\"verifier_profile_id\":\"lighthouse-v1\"}",
+      "configDigest": "65d1c1f318f745103978c02830098399ecf2957664f0bc9574e92ea85410ca30",
+      "requestBase64url": "R0VUIC92MS9iYWxhbmNlP2FjY291bnQ9YWNjdC0xIEhUVFAvMS4xDQpIb3N0OiBhcGkuZXhhbXBsZS5jb20NCkNvbm5lY3Rpb246IGNsb3NlDQoNCg",
+      "responseBase64url": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24NCkNvbnRlbnQtTGVuZ3RoOiA3MQ0KDQp7InZhbHVlIjoiMTI1LjUiLCJvdGhlciI6IjIiLCJwcml2YXRlX25vdGUiOiJkaXNjb3ZlcnktcHJpdmF0ZS1jYW5hcnkifQ",
+      "hashes": {
+        "request": "0bddaf10289427c9220bd56954737c5bea692afa5ad0792970965d426340de9d",
+        "response": "ccde8955ee086f687ef8c40d4ffc86223c0bac657b638522112ae1e86b38e5c9",
+        "decoded": "bfde4d99349b4d57fde5c2e6fb9fe17aeeebe553ae6c9377111dee16ba64c711"
+      },
+      "registration": {
+        "keyId": "discovery-fixture-key",
+        "publicKeyBase64url": "Zr5-Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo",
+        "configSignature": "DGFb49Z2-BWnyCo-ALLM5DR7Iyz-CNFax27nuruk3Zd7gkeHB6S7fAQD_rclMM-YDQn2Wz_sWRN8W7BUWuH-Bg",
+        "ticket": {
+          "schema": 1,
+          "session_id": "44444444444444444444444444444444",
+          "connector_id": "metric-a",
+          "revision": 1,
+          "interpreter_version": 4,
+          "config_digest": "65d1c1f318f745103978c02830098399ecf2957664f0bc9574e92ea85410ca30",
+          "issued_at": "2029-12-31T23:50:00.000Z",
+          "expires_at": "2030-01-01T00:00:00.000Z",
+          "nonce": "88888888888888888888888888888888"
+        },
+        "ticketSignature": "nI1LB1Og0FeDXYG3JYCeZ6gJdRyOjhZvGH0r6VaGmAPTeVNUr1SFENL0_f0bkdEmm7POPCUeXOpt_YyjstE8Dw",
+        "sessionData": {
+          "session_id": "44444444444444444444444444444444",
+          "connector_id": "metric-a",
+          "revision": "1",
+          "interpreter_version": "4",
+          "config_digest": "65d1c1f318f745103978c02830098399ecf2957664f0bc9574e92ea85410ca30",
+          "nonce": "88888888888888888888888888888888"
+        }
+      },
+      "callback": {
+        "completionId": "677ca897f3c4f442b54a0d1e78903a03b0f71d1f4eaaa4aa437574195f7ddf0d",
+        "rawBodyBase64url": "eyJ2ZXJpZmllcl9jb21wbGV0aW9uX2lkIjoiNjc3Y2E4OTdmM2M0ZjQ0MmI1NGEwZDFlNzg5MDNhMDNiMGY3MWQxZjRlYWFhNGFhNDM3NTc0MTk1ZjdkZGYwZCIsInNlc3Npb25faWQiOiI0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NCIsImNvbm5lY3Rvcl9pZCI6Im1ldHJpYy1hIiwicmV2aXNpb24iOjEsImludGVycHJldGVyX3ZlcnNpb24iOjQsImNvbmZpZ19kaWdlc3QiOiI2NWQxYzFmMzE4Zjc0NTEwMzk3OGMwMjgzMDA5ODM5OWVjZjI5NTc2NjRmMGJjOTU3NGU5MmVhODU0MTBjYTMwIiwibm9uY2UiOiI4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4OCIsInN0YXR1cyI6InZlcmlmaWVkIiwiZXZpZGVuY2UiOnsic2VudCI6IlIwVlVJQzkyTVM5aVlXeGhibU5sUDJGalkyOTFiblE5WVdOamRDMHhJRWhVVkZBdk1TNHhEUXBJYjNOME9pQmhjR2t1WlhoaGJYQnNaUzVqYjIwTkNrTnZibTVsWTNScGIyNDZJR05zYjNObERRb05DZyIsInJlY3YiOiJTRlJVVUM4eExqRWdNakF3SUU5TERRcERiMjUwWlc1MExWUjVjR1U2SUdGd2NHeHBZMkYwYVc5dUwycHpiMjROQ2tOdmJuUmxiblF0VEdWdVozUm9PaUEzTVEwS0RRcDdJblpoYkhWbElqb2lNVEkxTGpVaUxDSnZkR2hsY2lJNklqSWlMQ0p3Y21sMllYUmxYMjV2ZEdVaU9pSmthWE5qYjNabGNua3RjSEpwZG1GMFpTMWpZVzVoY25raWZRIiwic2VudF9sZW5ndGgiOjg1LCJyZWN2X2xlbmd0aCI6MTQyfX0",
+        "signature": "26137fbbbea359accad9bd40e85a2401703d892ecf80de345a738e62574f6171",
+        "bodyDigest": "5164be2bec20d7ade568657aa0ae358c25241c64de71d698ba8c257d1e01dfc7"
+      }
+    }
+  ]
+}

@@ -239,6 +239,97 @@ describe('product experience popup', () => {
     expect(container.textContent).toContain('正在注入页面监听并检查规则')
   })
 
+  it('shows terminal no as a business result and retries only the selected paused condition', async () => {
+    const { container, requests } = await renderPopup(
+      productState('observing', {
+        zkTlsProgress: [
+          {
+            ruleId: 'rule-a',
+            title: 'Balance',
+            status: 'VERIFIED_NO',
+            current: 2,
+            target: 3,
+            actual: 2,
+            required: 3,
+            comparator: 'GTE',
+            unit: null,
+          },
+        ],
+        zkTlsConditions: [
+          {
+            ruleId: 'rule-a',
+            status: 'verified_no',
+            code: null,
+            stage: null,
+            correlationId: null,
+          },
+          {
+            ruleId: 'rule-b',
+            status: 'action_required',
+            code: 'NO_REQUEST_OBSERVED',
+            stage: 'capture-failed',
+            correlationId: 'safe-correlation',
+          },
+        ],
+      }),
+    )
+    expect(container.textContent).toContain('未满足')
+    expect(container.textContent).toContain('实际 2')
+    expect(container.textContent).toContain('要求 GTE 3')
+    expect(container.textContent).toContain('NO_REQUEST_OBSERVED')
+    const button = [...container.querySelectorAll('button')].find(
+      (item) => item.textContent === '继续此条件',
+    )
+    expect(button).toBeDefined()
+    await act(async () => button?.click())
+    expect(requests).toContainEqual({
+      type: 'retry-product-experience-rule',
+      campaignId: 'campaign-product-001',
+      ruleId: 'rule-b',
+    })
+  })
+
+  it('closes mixed yes/no without a proof retry button', async () => {
+    const { container } = await renderPopup(
+      productState('observing', { zkTlsFinished: true, zkTlsProgress: [] }),
+    )
+    expect(container.textContent).toContain('验证完成，部分条件不满足')
+    expect(container.textContent).not.toContain('继续证明')
+    expect(container.textContent).not.toContain('证明失败')
+  })
+
+  it('labels unexecuted conditions as unnecessary after authoritative overall completion', async () => {
+    const { container } = await renderPopup(
+      productState('verified', {
+        zkTlsFinished: true,
+        matchedRuleIds: ['rule-a'],
+        zkTlsProgress: [
+          {
+            ruleId: 'rule-b',
+            title: 'Unexecuted',
+            status: 'PENDING',
+            current: null,
+            target: true,
+            unit: null,
+          },
+        ],
+        zkTlsConditions: [
+          {
+            ruleId: 'rule-b',
+            status: 'pending',
+            code: null,
+            stage: null,
+            correlationId: null,
+          },
+        ],
+      }),
+    )
+    expect(container.textContent).toContain('未验证，无需继续')
+    expect(container.textContent).not.toContain('等待证明')
+    expect(container.textContent).not.toContain('重试此条件')
+    expect(container.textContent).not.toContain('继续此条件')
+  })
+
   it('shows captured proof stages and exact safe failure details', async () => {
     const { container } = await renderPopup(
       productState('observing', {
@@ -527,6 +618,17 @@ describe('product experience popup', () => {
         ),
       ).toEqual([{ type: 'start-product-experience' }])
     })
+  })
+
+  it('offers an explicit confirmation query for a submitted proof', async () => {
+    const harness = await renderPopup(
+      productState('submitting', { zkTlsProgress: [] }),
+    )
+    await act(async () => findButton(harness.container, '查询证明结果').click())
+    expect(harness.requests).toContainEqual({
+      type: 'start-product-experience',
+    })
+    expect(harness.container.textContent).not.toContain('重试证明')
   })
 
   it('shows verified only for the authoritative verified state', async () => {

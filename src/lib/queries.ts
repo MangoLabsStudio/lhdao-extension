@@ -1,8 +1,11 @@
 import productExperienceGraphql from '../graphql/product-experience.graphql?raw'
+import productExecutionGraphql from '../graphql/product-experience-execution.graphql?raw'
 import type {
   ProductExperienceCondition,
   ProductExperienceTicket,
+  ProductIntegrationCheck,
   ProductRuleMatch,
+  ProductZkTlsExecutionPlan,
   ProductZkTlsProgressStatus,
   ProductZkTlsRuleProgress,
   ProductZkTlsScalar,
@@ -672,6 +675,7 @@ export interface CreateAutoReinvestResult {
 // contract-validation 文件出现两份可能漂移的 query。
 
 export const PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT = productExperienceGraphql
+export const PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT = productExecutionGraphql
 export const MintProductExperienceTicketOperationName =
   'MintProductExperienceTicket'
 export const MintProductExperienceTestTicketOperationName =
@@ -926,7 +930,8 @@ function requireProductZkTlsStatus(value: unknown): ProductZkTlsProgressStatus {
     value === 'SUBMITTED' ||
     value === 'PARTIAL' ||
     value === 'INSUFFICIENT_DATA' ||
-    value === 'VERIFIED'
+    value === 'VERIFIED' ||
+    value === 'VERIFIED_NO'
   ) {
     return value
   }
@@ -1098,11 +1103,81 @@ function parseProductZkTlsSession(value: unknown): ProductZkTlsSession {
     'sessionId',
     'connectorId',
     'expiresAt',
+    ...(Object.hasOwn(requireRecord(value), 'executionPlan')
+      ? ['executionPlan']
+      : []),
   ])
   return {
     sessionId: requireString(session, 'sessionId'),
     connectorId: requireString(session, 'connectorId'),
     expiresAt: requireDateTime(session, 'expiresAt'),
+    ...(Object.hasOwn(session, 'executionPlan')
+      ? {
+          executionPlan:
+            session.executionPlan === null
+              ? null
+              : parseExecutionPlan(session.executionPlan),
+        }
+      : {}),
+  }
+}
+
+function parseExecutionPlan(value: unknown): ProductZkTlsExecutionPlan {
+  const plan = requireExactRecord(value, ['version', 'steps'])
+  if (
+    plan.version !== 1 ||
+    !Array.isArray(plan.steps) ||
+    plan.steps.length > 100
+  )
+    return invalidProductExperienceResponse()
+  const ids = (value: unknown): string[] => {
+    if (
+      !Array.isArray(value) ||
+      value.length > 100 ||
+      value.some(
+        (id) => typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(id),
+      ) ||
+      new Set(value).size !== value.length
+    )
+      return invalidProductExperienceResponse()
+    return [...value]
+  }
+  const seen = new Set<string>()
+  return {
+    version: 1,
+    steps: plan.steps.map((value) => {
+      const step = requireExactRecord(value, [
+        'connectorId',
+        'triggerPaths',
+        'dependentFactIds',
+        'dependentRuleIds',
+      ])
+      const connectorId = ids([step.connectorId])[0]
+      if (seen.has(connectorId)) return invalidProductExperienceResponse()
+      seen.add(connectorId)
+      const paths = step.triggerPaths
+      if (
+        !Array.isArray(paths) ||
+        paths.length > 5 ||
+        new Set(paths).size !== paths.length ||
+        paths.some(
+          (path) =>
+            typeof path !== 'string' ||
+            path.length > 2048 ||
+            !path.startsWith('/') ||
+            path.startsWith('//') ||
+            /[\\#]/.test(path) ||
+            [...path].some((character) => character.charCodeAt(0) <= 32),
+        )
+      )
+        return invalidProductExperienceResponse()
+      return {
+        connectorId,
+        triggerPaths: [...paths],
+        dependentFactIds: ids(step.dependentFactIds),
+        dependentRuleIds: ids(step.dependentRuleIds),
+      }
+    }),
   }
 }
 
@@ -1116,6 +1191,9 @@ function parseProductZkTlsRuleProgress(
     'current',
     'target',
     'unit',
+    ...['actual', 'required', 'comparator'].filter((key) =>
+      Object.hasOwn(requireRecord(value), key),
+    ),
   ])
   const unit = progress.unit
   if (
@@ -1142,6 +1220,20 @@ function parseProductZkTlsRuleProgress(
     current: requireProductZkTlsScalar(progress.current),
     target: requireProductZkTlsScalar(progress.target),
     unit,
+    ...(Object.hasOwn(progress, 'actual')
+      ? { actual: requireProductZkTlsScalar(progress.actual) }
+      : {}),
+    ...(Object.hasOwn(progress, 'required')
+      ? { required: requireProductZkTlsScalar(progress.required) }
+      : {}),
+    ...(Object.hasOwn(progress, 'comparator')
+      ? {
+          comparator:
+            progress.comparator === null
+              ? null
+              : requireBoundedText(progress, 'comparator', 32),
+        }
+      : {}),
   }
 }
 
@@ -1202,6 +1294,24 @@ export function parseStartProductZkTlsProofResult(
     startProductZkTlsProof: parseProductZkTlsSession(
       result.startProductZkTlsProof,
     ),
+  }
+}
+
+export function parseProductIntegrationStatusResult(
+  value: unknown,
+): ProductIntegrationCheck {
+  const result = requireExactRecord(value, ['productTrackerIntegrationStatus'])
+  const check = requireExactRecord(result.productTrackerIntegrationStatus, [
+    'configVersion',
+    'experiencePassed',
+    'experiencePassedAt',
+  ])
+  if (typeof check.experiencePassed !== 'boolean')
+    return invalidProductExperienceResponse()
+  return {
+    configVersion: requirePositiveInteger(check, 'configVersion'),
+    experiencePassed: check.experiencePassed,
+    experiencePassedAt: requireNullableDateTime(check, 'experiencePassedAt'),
   }
 }
 

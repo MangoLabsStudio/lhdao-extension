@@ -9,7 +9,7 @@ import {
   transcriptRevealRanges,
   verifierUrls,
 } from '@/entrypoints/zktls-offscreen/worker'
-import { CaptureSession } from '@/lib/zktls/capture'
+import { CaptureSession, createCaptureBinding } from '@/lib/zktls/capture'
 import {
   assertConnectorAvailable,
   canonicalJson,
@@ -34,6 +34,173 @@ import {
   assertTicketAvailable,
   fetchAndVerifySignedConfig,
 } from '@/lib/zktls/signed-config'
+
+const DISCOVERY_FIXTURE = JSON.parse(
+  readFileSync('test/fixtures/product-zktls-discovery-workbench.json', 'utf8'),
+)
+
+test('consumes frozen discovery Ed25519 envelopes and exact disclosure transcripts', async () => {
+  for (const entry of DISCOVERY_FIXTURE.cases) {
+    const registration = entry.registration
+    const response = {
+      config_envelope: {
+        key_id: registration.keyId,
+        config: entry.connector,
+        config_digest: entry.configDigest,
+        signature: registration.configSignature,
+      },
+      ticket_envelope: {
+        key_id: registration.keyId,
+        ticket: registration.ticket,
+        signature: registration.ticketSignature,
+      },
+    }
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+    try {
+      const verified = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        {
+          publicKeys: {
+            [registration.keyId]: {
+              kty: 'OKP',
+              crv: 'Ed25519',
+              x: registration.publicKeyBase64url,
+            },
+          },
+          now: '2029-12-31T23:52:00.000Z',
+          local: true,
+        },
+      )
+      expect(canonicalJson(verified.config)).toBe(entry.connectorCanonicalJson)
+      expect(Object.isFrozen(verified.config)).toBe(true)
+      await expect(configDigest(verified.config)).resolves.toBe(
+        entry.configDigest,
+      )
+      const sent = new Uint8Array(
+        Buffer.from(entry.requestBase64url, 'base64url'),
+      )
+      const recv = new Uint8Array(
+        Buffer.from(entry.responseBase64url, 'base64url'),
+      )
+      const requestUrl = new URL(entry.observation.url)
+      if (verified.config.interpreter_version !== 4)
+        throw new Error('expected V4 fixture')
+      const message = {
+        id: 'discovery-worker',
+        type: 'zktls-worker-prove' as const,
+        connectorId: verified.config.connector_id,
+        sessionId: registration.ticket.session_id,
+        ...verified,
+        config: verified.config,
+        captured: {
+          method: entry.connector.request.method,
+          path: requestUrl.pathname + requestUrl.search,
+          secrets: {},
+          ...(entry.observation.requestBody
+            ? {
+                body: entry.observation.requestBody,
+                content_type: 'application/json' as const,
+              }
+            : {}),
+        },
+      }
+      await expect(
+        transcriptRevealRanges(message, sent, recv),
+      ).resolves.toEqual({
+        sent: [{ start: 0, end: sent.length }],
+        recv: [{ start: 0, end: recv.length }],
+      })
+      const registrationPayload = sessionRegistrationPayload(message)
+      expect(registrationPayload).toMatchObject({
+        config_envelope: { config_digest: entry.configDigest },
+      })
+      fetch.mockResolvedValue(
+        jsonResponse({
+          ...response,
+          config_envelope: { ...response.config_envelope, signature: 'bad' },
+        }),
+      )
+      await expect(
+        fetchAndVerifySignedConfig('http://localhost/config', {
+          publicKeys: {
+            [registration.keyId]: {
+              kty: 'OKP',
+              crv: 'Ed25519',
+              x: registration.publicKeyBase64url,
+            },
+          },
+          now: '2029-12-31T23:52:00.000Z',
+          local: true,
+        }),
+      ).rejects.toThrow()
+    } finally {
+      fetch.mockRestore()
+    }
+  }
+})
+
+test('matches shared discovery GET/JSON POST only through signed exact capture', () => {
+  for (const entry of DISCOVERY_FIXTURE.cases) {
+    const config = entry.connector
+    const capture = new CaptureSession(
+      createCaptureBinding({
+        interpreterVersion: 4,
+        maxSentData: 8192,
+        tabId: 7,
+        frameId: 0,
+        sessionId: entry.registration.ticket.session_id,
+        providerId: config.connector_id,
+        revision: 1,
+        pageOrigin: config.page_origin,
+        targetOrigin: config.origin,
+        method: config.request.method,
+        matcher: config.request.matcher,
+        ...(config.request.body
+          ? {
+              template: config.request.body,
+              contentType: config.request.content_type,
+            }
+          : {}),
+        variables: config.variables,
+        resolvedVariables: config.resolved_variables,
+      }),
+    )
+    const request = {
+      requestId: 'discovery-request',
+      tabId: 7,
+      frameId: 0,
+      method: config.request.method,
+      url: entry.observation.url,
+      type: entry.resourceType === 'XHR' ? 'xmlhttprequest' : 'fetch',
+      initiator: config.page_origin,
+      requestHeaders: Object.entries(entry.observation.requestHeaders).map(
+        ([name, value]) => ({ name, value: String(value) }),
+      ),
+    }
+    capture.observe({ ...request, url: `${config.origin}/wrong` })
+    expect(() => capture.take()).toThrow()
+    if (entry.observation.requestBody)
+      capture.observeBody({
+        ...request,
+        requestBody: {
+          raw: [
+            {
+              bytes: new TextEncoder().encode(entry.observation.requestBody)
+                .buffer,
+            },
+          ],
+        },
+      })
+    capture.observe(request)
+    const url = new URL(entry.observation.url)
+    expect(capture.take()).toMatchObject({
+      path: url.pathname + url.search,
+      secrets: {},
+    })
+  }
+})
 
 const connector = {
   interpreter_version: 1,
@@ -481,6 +648,142 @@ async function signedV4Envelopes(
 }
 
 describe('zkTLS strict boundaries', () => {
+  test('parses and deeply freezes signed V4 trigger paths without changing their order', async () => {
+    const config = {
+      ...v4Connector(),
+      trigger_paths: ['/account?tab=history', '/dashboard'],
+    }
+    const direct = validateConnector(config)
+    expect(direct).toMatchObject({ trigger_paths: config.trigger_paths })
+    expect(
+      Object.isFrozen((direct as Record<string, unknown>).trigger_paths),
+    ).toBe(true)
+    config.trigger_paths[0] = '/changed'
+    expect(direct).toMatchObject({
+      trigger_paths: ['/account?tab=history', '/dashboard'],
+    })
+    const {
+      publicKeys,
+      signTicket: _signTicket,
+      ...response
+    } = await signedV4Envelopes(config)
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+    try {
+      const result = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        { publicKeys, now: '2026-08-15T00:00:00.000Z', local: true },
+      )
+      expect(result.config).toMatchObject({
+        trigger_paths: ['/changed', '/dashboard'],
+      })
+      expect(
+        Object.isFrozen(
+          (result.config as Record<string, unknown>).trigger_paths,
+        ),
+      ).toBe(true)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('preserves the legacy V4 canonical payload when trigger paths are absent', () => {
+    const config = v4Connector()
+    const parsed = validateConnector(config)
+    expect(Object.hasOwn(parsed, 'trigger_paths')).toBe(false)
+    expect(canonicalJson(parsed)).toBe(canonicalJson(config))
+  })
+
+  test.each([
+    ['/'],
+    ['/a', '/b', '/c', '/d', '/e'],
+    [`/${'a'.repeat(2047)}`],
+    ['/a%2Fb?fragment=%23'],
+    ['/a%252F?value=%2500'],
+    ['/caf%C3%A9'],
+  ])('accepts canonical V4 trigger paths %#', (...trigger_paths) => {
+    expect(
+      validateConnector({ ...v4Connector(), trigger_paths }),
+    ).toMatchObject({ trigger_paths })
+  })
+
+  test.each([
+    [],
+    ['/a', '/b', '/c', '/d', '/e', '/f'],
+    ['/a', '/a'],
+    ['/a', 3],
+    ['/a/../b'],
+    ['/./a'],
+    ['//evil.example/a'],
+    ['https://evil.example/a'],
+    ['/a#b'],
+    ['/a?'],
+    ['/a\\b'],
+    ['/a\n'],
+    ['/a%5Cb'],
+    ['/a%00'],
+    ['/a%7F'],
+    ['/a%C2%80'],
+    ['/a%D8%9C'],
+    ['/a%E2%80%8E'],
+    ['/a%E2%80%8F'],
+    ['/a%E2%80%AA'],
+    ['/a%E2%80%AE'],
+    ['/a%E2%81%A6'],
+    ['/a%E2%81%A9'],
+    ['/a%2fb'],
+    ['/a%2'],
+    ['/a%GG'],
+    ['/a%FF'],
+    ['/a%C0%AF'],
+    ['/a%ED%A0%80'],
+    ['/a%41'],
+    ['/a%30'],
+    ['/a%2E'],
+    ['/a%5F'],
+    ['/a%7E'],
+    ['/a%2D'],
+    ['/café'],
+    ['/a b'],
+    [`/${'a'.repeat(2048)}`],
+  ])('rejects invalid V4 trigger paths %#', (...trigger_paths) => {
+    expect(() =>
+      validateConnector({ ...v4Connector(), trigger_paths }),
+    ).toThrow()
+  })
+
+  test('rejects non-plain V4 trigger paths without invoking accessors', () => {
+    let reads = 0
+    const accessor = ['/a']
+    Object.defineProperty(accessor, '0', {
+      enumerable: true,
+      get() {
+        reads += 1
+        return '/a'
+      },
+    })
+    const hidden = ['/a']
+    Object.defineProperty(hidden, '0', { enumerable: false, value: '/a' })
+    const exotic = Object.setPrototypeOf(['/a'], {})
+    for (const trigger_paths of [
+      undefined,
+      null,
+      '/a',
+      Array(1),
+      accessor,
+      hidden,
+      exotic,
+      new Proxy(['/a'], {}),
+      Object.assign(['/a'], { extra: true }),
+    ]) {
+      expect(() =>
+        validateConnector({ ...v4Connector(), trigger_paths }),
+      ).toThrow()
+    }
+    expect(reads).toBe(0)
+  })
+
   test('verifies a real signed V4 config and ticket envelope round-trip', async () => {
     const payload = await signedV4Envelopes()
     const { publicKeys, signTicket: _signTicket, ...response } = payload
@@ -2667,6 +2970,82 @@ describe('zkTLS strict boundaries', () => {
 })
 
 describe('zkTLS V4 page and target permissions', () => {
+  test.each([
+    undefined,
+    DISCOVERY_FIXTURE.cases[3],
+  ])('arms exact capture before visiting only signed triggers and pauses after the bounded sequence %#', async (entry) => {
+    vi.useFakeTimers()
+    const raw = entry?.connector ?? {
+      ...v4Connector(),
+      trigger_paths: ['/balances', '/history'],
+    }
+    const config = validateConnector(raw)
+    const signed = await signedV4Envelopes(raw)
+    signed.ticket_envelope.ticket.connector_id = config.connector_id
+    signed.ticket_envelope.signature = await signed.signTicket(
+      signed.ticket_envelope.ticket,
+    )
+    vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
+      config,
+      ticket: signed.ticket_envelope.ticket,
+      configEnvelope: { ...signed.config_envelope, config },
+      ticketEnvelope: signed.ticket_envelope,
+    })
+    Object.assign(ZKTLS_PROFILE, {
+      enabled: true,
+      apiEndpoint: 'https://service.lhdao.top/zktls/config',
+      verifierProfileId: 'lighthouse-v1',
+    })
+    const order: string[] = []
+    vi.spyOn(chrome.permissions, 'contains').mockImplementation((async () => {
+      order.push('permission')
+      return true
+    }) as never)
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([])
+    vi.spyOn(chrome.tabs, 'create').mockImplementation((async (input: {
+      url: string
+    }) => {
+      order.push(input.url)
+      return { id: 7, url: input.url }
+    }) as never)
+    vi.spyOn(chrome.tabs, 'update').mockImplementation((async (
+      _id: number,
+      input: { url?: string },
+    ) => {
+      order.push(input.url!)
+      return { id: 7, url: input.url }
+    }) as never)
+    const diagnostics = vi.fn((event: { stage: string }) => {
+      order.push(event.stage)
+    })
+    const result = proveZkTlsSession({
+      correlationId: 'signed-trigger',
+      sessionId: 's1',
+      connectorId: config.connector_id,
+      onDiagnostic: diagnostics,
+    })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(order).toEqual(
+      expect.arrayContaining([
+        'permission',
+        'about:blank',
+        'capture-ready',
+        `${raw.page_origin}${raw.trigger_paths[0]}`,
+      ]),
+    )
+    expect(order.indexOf('capture-ready')).toBeLessThan(
+      order.indexOf(`${raw.page_origin}${raw.trigger_paths[0]}`),
+    )
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(order).toContain(`${raw.page_origin}${raw.trigger_paths[1]}`)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await expect(result).resolves.toMatchObject({
+      status: 'action_required',
+      code: 'NO_REQUEST_OBSERVED',
+    })
+    expect(chrome.tabs.update).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
   beforeEach(() => {
     const removed = chrome.permissions.onRemoved as unknown as {
       addListener(
@@ -3229,7 +3608,7 @@ describe('zkTLS V4 page and target permissions', () => {
   })
 
   test('ignores a malformed body event and submits a later exact V4 request', async () => {
-    const rawConfig = v4Connector()
+    const rawConfig = { ...v4Connector(), trigger_paths: ['/first', '/second'] }
     const config = validateConnector(rawConfig)
     const signed = await signedV4Envelopes(rawConfig)
     vi.spyOn(signedConfig, 'fetchAndVerifySignedConfig').mockResolvedValue({
@@ -3249,6 +3628,10 @@ describe('zkTLS V4 page and target permissions', () => {
     vi.spyOn(chrome.tabs, 'query').mockResolvedValue([
       { id: 7, url: 'https://app.example.com/dashboard' } as chrome.tabs.Tab,
     ])
+    vi.spyOn(chrome.tabs, 'create').mockImplementation((async () => ({
+      id: 7,
+      url: 'about:blank',
+    })) as never)
     vi.spyOn(chrome.tabs, 'update').mockImplementation((async () => ({
       id: 7,
       url: 'https://app.example.com/dashboard',
@@ -3342,6 +3725,11 @@ describe('zkTLS V4 page and target permissions', () => {
       status: 'submitted',
     })
     expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(chrome.tabs.update).toHaveBeenCalledTimes(1)
+    expect(chrome.tabs.update).toHaveBeenCalledWith(7, {
+      active: true,
+      url: 'https://app.example.com/first',
+    })
     expect(submittedMessage).toEqual(
       expect.objectContaining({
         type: 'zktls-offscreen-prove',

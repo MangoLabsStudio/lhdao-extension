@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  PRODUCT_EXPERIENCE_CAPABILITY,
+  PRODUCT_EXPERIENCE_CAPABILITIES,
   PRODUCT_EXPERIENCE_PAGE_CHANNEL,
   parseProductExperiencePageRequest,
   projectPublicProductExperienceState,
@@ -38,6 +38,261 @@ function saveRequest(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseProductExperiencePageRequest', () => {
+  it('accepts only a scoped retry and advertises discovery and execution capabilities', () => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      type: 'retry-product-experience-rule',
+      correlationId: 'retry-123456',
+      campaignId: 'campaign-a',
+      ruleId: 'rule-a',
+    }
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toEqual(request)
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent({ ...request, triggerPaths: ['/steal'] }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request, { origin: 'https://evil.example' }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+    expect(
+      projectPublicProductExperienceState('campaign-a', null, '0.2.2')
+        .capabilities,
+    ).toEqual([
+      'product-experience-v1',
+      'product-zktls-discovery-v1',
+      'product-zktls-execution-v1',
+    ])
+  })
+  const discoveryRequests = [
+    { type: 'start-discovery', targetUrl: 'https://app.example.com' },
+    { type: 'start-discovery', targetUrl: 'https://app.example.com/account' },
+    { type: 'stop-discovery', sessionId: 'discovery-12345678' },
+    { type: 'get-discovery-snapshot', sessionId: 'discovery-12345678' },
+  ]
+
+  it.each(
+    discoveryRequests,
+  )('accepts exact discovery request $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toEqual(request)
+  })
+
+  it.each(
+    discoveryRequests,
+  )('rejects unsafe discovery request $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    for (const extra of [
+      { tabId: 4 },
+      { ownerTabId: 4 },
+      { body: 'secret' },
+      { headers: {} },
+      { correlationId: '' },
+    ]) {
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent({ ...request, ...extra }),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+    }
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request, { source: null }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(request, { origin: 'https://evil.example' }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+  })
+
+  it.each(
+    discoveryRequests,
+  )('rejects discovery accessors without reading them: $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    for (const field of Object.keys(request)) {
+      let reads = 0
+      const candidate = { ...request }
+      Object.defineProperty(candidate, field, {
+        enumerable: true,
+        get() {
+          reads += 1
+          return reads === 1
+            ? request[field as keyof typeof request]
+            : 'javascript:alert(1)'
+        },
+      })
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent(candidate),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+      expect(reads).toBe(0)
+    }
+  })
+
+  it('rejects a targetUrl getter that changes from HTTPS to javascript without invoking it', () => {
+    let reads = 0
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      type: 'start-discovery',
+      get targetUrl() {
+        reads += 1
+        return reads === 1 ? 'https://app.example.com/' : 'javascript:alert(1)'
+      },
+    }
+    const parsed = parseProductExperiencePageRequest(
+      messageEvent(request),
+      pageWindow,
+      LIGHTHOUSE_ORIGIN,
+    )
+    expect(parsed).toBeNull()
+    expect(reads).toBe(0)
+  })
+
+  it.each(
+    discoveryRequests,
+  )('rejects discovery hidden and symbol keys: $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    for (const key of ['tabId', 'ownerTabId', Symbol('tabId')]) {
+      const candidate = Object.defineProperty({ ...request }, key, {
+        value: 4,
+        enumerable: false,
+      })
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent(candidate),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+    }
+    const candidate = Object.defineProperty({ ...request }, 'type', {
+      value: request.type,
+      enumerable: false,
+    })
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent(candidate),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+  })
+
+  it.each(
+    discoveryRequests,
+  )('rejects discovery proxies and exotic prototypes: $type', (fields) => {
+    const request = {
+      channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+      correlationId: 'request-12345678',
+      ...fields,
+    }
+    const { proxy, revoke } = Proxy.revocable(request, {})
+    revoke()
+    for (const candidate of [
+      new Proxy(request, {}),
+      proxy,
+      Object.setPrototypeOf({ ...request }, { tabId: 4 }),
+    ]) {
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent(candidate),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+    }
+  })
+
+  it.each([
+    '',
+    'http://app.example.com',
+    'javascript:alert(1)',
+    'https://user:pass@app.example.com',
+    'https://app.example.com/#secret',
+    'https://app.example.com/\npath',
+    `https://app.example.com/${'x'.repeat(2048)}`,
+  ])('rejects invalid discovery target %s', (targetUrl) => {
+    expect(
+      parseProductExperiencePageRequest(
+        messageEvent({
+          channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+          correlationId: 'request-12345678',
+          type: 'start-discovery',
+          targetUrl,
+        }),
+        pageWindow,
+        LIGHTHOUSE_ORIGIN,
+      ),
+    ).toBeNull()
+  })
+
+  it.each([
+    '',
+    'space session',
+    'x'.repeat(129),
+  ])('rejects invalid discovery session %s', (sessionId) => {
+    for (const type of ['stop-discovery', 'get-discovery-snapshot']) {
+      expect(
+        parseProductExperiencePageRequest(
+          messageEvent({
+            channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+            correlationId: 'request-12345678',
+            type,
+            sessionId,
+          }),
+          pageWindow,
+          LIGHTHOUSE_ORIGIN,
+        ),
+      ).toBeNull()
+    }
+  })
+
   it('accepts a strictly shaped task-save request from the Lighthouse window', () => {
     expect(
       parseProductExperiencePageRequest(
@@ -189,7 +444,7 @@ describe('projectPublicProductExperienceState', () => {
       authorizationRequired: false,
       currentOriginAllowed: true,
       version: '0.2.0',
-      capabilities: [PRODUCT_EXPERIENCE_CAPABILITY],
+      capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
       error: null,
     })
     expect(Object.keys(projected).sort()).toEqual([
@@ -232,7 +487,7 @@ describe('projectPublicProductExperienceState', () => {
       authorizationRequired: false,
       currentOriginAllowed: false,
       version: '0.2.0',
-      capabilities: [PRODUCT_EXPERIENCE_CAPABILITY],
+      capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
       error: null,
     })
   })

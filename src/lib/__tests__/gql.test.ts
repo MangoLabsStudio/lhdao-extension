@@ -467,6 +467,96 @@ describe('gql transport outcomes', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('parses a unique connector execution plan and authoritative verified-no values', () => {
+    const document = requireQueryExport<string>(
+      'PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT',
+      'string',
+    )
+    expect(document).toContain('executionPlan')
+    expect(document).toContain('productTrackerIntegrationStatus')
+    const parseStart = requireQueryExport<(value: unknown) => unknown>(
+      'parseStartProductZkTlsProofResult',
+      'function',
+    )
+    const executionPlan = {
+      version: 1,
+      steps: [
+        {
+          connectorId: 'metric',
+          triggerPaths: ['/history'],
+          dependentFactIds: ['fact-a', 'fact-b'],
+          dependentRuleIds: ['rule-a', 'rule-b'],
+        },
+      ],
+    }
+    const session = {
+      sessionId: 's1',
+      connectorId: 'metric',
+      expiresAt: '2026-07-13T10:30:00.000Z',
+      executionPlan,
+    }
+    expect(parseStart({ startProductZkTlsProof: session })).toEqual({
+      startProductZkTlsProof: session,
+    })
+    expect(() =>
+      parseStart({
+        startProductZkTlsProof: {
+          ...session,
+          executionPlan: {
+            ...executionPlan,
+            steps: [...executionPlan.steps, ...executionPlan.steps],
+          },
+        },
+      }),
+    ).toThrow()
+    const parseProgress = requireQueryExport<(value: unknown) => unknown>(
+      'parseProductZkTlsRuleProgressResult',
+      'function',
+    )
+    const progress = {
+      ruleId: 'rule-a',
+      title: 'Amount',
+      status: 'VERIFIED_NO',
+      current: 2,
+      target: 3,
+      actual: 2,
+      required: 3,
+      comparator: 'GTE',
+      unit: null,
+    }
+    expect(parseProgress({ productZkTlsRuleProgress: [progress] })).toEqual({
+      productZkTlsRuleProgress: [progress],
+    })
+  })
+
+  it('parses only the bounded authoritative integration check fields', () => {
+    const parse = requireQueryExport<(value: unknown) => unknown>(
+      'parseProductIntegrationStatusResult',
+      'function',
+    )
+    const check = {
+      configVersion: 3,
+      experiencePassed: true,
+      experiencePassedAt: '2026-07-13T10:00:01.000Z',
+    }
+    expect(parse({ productTrackerIntegrationStatus: check })).toEqual(check)
+    expect(() =>
+      parse({
+        productTrackerIntegrationStatus: { ...check, configVersion: 0 },
+      }),
+    ).toThrow()
+    expect(() =>
+      parse({
+        productTrackerIntegrationStatus: { ...check, experiencePassed: 'true' },
+      }),
+    ).toThrow()
+    expect(() =>
+      parse({
+        productTrackerIntegrationStatus: { ...check, rawSample: 'private' },
+      }),
+    ).toThrow()
+  })
+
   it.each([
     ['an empty body', () => new Response('', { status: 200 })],
     [

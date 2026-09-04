@@ -7,6 +7,7 @@ export type ProductZkTlsProgressStatus =
   | 'PARTIAL'
   | 'INSUFFICIENT_DATA'
   | 'VERIFIED'
+  | 'VERIFIED_NO'
 export type ProductZkTlsScalar = boolean | number | string | null
 
 export interface ProductZkTlsDiagnosticEvent {
@@ -73,6 +74,23 @@ export interface ProductZkTlsSession {
   sessionId: string
   connectorId: string
   expiresAt: string
+  executionPlan?: ProductZkTlsExecutionPlan | null
+}
+
+export interface ProductZkTlsExecutionPlan {
+  version: 1
+  steps: Array<{
+    connectorId: string
+    triggerPaths: string[]
+    dependentFactIds: string[]
+    dependentRuleIds: string[]
+  }>
+}
+
+export interface ProductIntegrationCheck {
+  configVersion: number
+  experiencePassed: boolean
+  experiencePassedAt: string | null
 }
 
 export interface ProductZkTlsRuleProgress {
@@ -82,4 +100,7 @@ export interface ProductZkTlsRuleProgress {
   current: ProductZkTlsScalar
   target: ProductZkTlsScalar
   unit: string | null
+  actual?: ProductZkTlsScalar
+  required?: ProductZkTlsScalar
+  comparator?: string | null
 }

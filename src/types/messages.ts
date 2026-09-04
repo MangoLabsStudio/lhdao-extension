@@ -25,6 +25,7 @@ import type {
   TweetCampaignSummary,
   UserProfile,
 } from '@/lib/storage'
+import type { DiscoveryResponse } from '@/lib/zktls/discovery/session-manager'
 import type {
   ProductExperienceRule,
   ProductExperienceTaskRef,
@@ -38,6 +39,10 @@ import type {
 export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
 
 export type MsgRequest =
+  | { type: 'start-discovery'; correlationId: string; targetUrl: string }
+  | { type: 'stop-discovery'; correlationId: string; sessionId: string }
+  | { type: 'get-discovery-snapshot'; correlationId: string; sessionId: string }
+  | { type: 'discovery-snapshot-changed' }
   | {
       type: 'zktls-prove'
       correlationId: string
@@ -63,6 +68,12 @@ export type MsgRequest =
       correlationId: string
     }
   | { type: 'start-product-experience' }
+  | {
+      type: 'retry-product-experience-rule'
+      campaignId: string
+      ruleId: string
+      correlationId?: string
+    }
   | { type: 'product-experience-bootstrap' }
   | { type: 'product-experience-ready'; sessionId: string }
   | {
@@ -234,6 +245,7 @@ export type MsgRequest =
 // ── Responses ────────────────────────────────────────────────────────
 
 export type MsgResponse =
+  | DiscoveryResponse
   | {
       type: 'zktls-prove-result'
       correlationId: string

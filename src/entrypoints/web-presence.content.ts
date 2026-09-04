@@ -12,9 +12,11 @@
 
 import { WEB_ENDPOINT, WEB_MATCH_PATTERN } from '@/lib/env'
 import {
+  PRODUCT_EXPERIENCE_CAPABILITIES,
   PRODUCT_EXPERIENCE_PAGE_CHANNEL,
   parseProductExperiencePageRequest,
 } from '@/lib/product-experience-task-bridge'
+import { parseDiscoveryResponse } from '@/lib/zktls/discovery/response-contract'
 import {
   parseZkTlsPageRequest,
   ZKTLS_PAGE_CHANNEL,
@@ -50,7 +52,11 @@ export default defineContentScript({
     const pong = (): void => {
       try {
         window.postMessage(
-          { __lhdaoExtPong__: true, version },
+          {
+            __lhdaoExtPong__: true,
+            version,
+            capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
+          },
           window.location.origin,
         )
       } catch {
@@ -111,11 +117,40 @@ export default defineContentScript({
         return true
       }
 
+      if (
+        request.type === 'start-discovery' ||
+        request.type === 'stop-discovery' ||
+        request.type === 'get-discovery-snapshot'
+      ) {
+        const { channel: _channel, ...runtimeRequest } = request
+        void chrome.runtime
+          .sendMessage(runtimeRequest)
+          .then((input: unknown) => {
+            const response = parseDiscoveryResponse(input, runtimeRequest)
+            if (!response) {
+              postProductError(request.correlationId, request.type)
+              return
+            }
+            window.postMessage(
+              {
+                channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+                ...response,
+              },
+              LIGHTHOUSE_ORIGIN,
+            )
+          })
+          .catch(() => postProductError(request.correlationId, request.type))
+        return true
+      }
+
       void chrome.runtime
         .sendMessage({
           type: request.type,
           campaignId: request.campaignId,
           correlationId: request.correlationId,
+          ...(request.type === 'retry-product-experience-rule'
+            ? { ruleId: request.ruleId }
+            : {}),
         })
         .then((response: MsgResponse) => {
           if (
@@ -138,6 +173,13 @@ export default defineContentScript({
                 totalRuleCount: state.totalRuleCount,
                 authorizationRequired: state.authorizationRequired,
                 currentOriginAllowed: state.currentOriginAllowed,
+                ...(state.conditions
+                  ? {
+                      conditions: state.conditions,
+                      finished: state.finished,
+                      testPassed: state.testPassed,
+                    }
+                  : {}),
                 version: state.version,
                 capabilities: [...state.capabilities],
                 error: state.error,
@@ -294,7 +336,25 @@ export default defineContentScript({
     }
     window.addEventListener('message', onWindowMessage)
 
-    const onRuntimeMessage = (message: unknown): void => {
+    const onRuntimeMessage = (
+      message: unknown,
+      sender: chrome.runtime.MessageSender,
+    ): void => {
+      if (
+        sender.id === chrome.runtime.id &&
+        typeof message === 'object' &&
+        message !== null &&
+        (message as { type?: unknown }).type === 'discovery-snapshot-changed'
+      ) {
+        window.postMessage(
+          {
+            channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
+            type: 'discovery-snapshot-changed',
+          },
+          LIGHTHOUSE_ORIGIN,
+        )
+        return
+      }
       if (
         typeof message !== 'object' ||
         message === null ||
