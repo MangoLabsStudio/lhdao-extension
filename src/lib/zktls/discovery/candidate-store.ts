@@ -109,7 +109,7 @@ function shape(input: Record<string, Json>): Record<string, string> {
   )
 }
 
-/** All retained values are already redacted. No raw bodies, headers, or CDP IDs. */
+/** Retained values are credential-filtered. No raw bodies, headers, or CDP IDs. */
 export class CandidateStore {
   private entries = new Map<string, DiscoveryCandidate>()
   private bytes = 0

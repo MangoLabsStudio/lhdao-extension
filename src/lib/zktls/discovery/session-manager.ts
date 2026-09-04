@@ -239,7 +239,8 @@ export class DiscoverySessionManager {
             if (!this.active(session))
               return fail(session.reason ?? 'NO_SESSION')
             frame = record(record(tree?.frameTree)?.frame)
-            if (frame?.url !== 'about:blank') break
+            // A newly created Chrome tab may still have an empty root URL.
+            if (frame?.url !== '' && frame?.url !== 'about:blank') break
             if (session.epoch === epoch)
               await new Promise<void>((resolve) => {
                 session.targetLoaded = resolve

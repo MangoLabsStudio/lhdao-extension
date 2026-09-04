@@ -1215,7 +1215,7 @@
           "triggerPathSafe": true,
           "request": {
             "method": "GET",
-            "url": "https://api.example.com/v1/balance?account=%5BREDACTED%5D&cursor=opaque-cursor",
+            "url": "https://api.example.com/v1/balance?account=acct-1&cursor=opaque-cursor",
             "contentType": "",
             "headers": {},
             "body": null,
@@ -1297,7 +1297,7 @@
             "triggerPathSafe": true,
             "request": {
               "method": "GET",
-              "url": "https://api.example.com/v1/balance?account=%5BREDACTED%5D",
+              "url": "https://api.example.com/v1/balance?account=acct-1",
               "contentType": "",
               "headers": {},
               "body": null,
@@ -1547,7 +1547,7 @@
                 "content-type": "application/json"
               },
               "body": {
-                "account": "[REDACTED]"
+                "account": "acct-1"
               },
               "bodyState": "json",
               "bodyBytes": 20
@@ -1792,7 +1792,7 @@
             "triggerPathSafe": true,
             "request": {
               "method": "GET",
-              "url": "https://api.example.com/v1/activity?account=%5BREDACTED%5D",
+              "url": "https://api.example.com/v1/activity?account=acct-1",
               "contentType": "",
               "headers": {},
               "body": null,
@@ -2034,7 +2034,7 @@
             "triggerPathSafe": true,
             "request": {
               "method": "GET",
-              "url": "https://api.example.com/v1/balance?account=%5BREDACTED%5D",
+              "url": "https://api.example.com/v1/balance?account=acct-1",
               "contentType": "",
               "headers": {},
               "body": null,

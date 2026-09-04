@@ -92,14 +92,10 @@ describe('discovery candidate privacy and inference', () => {
       'request.amount',
     )
     const text = JSON.stringify(result)
-    for (const secret of [
-      'SECRET_QUERY',
-      'SECRET_AUTH',
-      'SECRET_COOKIE',
-      'SECRET_WALLET',
-      'alice',
-    ])
+    for (const secret of ['SECRET_QUERY', 'SECRET_AUTH', 'SECRET_COOKIE'])
       expect(text).not.toContain(secret)
+    expect(text).toContain('SECRET_WALLET')
+    expect(text).toContain('alice')
     expect(text).toContain('balances')
     expect(text).toContain('balance')
     expect(Object.isFrozen(result.candidates[0].samples[0])).toBe(true)
@@ -136,7 +132,7 @@ describe('discovery candidate privacy and inference', () => {
     ).toBe(true)
   })
 
-  it('removes credential echoes, account path/query/JSON IDs and emits only safe framing headers', () => {
+  it('removes credential echoes while retaining account identifiers and safe framing headers', () => {
     const store = new CandidateStore()
     store.add({
       ...observation(),
@@ -158,11 +154,11 @@ describe('discovery candidate privacy and inference', () => {
       'body-secret',
       'header-secret',
       'another-secret',
-      'alice',
-      '1234',
       'page-secret',
     ])
       expect(text).not.toContain(secret)
+    expect(text).toContain('alice')
+    expect(text).toContain('1234')
     expect(candidate.samples[0]).toMatchObject({
       pageOrigin: 'https://client.example',
       triggerPathSafe: false,
@@ -219,7 +215,7 @@ describe('discovery candidate privacy and inference', () => {
     })
   })
 
-  it('splits numeric operation selectors while masking generic identifiers', () => {
+  it('splits numeric operation selectors while retaining generic identifiers', () => {
     const store = new CandidateStore()
     for (const op of [1, 2])
       store.add({
@@ -230,7 +226,7 @@ describe('discovery candidate privacy and inference', () => {
       })
     expect(store.snapshot().candidates).toHaveLength(2)
     expect(store.snapshot().candidates[0].samples[0].response).toEqual({
-      id: '[REDACTED]',
+      id: '12345678901234567890',
       amount: '193425610999999999999',
     })
   })
@@ -266,11 +262,60 @@ describe('discovery candidate privacy and inference', () => {
           request: { headers: { 'x-client-type': 'web' } },
           response: {
             amount: '193425610999999999999',
-            accountId: '[REDACTED]',
-            wallet: '[REDACTED]',
+            accountId: '123456789012345678901',
+            wallet: '0x1234567890abcdef1234567890abcdef12345678',
           },
         },
       ],
+    })
+  })
+
+  it('shows local business identifiers while masking credentials and their echoes', () => {
+    const bearer = 'Bearer discovery-secret-credential'
+    const store = new CandidateStore()
+    store.add({
+      ...observation(),
+      requestHeaders: { Authorization: bearer },
+      responseBody: JSON.stringify({
+        id: 'deposit-123',
+        accountId: 'account-456',
+        wallet: '0x1234567890abcdef1234567890abcdef12345678',
+        walletAddress: '0xabcdef1234567890abcdef1234567890abcdef12',
+        accessToken: 'access-secret',
+        accessKeyId: 'access-key-secret',
+        refresh_token: 'refresh-secret',
+        jwt: 'short-jwt-secret',
+        apiKey: 'api-secret',
+        password: 'password-secret',
+        secret: 'plain-secret',
+        signature: 'signature-secret',
+        privateKey: 'private-secret',
+        hmacKey: 'hmac-secret',
+        sessionId: 'session-secret',
+        csrfToken: 'csrf-secret',
+        credential: 'credential-secret',
+        echoed: 'discovery-secret-credential',
+      }),
+    })
+    expect(store.snapshot().candidates[0].samples[0].response).toEqual({
+      id: 'deposit-123',
+      accountId: 'account-456',
+      wallet: '0x1234567890abcdef1234567890abcdef12345678',
+      walletAddress: '0xabcdef1234567890abcdef1234567890abcdef12',
+      accessToken: '[REDACTED]',
+      accessKeyId: '[REDACTED]',
+      refresh_token: '[REDACTED]',
+      jwt: '[REDACTED]',
+      apiKey: '[REDACTED]',
+      password: '[REDACTED]',
+      secret: '[REDACTED]',
+      signature: '[REDACTED]',
+      privateKey: '[REDACTED]',
+      hmacKey: '[REDACTED]',
+      sessionId: '[REDACTED]',
+      csrfToken: '[REDACTED]',
+      credential: '[REDACTED]',
+      echoed: '[REDACTED]',
     })
   })
 
@@ -887,19 +932,22 @@ describe('native discovery vertical slice', () => {
     expect(detach).toHaveBeenCalledTimes(1)
     expect(command).not.toHaveBeenCalled()
   })
-  it('waits for the initially blank target to navigate before reporting ready', async () => {
+  it.each([
+    'about:blank',
+    '',
+  ])('waits for initial target URL %j before reporting ready', async (initialUrl) => {
     command.mockImplementation(async (_target, method) =>
       method === 'Page.getFrameTree'
         ? {
             frameTree: {
-              frame: { id: 'root', loaderId: 'doc1', url: 'about:blank' },
+              frame: { id: 'root', loaderId: 'doc1', url: initialUrl },
             },
           }
         : {},
     )
     vi.spyOn(chrome.tabs, 'get').mockImplementation((async (id: number) => ({
       id,
-      url: id === 7 ? owner.url : 'about:blank',
+      url: id === 7 ? owner.url : initialUrl,
       pendingUrl: start.targetUrl,
     })) as never)
     const starting = manager.handle(start, owner)
@@ -925,6 +973,40 @@ describe('native discovery vertical slice', () => {
       ok: true,
       snapshot: { status: 'ready' },
     })
+  })
+  it.each([
+    'timeout',
+    'owner-close',
+    'cross-origin',
+  ])('keeps the %s boundary while waiting for an empty initial URL', async (ending) => {
+    command.mockImplementation(async (_target, method) =>
+      method === 'Page.getFrameTree'
+        ? { frameTree: { frame: { id: 'root', url: '' } } }
+        : {},
+    )
+    const starting = manager.handle(start, owner)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await Promise.race([starting, Promise.resolve('waiting')])).toBe(
+      'waiting',
+    )
+    if (ending === 'timeout') await vi.advanceTimersByTimeAsync(31000)
+    if (ending === 'owner-close') manager.tabRemoved(7)
+    if (ending === 'cross-origin') {
+      command.mockImplementation(async () => ({
+        frameTree: { frame: { id: 'root', url: 'https://elsewhere.example/' } },
+      }))
+      manager.tabUpdated(8, { status: 'complete' })
+    }
+    expect(await starting).toMatchObject({
+      ok: false,
+      code:
+        ending === 'timeout'
+          ? 'ATTACH_FAILED'
+          : ending === 'owner-close'
+            ? 'TAB_CLOSED'
+            : 'ORIGIN_CHANGED',
+    })
+    expect(detach).toHaveBeenCalledTimes(1)
   })
   it('uses debugger root metadata without target tabs URL permission and records actual SPA document path', async () => {
     vi.spyOn(chrome.tabs, 'get').mockImplementation((async (id: number) => ({

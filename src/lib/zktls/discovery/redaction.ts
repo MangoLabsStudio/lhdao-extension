@@ -61,12 +61,20 @@ export function safeClone(
   }
 }
 
+const normalizedKey = (key: string) =>
+  key.replace(/([a-z\d])([A-Z])/g, '$1_$2').toLowerCase()
+
 export const sensitiveKey = (key: string) =>
-  /(?:^|[_-])id$/i.test(key) ||
-  /cookie|authorization|auth|proxy.?auth|token|api.?key|password|passwd|secret|signature|private.?key|mac.?key|hmac|wallet|account|address|email|phone|profile|username|user.?id|customer.?id|session|csrf|xsrf|credential/i.test(
-    key,
+  /(?:^|[_.-])(?:cookie|authorization|auth|proxy[_.-]?auth|(?:access|refresh|id)[_.-]?token|token|jwt|bearer|api[_.-]?key|access[_.-]?key(?:[_.-]?id)?|password|passwd|secret|signature|private[_.-]?key|mac[_.-]?key|hmac(?:[_.-]?key)?|session(?:[_.-]?id)?|csrf(?:[_.-]?token)?|xsrf(?:[_.-]?token)?|credential)(?:$|[_.-])/.test(
+    normalizedKey(key),
+  )
+
+const businessIdentifierKey = (key: string) =>
+  /(?:^|[_.-])(?:id|wallet|wallet[_.-]?address|account|account[_.-]?id|address|user[_.-]?id|customer[_.-]?id)$/.test(
+    normalizedKey(key),
   )
 export const dynamicKey = (key: string) =>
+  businessIdentifierKey(key) ||
   businessTimeKey(key) ||
   /(?:^|[_.-])(?:id|nonce|cursor|timestamp|time|date|uuid)(?:$|[_.-])|(?:Id|Nonce|Cursor|Timestamp)$/.test(
     key,
@@ -100,7 +108,7 @@ function businessTime(value: string, key: string): boolean {
   )
 }
 
-/** Only redacted JSON crosses the store boundary; arbitrary headers never do. */
+/** Only credential-filtered JSON crosses the store boundary; arbitrary headers never do. */
 export function redact(
   value: Json,
   key = '',
@@ -109,15 +117,22 @@ export function redact(
   if (sensitiveKey(key)) return REDACTED
   if (typeof value === 'number' && secrets.includes(String(value)))
     return REDACTED
+  if (
+    businessIdentifierKey(key) &&
+    value !== null &&
+    typeof value !== 'string' &&
+    typeof value !== 'number'
+  )
+    return REDACTED
   if (typeof value === 'string') {
     if (secrets.some((secret) => value.includes(secret))) return REDACTED
+    if (/\bBearer\s|lhdao_pk_|[^\s@]+@[^\s@]+\.[^\s@]+/i.test(value))
+      return REDACTED
+    if (businessIdentifierKey(key))
+      return /^\d{4}-\d\d-\d\dT/.test(value) ? REDACTED : value
     if (businessTime(value, key)) return value
     const decimal = /^-?\d+(?:\.\d+)?$/.test(value)
-    if (
-      ((!decimal || dynamicKey(key)) && dynamicValue(value)) ||
-      /\bBearer\s|lhdao_pk_|[^\s@]+@[^\s@]+\.[^\s@]+/i.test(value)
-    )
-      return REDACTED
+    if ((!decimal || dynamicKey(key)) && dynamicValue(value)) return REDACTED
     if (/^https?:\/\//i.test(value))
       return redactUrl(value, secrets)?.url ?? REDACTED
     return value
