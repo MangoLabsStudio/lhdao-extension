@@ -5,16 +5,66 @@
     "currency": "LUX",
     "precision": 8,
     "lines": [
-      { "actionType": "LIKE", "tier": "S", "pricingSource": "LEGACY", "unitPrice": "0.00000000" },
-      { "actionType": "LIKE", "tier": "A", "pricingSource": "PILOT", "unitPrice": "0.39000000" },
-      { "actionType": "LIKE", "tier": "B", "pricingSource": "PILOT", "unitPrice": "0.29250000" },
-      { "actionType": "LIKE", "tier": "C", "pricingSource": "LEGACY", "unitPrice": "0.20000000" },
-      { "actionType": "LIKE", "tier": "D", "pricingSource": "LEGACY", "unitPrice": "0.10000000" },
-      { "actionType": "RT", "tier": "S", "pricingSource": "LEGACY", "unitPrice": "0.00000000" },
-      { "actionType": "RT", "tier": "A", "pricingSource": "PILOT", "unitPrice": "19.50000000" },
-      { "actionType": "RT", "tier": "B", "pricingSource": "PILOT", "unitPrice": "14.62500000" },
-      { "actionType": "RT", "tier": "C", "pricingSource": "LEGACY", "unitPrice": "10.00000000" },
-      { "actionType": "RT", "tier": "D", "pricingSource": "LEGACY", "unitPrice": "5.00000000" }
+      {
+        "actionType": "LIKE",
+        "tier": "S",
+        "pricingSource": "LEGACY",
+        "unitPrice": "0.00000000"
+      },
+      {
+        "actionType": "LIKE",
+        "tier": "A",
+        "pricingSource": "PILOT",
+        "unitPrice": "0.39000000"
+      },
+      {
+        "actionType": "LIKE",
+        "tier": "B",
+        "pricingSource": "PILOT",
+        "unitPrice": "0.29250000"
+      },
+      {
+        "actionType": "LIKE",
+        "tier": "C",
+        "pricingSource": "LEGACY",
+        "unitPrice": "0.20000000"
+      },
+      {
+        "actionType": "LIKE",
+        "tier": "D",
+        "pricingSource": "LEGACY",
+        "unitPrice": "0.10000000"
+      },
+      {
+        "actionType": "RT",
+        "tier": "S",
+        "pricingSource": "LEGACY",
+        "unitPrice": "0.00000000"
+      },
+      {
+        "actionType": "RT",
+        "tier": "A",
+        "pricingSource": "PILOT",
+        "unitPrice": "19.50000000"
+      },
+      {
+        "actionType": "RT",
+        "tier": "B",
+        "pricingSource": "PILOT",
+        "unitPrice": "14.62500000"
+      },
+      {
+        "actionType": "RT",
+        "tier": "C",
+        "pricingSource": "LEGACY",
+        "unitPrice": "10.00000000"
+      },
+      {
+        "actionType": "RT",
+        "tier": "D",
+        "pricingSource": "LEGACY",
+        "unitPrice": "5.00000000"
+      }
     ]
   }
 }
