@@ -73,6 +73,16 @@ afterEach(async () => {
 const render = async () => act(async () => root.render(<CurrentTaskSection />))
 
 describe('current-task comment guide', () => {
+  it('shows claim-time identity only for an explicit true snapshot', async () => {
+    rows[0].lighthouseSelectedAtClaim = true
+    await render()
+    expect(container.textContent).toContain('接单时严选')
+    for (const snapshot of [false, null, undefined]) {
+      rows[0].lighthouseSelectedAtClaim = snapshot
+      await act(async () => updated({ type: 'tasks-updated' }))
+      expect(container.textContent).not.toContain('接单时严选')
+    }
+  })
   it('shows the full original between the title and actions without keyword requirements', async () => {
     await render()
     const guide = container.querySelector('.lh-cur-guide-text')

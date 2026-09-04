@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   AVAILABLE_ENGAGEMENTS_QUERY,
   type AvailableEngagement,
+  ME_QUERY,
   MY_RESERVED_ENGAGEMENTS_QUERY,
 } from '@/lib/queries'
 import { CaptureSession } from '@/lib/zktls/capture'
@@ -17,6 +18,7 @@ import {
   buildActiveCampaignSummaries,
   flattenTasks,
   productZkTlsStartGqlOptions,
+  reserveErrorCode,
 } from '../background'
 
 beforeEach(() => {
@@ -66,6 +68,12 @@ const binanceFollowCampaign = {
 } as unknown as AvailableEngagement
 
 describe('X task indexes', () => {
+  it('maps server-selected claim denial to a stable user-facing error', () => {
+    expect(reserveErrorCode('LIGHTHOUSE_SELECTED_REQUIRED')).toEqual({
+      code: 'LIGHTHOUSE_SELECTED_REQUIRED',
+      message: '需灯塔严选资格',
+    })
+  })
   it('rejects Binance campaigns carrying stale X tweet targets', () => {
     expect(buildActiveCampaignSummaries([binanceLikeCampaign])).toEqual([])
     expect(flattenTasks([binanceLikeCampaign], new Set())).toEqual({
@@ -99,6 +107,36 @@ describe('comment guidance propagation', () => {
   it('requests commentGuide for both available and reserved orders', () => {
     expect(AVAILABLE_ENGAGEMENTS_QUERY).toContain('commentGuide')
     expect(MY_RESERVED_ENGAGEMENTS_QUERY).toContain('commentGuide')
+  })
+
+  it('requests current qualification, selected scope and viewer claim snapshot', () => {
+    expect(ME_QUERY).toContain('lighthouseSelected')
+    expect(AVAILABLE_ENGAGEMENTS_QUERY).toContain('lighthouseSelectedOnly')
+    expect(AVAILABLE_ENGAGEMENTS_QUERY).toContain('myLighthouseSelectedAtClaim')
+    expect(MY_RESERVED_ENGAGEMENTS_QUERY).toContain('lighthouseSelectedOnly')
+    expect(MY_RESERVED_ENGAGEMENTS_QUERY).toContain(
+      'myLighthouseSelectedAtClaim',
+    )
+  })
+
+  it('preserves selected scope and nullable claim snapshots in task caches', () => {
+    const selected = {
+      ...campaign('selected', null),
+      lighthouseSelectedOnly: true,
+      myLighthouseSelectedAtClaim: true,
+    } as AvailableEngagement
+    const legacy = campaign('legacy', null)
+    const rows = flattenTasks(
+      [selected, legacy],
+      new Set(['selected', 'legacy']),
+    ).byTweet['123456']
+    expect(rows.find((row) => row.campaignId === 'selected')).toMatchObject({
+      lighthouseSelectedOnly: true,
+      lighthouseSelectedAtClaim: true,
+    })
+    const legacyRow = rows.find((row) => row.campaignId === 'legacy')
+    expect(legacyRow).not.toHaveProperty('lighthouseSelectedOnly')
+    expect(legacyRow).not.toHaveProperty('lighthouseSelectedAtClaim')
   })
 
   it('preserves full guides by campaign across task indexes and summaries', () => {

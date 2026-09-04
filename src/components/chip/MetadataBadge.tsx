@@ -1,3 +1,4 @@
+import { LighthouseSelectedText } from '@/components/lighthouse/LighthouseSelectedText'
 import type { CampaignTaskCache } from '@/lib/storage'
 
 interface Props {
@@ -22,10 +23,17 @@ export function MetadataBadge({ tasks }: Props) {
   const displayReward = fmtReward(single ? single.expectedReward : total)
 
   return (
-    <span className="lhdao-reward-pill ml-1 shrink-0" title={tooltip}>
-      <span>+{displayReward}</span>
-      <span className="lhdao-reward-pill-unit">LUX</span>
-    </span>
+    <>
+      <span className="lhdao-reward-pill ml-1 shrink-0" title={tooltip}>
+        <span>+{displayReward}</span>
+        <span className="lhdao-reward-pill-unit">LUX</span>
+      </span>
+      {tasks.some(
+        (task) => !task.reserved && task.lighthouseSelectedOnly === true,
+      ) ? (
+        <LighthouseSelectedText kind="order" />
+      ) : null}
+    </>
   )
 }
 

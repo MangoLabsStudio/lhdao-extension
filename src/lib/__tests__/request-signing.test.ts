@@ -74,7 +74,7 @@ describe('plugin request signing', () => {
     })
 
     expect(signed.headers).toMatchObject({
-      'x-plugin-operation-id': 'user.me.v1',
+      'x-plugin-operation-id': 'user.me.v2',
       'x-device-id': 'device-test-1',
       'x-request-timestamp': '1783944000000',
       'x-request-nonce': 'nonce-test-123456',

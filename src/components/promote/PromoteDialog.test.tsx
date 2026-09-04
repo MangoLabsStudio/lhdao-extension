@@ -114,6 +114,7 @@ describe('PromoteDialog device recovery', () => {
         slots: { A: 5 },
         reinvest: false,
         reinvestCount: 3,
+        lighthouseSelectedOnly: true,
       }),
     )
     container = document.createElement('div')
@@ -251,8 +252,48 @@ describe('PromoteDialog device recovery', () => {
         actions: [{ actionType: 'LIKE', tierSlots: { A: 5 } }],
         quoteId: 'quote-plugin-1',
         reinvestCount: 0,
+        lighthouseSelectedOnly: false,
       })
     })
+  })
+
+  it('starts selected promotion off on every open and never inherits it from last config', async () => {
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <PromoteDialog
+          tweetUrl="https://x.com/lighthouse/status/1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    const selected = container.querySelector(
+      'input[name="lighthouse-selected-only"]',
+    ) as HTMLInputElement | null
+    expect(selected).toBeInstanceOf(HTMLInputElement)
+    expect(selected?.checked).toBe(false)
+    await act(async () => findButton('按上次配置').click())
+    expect(selected?.checked).toBe(false)
+    await act(async () => selected?.click())
+    expect(selected?.checked).toBe(true)
+
+    await act(async () => root?.unmount())
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <PromoteDialog
+          tweetUrl="https://x.com/lighthouse/status/1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    expect(
+      (
+        container.querySelector(
+          'input[name="lighthouse-selected-only"]',
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(false)
   })
 
   it('clears a quote after tier edits and confirms only the refreshed quote', async () => {

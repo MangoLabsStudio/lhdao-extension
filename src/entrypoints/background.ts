@@ -904,6 +904,7 @@ async function performSyncTasks(
     await sessionStore.patch({ lastSyncError: 'No API token configured' })
     return
   }
+  const cachedProfile = await sessionStore.get('userProfile')
 
   const [engRes, reservedRes, tweetsRes, meRes] = await Promise.allSettled([
     gql<AvailableEngagementsResult>(AVAILABLE_ENGAGEMENTS_QUERY),
@@ -1023,7 +1024,16 @@ async function performSyncTasks(
       tier: m.tier ?? null,
       newLux: parseNumber(m.newLux),
       todayEarnings: m.todayEarnings ?? null,
+      ...(typeof m.lighthouseSelected === 'boolean'
+        ? { lighthouseSelected: m.lighthouseSelected }
+        : {}),
     }
+  } else if (meRes.status === 'rejected' && cachedProfile) {
+    const { lighthouseSelected: _staleQualification, ...ordinaryProfile } =
+      cachedProfile
+    values.userProfile = ordinaryProfile
+  } else if (meRes.status === 'fulfilled') {
+    values.userProfile = null
   }
   // One storage write: no old-session continuation can write another field after reset.
   if (!(await isCurrent())) return
@@ -1087,6 +1097,14 @@ function buildTweetCampaignSummaries(
       rewardLux: reward,
       submitClose: t.submitClose ?? null,
       targetUrl: t.targetUrl ?? null,
+      ...(t.lighthouseSelectedOnly === undefined
+        ? {}
+        : { lighthouseSelectedOnly: t.lighthouseSelectedOnly }),
+      ...(t.myLighthouseSelectedAtClaim === undefined
+        ? {}
+        : {
+            lighthouseSelectedAtClaim: t.myLighthouseSelectedAtClaim,
+          }),
     })
   }
   result.sort((a, b) => b.rewardLux - a.rewardLux)
@@ -1148,6 +1166,9 @@ export function buildActiveCampaignSummaries(
       commentGuide: isCommentish ? c.commentGuide : null,
       commentGuideStatus:
         isCommentish && c.commentGuide === undefined ? 'unavailable' : 'ready',
+      ...(c.lighthouseSelectedOnly === undefined
+        ? {}
+        : { lighthouseSelectedOnly: c.lighthouseSelectedOnly }),
     })
   }
   // 按奖励降序排,高价值任务靠前
@@ -1218,6 +1239,14 @@ export function flattenTasks(
         authorName: c.tweetAuthorName ?? null,
         authorHandle: c.tweetAuthorHandle ?? null,
         reserved: reservedIds.has(c.id),
+        ...(c.lighthouseSelectedOnly === undefined
+          ? {}
+          : { lighthouseSelectedOnly: c.lighthouseSelectedOnly }),
+        ...(c.myLighthouseSelectedAtClaim === undefined
+          ? {}
+          : {
+              lighthouseSelectedAtClaim: c.myLighthouseSelectedAtClaim,
+            }),
       }
 
       // —— byTweet 索引 ——
@@ -1264,6 +1293,7 @@ export async function promoteTweetHandler(req: {
   actions: { actionType: string; tierSlots: Record<string, number> }[]
   quoteId: string
   reinvestCount?: number
+  lighthouseSelectedOnly?: boolean
 }): Promise<MsgResponse> {
   const token = await localStore.get('apiToken')
   if (!token) {
@@ -1279,6 +1309,7 @@ export async function promoteTweetHandler(req: {
       quoteId: req.quoteId,
       tweetUrl: req.tweetUrl,
       actions: req.actions,
+      lighthouseSelectedOnly: req.lighthouseSelectedOnly === true,
     },
   }
   const promoteKey = spendActionKey('promote', promoteVariables)
@@ -1655,10 +1686,15 @@ interface CodedError {
   message: string
 }
 
-function reserveErrorCode(msg: string, httpStatus?: number): CodedError {
+export function reserveErrorCode(msg: string, httpStatus?: number): CodedError {
   let code: SubmitErrorCode = 'RESERVE_FAILED'
   if (httpStatus === 401) code = 'TOKEN_INVALID'
-  else if (/Slot full/i.test(msg)) code = 'SLOT_FULL'
+  else if (/LIGHTHOUSE_SELECTED_REQUIRED/i.test(msg)) {
+    return {
+      code: 'LIGHTHOUSE_SELECTED_REQUIRED',
+      message: '需灯塔严选资格',
+    }
+  } else if (/Slot full/i.test(msg)) code = 'SLOT_FULL'
   else if (/BotUserBlocked/i.test(msg)) code = 'BOT_BLOCKED'
   return { code, message: msg }
 }

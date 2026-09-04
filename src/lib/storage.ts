@@ -150,6 +150,8 @@ export interface UserProfile {
   newLux: number | null
   /** 今日新增 newLux — sidebar 小字显示 */
   todayEarnings: number | null
+  /** Missing means current qualification could not be confirmed. */
+  lighthouseSelected?: boolean
 }
 
 export interface RawCapturedAction {
@@ -175,6 +177,10 @@ export interface TweetCampaignSummary {
   submitClose: string | null
   /** 点击 row 跳转的 URL — 通常 lhdao.top/campaigns/<id> */
   targetUrl: string | null
+  /** Missing means unread/legacy data. */
+  lighthouseSelectedOnly?: boolean
+  /** Missing means unavailable; null means a known legacy participant row. */
+  lighthouseSelectedAtClaim?: boolean | null
 }
 
 /** Sidebar 列表卡片单条数据 — 展示用,跟 chip 用的 task cache 解耦 */
@@ -202,6 +208,8 @@ export interface ActiveCampaignSummary {
   commentKeyword: string | null
   commentGuide?: string | null
   commentGuideStatus?: CommentGuideStatus
+  /** Missing means unread/legacy data. */
+  lighthouseSelectedOnly?: boolean
 }
 
 /**
@@ -244,6 +252,10 @@ export interface CampaignTaskCache {
    * NO_ACTIVE_RESERVATION(用户预约了评论、卡片却显示转发)。
    */
   reserved?: boolean
+  /** Missing means unread/legacy data. */
+  lighthouseSelectedOnly?: boolean
+  /** Missing means unavailable; null means a known legacy participant row. */
+  lighthouseSelectedAtClaim?: boolean | null
 }
 
 // ── Stores ────────────────────────────────────────────────────────────

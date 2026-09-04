@@ -153,6 +153,7 @@ type PromoteRequest = {
   actions: { actionType: PromoteAction; tierSlots: Record<string, number> }[]
   quoteId: string
   reinvestCount: number
+  lighthouseSelectedOnly: boolean
 }
 
 const QUOTE_REFRESH_CODES = new Set([
@@ -209,6 +210,8 @@ export function PromoteDialog({
   const [slots, setSlots] = React.useState<Record<string, number>>({})
   const [reinvest, setReinvest] = React.useState(false)
   const [reinvestCount, setReinvestCount] = React.useState(3)
+  const [lighthouseSelectedOnly, setLighthouseSelectedOnly] =
+    React.useState(false)
   const [phase, setPhase] = React.useState<Phase>('form')
   const [errMsg, setErrMsg] = React.useState('')
   const [balance, setBalance] = React.useState<number | null>(null)
@@ -438,6 +441,7 @@ export function PromoteDialog({
         actions: payloadActions,
         quoteId: quote!.quoteId,
         reinvestCount: reinvest ? reinvestCount : 0,
+        lighthouseSelectedOnly,
       } satisfies PromoteRequest)
     submittingRef.current = true
     const sequence = ++submitSequence.current
@@ -639,6 +643,23 @@ export function PromoteDialog({
                 </div>
               ))}
             </div>
+
+            <label className="lh-reinvest">
+              <input
+                name="lighthouse-selected-only"
+                type="checkbox"
+                checked={lighthouseSelectedOnly}
+                disabled={phase === 'loading'}
+                onChange={(e) => {
+                  if (submittingRef.current) return
+                  setRetryRequest(null)
+                  setPhase('form')
+                  setErrMsg('')
+                  setLighthouseSelectedOnly(e.currentTarget.checked)
+                }}
+              />
+              <span>仅灯塔严选可接</span>
+            </label>
 
             <label className="lh-reinvest">
               <input

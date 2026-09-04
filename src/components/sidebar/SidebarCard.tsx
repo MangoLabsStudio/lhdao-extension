@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { LighthouseSelectedText } from '@/components/lighthouse/LighthouseSelectedText'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { sendMessage } from '@/lib/messaging'
 import type { TweetCampaignSummary, UserProfile } from '@/lib/storage'
@@ -115,6 +116,9 @@ function IdentityCard({ profile }: { profile: UserProfile | null }) {
         <UserAvatar src={profile?.avatar ?? null} alt={name} />
         <div className="lh-identity-meta">
           <div className="lh-identity-name">{name}</div>
+          {profile?.lighthouseSelected === true ? (
+            <LighthouseSelectedText kind="current" />
+          ) : null}
           {handle && <div className="lh-identity-handle">@{handle}</div>}
         </div>
         {profile?.tier && (

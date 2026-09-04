@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { LighthouseSelectedText } from '@/components/lighthouse/LighthouseSelectedText'
 import {
   type CurrentCampaign,
   computeGuideStateForActions,
@@ -457,6 +458,9 @@ export function CurrentTaskSection({
           </span>
           <div className="lh-cur-mid">
             <div className="lh-cur-name">{title}</div>
+            {campaign.lighthouseSelectedAtClaim === true ? (
+              <LighthouseSelectedText kind="claim" />
+            ) : null}
             <div className="lh-cur-brief">{brief}</div>
           </div>
           <div className="lh-cur-reward">

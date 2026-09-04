@@ -44,6 +44,7 @@ export const ME_QUERY = `
       newLux
       todayEarnings
       twitterUsername
+      lighthouseSelected
     }
   }
 `
@@ -68,6 +69,8 @@ export interface MeResult {
     todayEarnings: number | null
     /** 用户绑定的 Twitter handle(无 @ 前缀);后端 ResolveField 从 OAuthAccount 拿 */
     twitterUsername: string | null
+    /** Missing means the server/plugin contract cannot confirm qualification. */
+    lighthouseSelected?: boolean
   } | null
 }
 
@@ -87,6 +90,8 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       type
       mode
       platform
+      lighthouseSelectedOnly
+      myLighthouseSelectedAtClaim
       targetUrl
       targetContentId
       targetAuthorId
@@ -126,6 +131,10 @@ export interface AvailableEngagement {
   type: string
   mode: string
   platform: EngagementPlatform
+  /** Missing means unread/legacy data, not an ordinary order. */
+  lighthouseSelectedOnly?: boolean
+  /** Current viewer's participant snapshot; missing means unavailable/legacy. */
+  myLighthouseSelectedAtClaim?: boolean | null
   targetUrl: string | null
   targetContentId: string | null
   targetAuthorId: string | null
@@ -173,6 +182,8 @@ export const MY_RESERVED_ENGAGEMENTS_QUERY = `
       type
       mode
       platform
+      lighthouseSelectedOnly
+      myLighthouseSelectedAtClaim
       targetUrl
       targetContentId
       targetAuthorId
@@ -226,6 +237,8 @@ export const AVAILABLE_TWEETS_QUERY = `
       expectedReward
       myExpectedReward
       targetUrl
+      lighthouseSelectedOnly
+      myLighthouseSelectedAtClaim
       isParticipated
       isSoldOut
     }
@@ -244,6 +257,10 @@ export interface AvailableTweet {
   /** 我 tier 下的精确奖励;null 时 fallback 到 expectedReward */
   myExpectedReward: number | null
   targetUrl: string | null
+  /** Missing means unread/legacy data, not an ordinary order. */
+  lighthouseSelectedOnly?: boolean
+  /** Current viewer's participant snapshot when already participating. */
+  myLighthouseSelectedAtClaim?: boolean | null
   /**
    * 当前用户是不是已经参与过这个 campaign(抢过或完成过)。
    * sidebar 用来过滤"可抢单"列表 — 已参与的不展示。
@@ -623,6 +640,7 @@ export interface PromoteTweetVars {
     quoteId: string
     tweetUrl: string
     actions: { actionType: string; tierSlots: Record<string, number> }[]
+    lighthouseSelectedOnly: boolean
   }
 }
 

@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing'
+import { SYNC_INTERVAL_SECONDS } from '@/lib/env'
 import * as gqlApi from '@/lib/gql'
 import * as messaging from '@/lib/messaging'
 import {
   AVAILABLE_ENGAGEMENTS_QUERY,
   AVAILABLE_TWEETS_QUERY,
   type AvailableEngagement,
+  ME_QUERY,
   MY_RESERVED_ENGAGEMENTS_QUERY,
 } from '@/lib/queries'
 import { localStore, sessionStore } from '@/lib/storage'
@@ -43,10 +45,12 @@ const order = (
 
 let available: AvailableEngagement[] | Error
 let reserved: AvailableEngagement[] | Error
+let me: Record<string, unknown> | null | Error
 beforeEach(async () => {
   fakeBrowser.reset()
   available = [order('available')]
   reserved = [order('reserved')]
+  me = null
   vi.spyOn(messaging, 'broadcastToContent').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(gqlApi, 'gql').mockImplementation(async (query) => {
@@ -58,9 +62,12 @@ beforeEach(async () => {
       if (reserved instanceof Error) throw reserved
       return { myReservedEngagements: reserved }
     }
-    return query === AVAILABLE_TWEETS_QUERY
-      ? { availableTweets: [] }
-      : { me: null }
+    if (query === AVAILABLE_TWEETS_QUERY) return { availableTweets: [] }
+    if (query === ME_QUERY) {
+      if (me instanceof Error) throw me
+      return { me }
+    }
+    throw new Error('unexpected query')
   })
   await localStore.set('apiToken', 'account-a')
 })
@@ -69,6 +76,84 @@ const tasks = async () =>
   (await sessionStore.get('tasksByTweetId'))?.['123456'] ?? []
 
 describe('comment guide sync', () => {
+  it('rechecks Lighthouse Selected qualification every 60 seconds', () => {
+    expect(SYNC_INTERVAL_SECONDS).toBe(60)
+  })
+
+  it('uses only a successful current-generation me result for qualification', async () => {
+    me = {
+      id: 'user-a',
+      username: 'a',
+      nickname: null,
+      avatar: null,
+      tier: 'A',
+      newLux: '2',
+      todayEarnings: 1,
+      twitterUsername: 'a',
+      lighthouseSelected: true,
+    }
+    await syncTasks()
+    expect(await sessionStore.get('userProfile')).toMatchObject({
+      id: 'user-a',
+      lighthouseSelected: true,
+    })
+
+    me = new Error('me offline')
+    await syncTasks()
+    const profile = await sessionStore.get('userProfile')
+    expect(profile).toMatchObject({ id: 'user-a' })
+    expect(profile).not.toHaveProperty('lighthouseSelected')
+    expect((await tasks()).map((task) => task.campaignId)).toEqual([
+      'available',
+      'reserved',
+    ])
+  })
+
+  it('keeps an omitted legacy me field unavailable instead of coercing false', async () => {
+    me = {
+      id: 'legacy-user',
+      username: 'legacy',
+      nickname: null,
+      avatar: null,
+      tier: null,
+      newLux: null,
+      todayEarnings: null,
+      twitterUsername: null,
+    }
+    await syncTasks()
+    expect(await sessionStore.get('userProfile')).not.toHaveProperty(
+      'lighthouseSelected',
+    )
+  })
+
+  it('keeps a reserved selected task after current qualification is removed', async () => {
+    reserved = [
+      {
+        ...order('selected-reserved'),
+        lighthouseSelectedOnly: true,
+        myLighthouseSelectedAtClaim: true,
+      } as AvailableEngagement,
+    ]
+    me = {
+      id: 'user-a',
+      username: 'a',
+      nickname: null,
+      avatar: null,
+      tier: 'A',
+      newLux: 0,
+      todayEarnings: 0,
+      twitterUsername: 'a',
+      lighthouseSelected: false,
+    }
+    await syncTasks()
+    expect(await tasks()).toContainEqual(
+      expect.objectContaining({
+        campaignId: 'selected-reserved',
+        reserved: true,
+        lighthouseSelectedAtClaim: true,
+      }),
+    )
+  })
   it('retains reserved guides with update failure while refreshing available orders', async () => {
     await syncTasks()
     available = [order('available', '新版')]

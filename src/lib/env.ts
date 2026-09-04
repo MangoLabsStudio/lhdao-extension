@@ -30,8 +30,8 @@ export const WEB_ENDPOINT: string = __WEB_ENDPOINT__
 /** 唯一允许注入 Lighthouse page bridge 的编译时 Web origin pattern。 */
 export const WEB_MATCH_PATTERN: string = __WEB_MATCH_PATTERN__
 
-/** 后台 alarm 拉取任务的间隔 (秒)。chrome.alarms 下限 60s;这里设 5 分钟。 */
-export const SYNC_INTERVAL_SECONDS = 300
+/** 后台 alarm 拉取任务和当前严选资格的间隔 (秒)。chrome.alarms 下限 60s。 */
+export const SYNC_INTERVAL_SECONDS = 60
 
 /** 验证 mutation 失败后等待重试的间隔 (毫秒)。 */
 export const VERIFY_RETRY_DELAY_MS = 5000

@@ -7,7 +7,9 @@ import {
 import * as queries from '../queries'
 import {
   AVAILABLE_ENGAGEMENTS_QUERY,
+  AVAILABLE_TWEETS_QUERY,
   CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
+  ME_QUERY,
   MintProductExperienceTestTicketOperationName,
   MintProductExperienceTicketOperationName,
   MY_RESERVED_ENGAGEMENTS_QUERY,
@@ -158,7 +160,7 @@ describe('PLUGIN_OPERATIONS', () => {
     }
   })
 
-  it('versions the comment-guide engagement documents as v3 operations', () => {
+  it('versions the selected-aware read documents', () => {
     expect(PLUGIN_OPERATIONS.map((operation) => operation.id)).not.toContain(
       'engagement.available.v1',
     )
@@ -170,13 +172,18 @@ describe('PLUGIN_OPERATIONS', () => {
         AVAILABLE_ENGAGEMENTS_QUERY,
         'AvailableEngagements',
       )?.id,
-    ).toBe('engagement.available.v3')
+    ).toBe('engagement.available.v4')
     expect(
       getPluginOperationByDocument(
         MY_RESERVED_ENGAGEMENTS_QUERY,
         'MyReservedEngagements',
       )?.id,
-    ).toBe('engagement.reserved.v3')
+    ).toBe('engagement.reserved.v4')
+    expect(getPluginOperationByDocument(ME_QUERY, 'Me')?.id).toBe('user.me.v2')
+    expect(
+      getPluginOperationByDocument(AVAILABLE_TWEETS_QUERY, 'AvailableTweets')
+        ?.id,
+    ).toBe('tweet.available.v2')
   })
 
   it('does not match a document with an added field or alias', () => {

@@ -129,6 +129,8 @@ export type MsgRequest =
       }[]
       /** >0 则成功后给作者建 auto-reinvest 任务(持续复投 N 次) */
       reinvestCount?: number
+      /** Explicitly false for ordinary promotion; never inherited. */
+      lighthouseSelectedOnly: boolean
     }
   /** 取当前缓存的余额(newLux),给推广弹窗显示 */
   | { type: 'get-balance' }
@@ -450,6 +452,7 @@ export type SubmitErrorCode =
   | 'TOKEN_INVALID'
   | 'SLOT_FULL'
   | 'BOT_BLOCKED'
+  | 'LIGHTHOUSE_SELECTED_REQUIRED'
   | 'RESERVE_FAILED'
   | 'ALREADY_DONE'
   | 'COMMENT_MISSING'

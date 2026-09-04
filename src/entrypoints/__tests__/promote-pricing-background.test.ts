@@ -369,7 +369,7 @@ describe('plugin promote pricing background handlers', () => {
     })
   })
 
-  it('submits the exact quoteId and reuses the idempotency key after uncertainty', async () => {
+  it('keeps omitted legacy promotion ordinary and reuses the idempotency key', async () => {
     await localStore.set('apiToken', 'lhdao_pk_test')
     gqlMock
       .mockRejectedValueOnce(
@@ -403,6 +403,7 @@ describe('plugin promote pricing background handlers', () => {
         quoteId: 'quote-plugin-1',
         tweetUrl: 'https://x.com/lighthouse/status/1',
         actions,
+        lighthouseSelectedOnly: false,
       },
     })
     expect(promoteCalls[1]?.[1]).toEqual(promoteCalls[0]?.[1])

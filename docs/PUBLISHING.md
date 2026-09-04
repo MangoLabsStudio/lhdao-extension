@@ -1,6 +1,6 @@
 # Lighthouse extension publishing checklist
 
-This document covers version `0.2.0` Chrome, Edge, and Firefox MV3 artifacts.
+This document covers version `0.3.0` Chrome, Edge, and Firefox MV3 artifacts.
 GitHub Releases are automated; browser-store submission remains a reviewed
 manual step.
 
@@ -46,7 +46,7 @@ shasum -a 256 \
 
 The verifier requires all three manifests to have:
 
-- `manifest_version: 3` and package version `0.2.0`;
+- `manifest_version: 3` and package version `0.3.0`;
 - exactly `storage`, `alarms`, `activeTab`, and `scripting` permissions;
 - exactly the X, Twitter, production API, and production web hosts;
 - no wildcard, customer, or loopback host access;
@@ -62,7 +62,7 @@ then stop. Send that evidence to the release owner. Do not create a tag until th
 release owner gives explicit approval. Only after that approval:
 
 ```bash
-git tag -a v0.2.0 -m "release: extension v0.2.0"
+git tag -a v0.3.0 -m "release: extension v0.3.0"
 git push origin v0.2.0
 ```
 
@@ -148,6 +148,9 @@ that comments are never transmitted, or that the extension does not process
 website activity.
 
 ## 6. Store-specific release notes
+
+Version 0.3.0 is the first extension release that supports Lighthouse Selected
+identity, order scope, claim-time history, and the manual promotion option.
 
 ### Chrome Web Store
 

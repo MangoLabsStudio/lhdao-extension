@@ -540,22 +540,22 @@ describe('gql transport outcomes', () => {
 
     const operations = [
       {
-        id: 'engagement.available.v3',
+        id: 'engagement.available.v4',
         name: 'AvailableEngagements',
         document: productQueries.AVAILABLE_ENGAGEMENTS_QUERY,
       },
       {
-        id: 'engagement.reserved.v3',
+        id: 'engagement.reserved.v4',
         name: 'MyReservedEngagements',
         document: productQueries.MY_RESERVED_ENGAGEMENTS_QUERY,
       },
       {
-        id: 'tweet.available.v1',
+        id: 'tweet.available.v2',
         name: 'AvailableTweets',
         document: productQueries.AVAILABLE_TWEETS_QUERY,
       },
       {
-        id: 'user.me.v1',
+        id: 'user.me.v2',
         name: 'Me',
         document: productQueries.ME_QUERY,
       },

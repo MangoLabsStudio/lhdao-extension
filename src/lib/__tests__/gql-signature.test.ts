@@ -25,6 +25,7 @@ const variables: PromoteTweetVars = {
     quoteId: 'quote-plugin-1',
     tweetUrl: 'https://x.com/lighthouse/status/1',
     actions: [{ actionType: 'LIKE', tierSlots: { A: 5 } }],
+    lighthouseSelectedOnly: false,
   },
 }
 
