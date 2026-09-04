@@ -47,9 +47,14 @@ shasum -a 256 \
 The verifier requires all three manifests to have:
 
 - `manifest_version: 3` and package version `0.3.0`;
-- exactly `storage`, `alarms`, `activeTab`, and `scripting` permissions;
-- exactly the X, Twitter, production API, and production web hosts;
-- no wildcard, customer, or loopback host access;
+- Chrome and Edge permissions: `storage`, `alarms`, `activeTab`, `scripting`,
+  `offscreen`, and `webRequest`;
+- Firefox permissions: `storage`, `alarms`, `activeTab`, and `scripting`;
+- persistent host access only for X, Twitter, Binance, the production API, and
+  the production web app;
+- Chrome and Edge optional host access `https://*/*`; Firefox has no optional
+  host access;
+- no wildcard persistent, customer-specific, or loopback host access;
 - a runtime `content-scripts/product-experience.js` artifact that is absent
   from static `content_scripts`.
 
@@ -117,9 +122,28 @@ Injects the isolated Product Experience evaluator into the tab covered by that
 user-triggered `activeTab` grant. The evaluator is not a static customer-site
 content script.
 
+### `offscreen` (Chrome and Edge only)
+
+Keeps the user-started TLSNotary proof worker alive outside the popup and the
+customer tab. Firefox does not package or request the Chromium offscreen proof
+runtime.
+
+### `webRequest` (Chrome and Edge only)
+
+Observes the request selected during an active Product Experience capture so
+the extension can construct the TLSNotary request. The listener does not start
+an unrestricted background crawl and is inactive when no capture is running.
+
+### Optional host access (Chrome and Edge only)
+
+Declares `https://*/*` as optional access so a user can grant the specific
+customer origin needed for a Product Experience verification. It is not a
+persistent host permission. Firefox declares no optional host access.
+
 ### Host access
 
 - `x.com` and `twitter.com`: displays and verifies Lighthouse engagement tasks.
+- `www.binance.com`: discovers and verifies eligible Binance Square tasks.
 - `service.lhdao.top`: authenticates, synchronizes tasks, and submits task or
   sanitized Product Experience proof data.
 - `app.lhdao.top`: pairs the extension and exchanges the sanitized page bridge

@@ -13,6 +13,8 @@ import {
 import { localStore, sessionStore } from '@/lib/storage'
 import {
   handleTaskTokenChange,
+  readActiveCampaignsData,
+  readBalanceData,
   readPopupData,
   readSidebarData,
   readTasksSnapshot,
@@ -170,6 +172,26 @@ describe('comment guide sync', () => {
       profile: { lighthouseSelected: false },
     })
   })
+
+  it('preserves selected scope in the current-owner active campaign response', async () => {
+    available = [
+      {
+        ...order('selected-available'),
+        lighthouseSelectedOnly: true,
+      } as AvailableEngagement,
+    ]
+    reserved = []
+    await syncTasks()
+    expect(await readActiveCampaignsData()).toEqual({
+      type: 'active-campaigns',
+      campaigns: [
+        expect.objectContaining({
+          campaignId: 'selected-available',
+          lighthouseSelectedOnly: true,
+        }),
+      ],
+    })
+  })
   it('retains reserved guides with update failure while refreshing available orders', async () => {
     await syncTasks()
     available = [order('available', '新版')]
@@ -270,6 +292,12 @@ describe('comment guide sync', () => {
   })
 
   it('waits for a deferred account reset and never serves the old sidebar or popup identity', async () => {
+    available = [
+      {
+        ...order('selected-old-account'),
+        lighthouseSelectedOnly: true,
+      } as AvailableEngagement,
+    ]
     me = {
       id: 'user-a',
       username: 'old-name',
@@ -305,9 +333,13 @@ describe('comment guide sync', () => {
       twitterUsername: 'new-handle',
       lighthouseSelected: false,
     }
+    available = []
+    reserved = []
     const reset = handleTaskTokenChange()
     const sidebarPromise = readSidebarData()
     const popupPromise = readPopupData()
+    const balancePromise = readBalanceData()
+    const campaignsPromise = readActiveCampaignsData()
     let sidebarSettled = false
     void sidebarPromise.then(() => {
       sidebarSettled = true
@@ -316,9 +348,11 @@ describe('comment guide sync', () => {
     expect(sidebarSettled).toBe(false)
 
     releaseReset()
-    const [sidebar, popup] = await Promise.all([
+    const [sidebar, popup, balance, campaigns] = await Promise.all([
       sidebarPromise,
       popupPromise,
+      balancePromise,
+      campaignsPromise,
       reset,
     ])
     expect(sidebar.profile?.id).not.toBe('user-a')
@@ -329,6 +363,10 @@ describe('comment guide sync', () => {
     expect(popup.profile?.displayName).not.toBe('old-name')
     expect(popup.profile?.newLux).not.toBe(99)
     expect(popup.profile?.lighthouseSelected).not.toBe(true)
+    expect(balance.balance).not.toBe(99)
+    expect(campaigns.campaigns).not.toContainEqual(
+      expect.objectContaining({ campaignId: 'selected-old-account' }),
+    )
   })
 
   it('returns an empty current-owner snapshot while the replacement account sync is deferred', async () => {
@@ -365,12 +403,16 @@ describe('comment guide sync', () => {
 
     const sidebar = await readSidebarData()
     const popup = await readPopupData()
+    const balance = await readBalanceData()
+    const campaigns = await readActiveCampaignsData()
     expect(sidebar).toMatchObject({
       tokenConfigured: true,
       profile: null,
       lighthouseSelectedStatus: 'loading',
     })
     expect(popup).toMatchObject({ hasToken: true, profile: null })
+    expect(balance).toEqual({ type: 'balance-result', balance: null })
+    expect(campaigns).toEqual({ type: 'active-campaigns', campaigns: [] })
 
     resolveNewMe({
       me: {
@@ -411,6 +453,14 @@ describe('comment guide sync', () => {
     expect(await readPopupData()).toMatchObject({
       hasToken: false,
       profile: null,
+    })
+    expect(await readBalanceData()).toEqual({
+      type: 'balance-result',
+      balance: null,
+    })
+    expect(await readActiveCampaignsData()).toEqual({
+      type: 'active-campaigns',
+      campaigns: [],
     })
   })
 

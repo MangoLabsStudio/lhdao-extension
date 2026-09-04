@@ -15,6 +15,7 @@ let promoteFailure: { code: string; message: string }
 let currentPricesResponse: () => unknown | Promise<unknown>
 let previewResponse: () => unknown | Promise<unknown>
 let promoteResponse: () => unknown | Promise<unknown>
+let balanceResponse: number | null
 
 const quote = {
   quoteId: 'quote-plugin-1',
@@ -105,6 +106,7 @@ describe('PromoteDialog device recovery', () => {
       ok: false,
       ...promoteFailure,
     })
+    balanceResponse = 100
     document.body.replaceChildren()
     localStorage.clear()
     localStorage.setItem(
@@ -125,7 +127,7 @@ describe('PromoteDialog device recovery', () => {
         return { type: 'ack' }
       }
       if (message.type === 'get-balance') {
-        return { type: 'balance-result', balance: 100 }
+        return { type: 'balance-result', balance: balanceResponse }
       }
       if (message.type === 'get-current-engagement-prices') {
         return currentPricesResponse()
@@ -294,6 +296,22 @@ describe('PromoteDialog device recovery', () => {
         ) as HTMLInputElement
       ).checked,
     ).toBe(false)
+  })
+
+  it('does not render a stale balance when the current account balance is unavailable', async () => {
+    balanceResponse = null
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <PromoteDialog
+          tweetUrl="https://x.com/lighthouse/status/1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    await act(async () => findButton('按上次配置').click())
+    await vi.waitFor(() => expect(container.textContent).toContain('2.20 LUX'))
+    expect(container.textContent).not.toContain('余额')
   })
 
   it('clears a quote after tier edits and confirms only the refreshed quote', async () => {

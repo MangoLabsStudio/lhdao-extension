@@ -645,8 +645,7 @@ export default defineBackground(() => {
       return previewPromoteTweetPricingHandler(req)
     }
     if (req.type === 'get-balance') {
-      const p = await sessionStore.get('userProfile')
-      return { type: 'balance-result', balance: p?.newLux ?? null }
+      return readBalanceData()
     }
     if (req.type === 'record-dwell') {
       // fire-and-forget: 失败不影响用户,只 console.warn
@@ -664,8 +663,7 @@ export default defineBackground(() => {
       return { type: 'ack' }
     }
     if (req.type === 'get-active-campaigns') {
-      const campaigns = (await sessionStore.get('activeCampaigns')) ?? []
-      return { type: 'active-campaigns', campaigns }
+      return readActiveCampaignsData()
     }
     if (req.type === 'get-sidebar-data') {
       return readSidebarData()
@@ -774,6 +772,30 @@ async function readOwnedSessionSnapshot<T>(
     currentToken === token &&
     generation === syncGeneration
   return { token: currentToken, owned, value: owned ? value : null }
+}
+
+export async function readBalanceData(): Promise<
+  Extract<MsgResponse, { type: 'balance-result' }>
+> {
+  const snapshot = await readOwnedSessionSnapshot(() =>
+    sessionStore.get('userProfile'),
+  )
+  return {
+    type: 'balance-result',
+    balance: snapshot.value?.newLux ?? null,
+  }
+}
+
+export async function readActiveCampaignsData(): Promise<
+  Extract<MsgResponse, { type: 'active-campaigns' }>
+> {
+  const snapshot = await readOwnedSessionSnapshot(() =>
+    sessionStore.get('activeCampaigns'),
+  )
+  return {
+    type: 'active-campaigns',
+    campaigns: snapshot.value ?? [],
+  }
 }
 
 export async function readSidebarData(): Promise<
