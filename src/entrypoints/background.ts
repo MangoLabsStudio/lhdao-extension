@@ -118,6 +118,7 @@ import {
   type TweetCampaignSummary,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
+import { PRODUCT_DISCOVERY_UPLOAD_DOCUMENT } from '@/lib/zktls/discovery/sample-uploader'
 import { DiscoverySessionManager } from '@/lib/zktls/discovery/session-manager'
 import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
 import {
@@ -480,7 +481,19 @@ export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
   const productExperienceController = createProductExperienceController()
-  const discovery = new DiscoverySessionManager(new URL(WEB_ENDPOINT).origin)
+  const discovery = new DiscoverySessionManager(
+    new URL(WEB_ENDPOINT).origin,
+    async (variables) => {
+      const result = await gql<{
+        uploadProductDiscoveryBatch: {
+          sessionId: string
+          batchId: string
+          pageOrigin: string
+        }
+      }>(PRODUCT_DISCOVERY_UPLOAD_DOCUMENT, variables)
+      return result.uploadProductDiscoveryBatch
+    },
+  )
   registerZkTlsRuntime()
   void productExperienceController.resumePendingSubmit()
 
@@ -507,7 +520,8 @@ export default defineBackground(() => {
     if (
       req.type === 'start-discovery' ||
       req.type === 'stop-discovery' ||
-      req.type === 'get-discovery-snapshot'
+      req.type === 'get-discovery-snapshot' ||
+      req.type === 'retry-discovery-upload'
     ) {
       return discovery.handle(req, sender)
     }

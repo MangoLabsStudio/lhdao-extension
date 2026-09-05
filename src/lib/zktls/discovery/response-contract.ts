@@ -27,6 +27,7 @@ const codes = new Set([
   'QUOTA_REACHED',
   'STOPPED',
   'EXTENSION_ERROR',
+  'UPLOAD_FAILED',
 ])
 const bodyStates = new Set([
   'json',
@@ -331,6 +332,7 @@ export function parseDiscoveryResponse(
         'expiresAt',
         'candidates',
         'quota',
+        ...(record(state) && Object.hasOwn(state, 'upload') ? ['upload'] : []),
       ]) ||
       state.schema !== 1 ||
       !id(state.sessionId) ||
@@ -343,6 +345,38 @@ export function parseDiscoveryResponse(
       !integer(state.startedAt) ||
       !integer(state.expiresAt) ||
       state.expiresAt - state.startedAt !== 900_000
+    )
+      return null
+    if (state.upload !== undefined) {
+      const upload = state.upload
+      const errorCode = (value: unknown) =>
+        value === null ||
+        (typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,100}$/.test(value))
+      if (
+        !exact(upload, ['sessionId', 'error', 'candidates']) ||
+        !id(upload.sessionId) ||
+        !errorCode(upload.error) ||
+        !list(upload.candidates, DISCOVERY_LIMITS.candidates) ||
+        !upload.candidates.every(
+          (item) =>
+            exact(item, ['candidateId', 'status', 'error']) &&
+            id(item.candidateId) &&
+            ['pending', 'uploading', 'uploaded', 'failed'].includes(
+              item.status as string,
+            ) &&
+            errorCode(item.error),
+        )
+      )
+        return null
+      if (
+        request.type === 'start-discovery' &&
+        request.backendSessionId !== undefined &&
+        upload.sessionId !== request.backendSessionId
+      )
+        return null
+    } else if (
+      request.type === 'start-discovery' &&
+      request.backendSessionId !== undefined
     )
       return null
     if (

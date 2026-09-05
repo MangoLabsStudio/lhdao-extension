@@ -76,8 +76,8 @@ describe('X task indexes', () => {
   })
   it('routes discovery RPC to an isolated native session and declares Chrome lifetime support', async () => {
     const source = (await import('../background?raw')).default
-    expect(source).toContain(
-      'new DiscoverySessionManager(new URL(WEB_ENDPOINT).origin)',
+    expect(source).toMatch(
+      /new DiscoverySessionManager\(\s*new URL\(WEB_ENDPOINT\)\.origin,/,
     )
     expect(source).toContain('return discovery.handle(req, sender)')
     const manifest = (await import('../../../wxt.config?raw')).default

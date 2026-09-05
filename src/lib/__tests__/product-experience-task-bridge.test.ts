@@ -73,11 +73,18 @@ describe('parseProductExperiencePageRequest', () => {
     ).toEqual([
       'product-experience-v1',
       'product-zktls-discovery-v1',
+      'product-discovery-upload-v1',
       'product-zktls-execution-v1',
     ])
   })
   const discoveryRequests = [
     { type: 'start-discovery', targetUrl: 'https://app.example.com' },
+    {
+      type: 'start-discovery',
+      targetUrl: 'https://app.example.com',
+      backendSessionId: 'server-session',
+    },
+    { type: 'retry-discovery-upload', sessionId: 'discovery-12345678' },
     { type: 'start-discovery', targetUrl: 'https://app.example.com/account' },
     { type: 'stop-discovery', sessionId: 'discovery-12345678' },
     { type: 'get-discovery-snapshot', sessionId: 'discovery-12345678' },

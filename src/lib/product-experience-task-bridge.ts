@@ -7,6 +7,7 @@ export const PRODUCT_EXPERIENCE_CAPABILITY = 'product-experience-v1' as const
 export const PRODUCT_EXPERIENCE_CAPABILITIES = [
   PRODUCT_EXPERIENCE_CAPABILITY,
   'product-zktls-discovery-v1',
+  'product-discovery-upload-v1',
   'product-zktls-execution-v1',
 ] as const
 
@@ -26,7 +27,13 @@ export type ProductExperiencePageRequest =
     }
   | (Extract<
       MsgRequest,
-      { type: 'start-discovery' | 'stop-discovery' | 'get-discovery-snapshot' }
+      {
+        type:
+          | 'start-discovery'
+          | 'stop-discovery'
+          | 'get-discovery-snapshot'
+          | 'retry-discovery-upload'
+      }
     > & {
       channel: typeof PRODUCT_EXPERIENCE_PAGE_CHANNEL
     })
@@ -173,7 +180,13 @@ function isDiscoveryTargetUrl(value: unknown): value is string {
 
 export type DiscoveryRequest = Extract<
   MsgRequest,
-  { type: 'start-discovery' | 'stop-discovery' | 'get-discovery-snapshot' }
+  {
+    type:
+      | 'start-discovery'
+      | 'stop-discovery'
+      | 'get-discovery-snapshot'
+      | 'retry-discovery-upload'
+  }
 >
 
 /** The runtime boundary repeats the page validation; sender supplies all tab IDs. */
@@ -182,9 +195,12 @@ export function parseDiscoveryRequest(input: unknown): DiscoveryRequest | null {
     if (!isRecord(input)) return null
     const type = Object.getOwnPropertyDescriptor(input, 'type')?.value
     if (
-      !['start-discovery', 'stop-discovery', 'get-discovery-snapshot'].includes(
-        type,
-      )
+      ![
+        'start-discovery',
+        'stop-discovery',
+        'get-discovery-snapshot',
+        'retry-discovery-upload',
+      ].includes(type)
     )
       return null
     const proto = Object.getPrototypeOf(input)
@@ -193,6 +209,9 @@ export function parseDiscoveryRequest(input: unknown): DiscoveryRequest | null {
       'type',
       'correlationId',
       type === 'start-discovery' ? 'targetUrl' : 'sessionId',
+      ...(type === 'start-discovery' && Object.hasOwn(input, 'backendSessionId')
+        ? ['backendSessionId']
+        : []),
     ]
     if (Reflect.ownKeys(input).length !== keys.length) return null
     for (const key of Reflect.ownKeys(input)) {
@@ -207,6 +226,11 @@ export function parseDiscoveryRequest(input: unknown): DiscoveryRequest | null {
     }
     const value = structuredClone(input)
     if (!isCorrelationId(value.correlationId)) return null
+    if (
+      value.backendSessionId !== undefined &&
+      !isCampaignId(value.backendSessionId)
+    )
+      return null
     if (
       type === 'start-discovery'
         ? !isDiscoveryTargetUrl(value.targetUrl)
@@ -230,6 +254,10 @@ function discoverySnapshot(
     'type',
     'correlationId',
     operation === 'start-discovery' ? 'targetUrl' : 'sessionId',
+    ...(operation === 'start-discovery' &&
+    Object.hasOwn(value, 'backendSessionId')
+      ? ['backendSessionId']
+      : []),
   ]
   const ownKeys = Reflect.ownKeys(value)
   if (ownKeys.length !== fields.length) return null
@@ -315,7 +343,8 @@ export function parseProductExperiencePageRequest(
     if (
       operation === 'start-discovery' ||
       operation === 'stop-discovery' ||
-      operation === 'get-discovery-snapshot'
+      operation === 'get-discovery-snapshot' ||
+      operation === 'retry-discovery-upload'
     ) {
       value = discoverySnapshot(value, operation)
     }
@@ -360,8 +389,13 @@ export function parseProductExperiencePageRequest(
           'correlationId',
           'targetUrl',
           'type',
+          ...(Object.hasOwn(value, 'backendSessionId')
+            ? ['backendSessionId']
+            : []),
         ]) ||
-        !isDiscoveryTargetUrl(value.targetUrl)
+        !isDiscoveryTargetUrl(value.targetUrl) ||
+        (value.backendSessionId !== undefined &&
+          !isCampaignId(value.backendSessionId))
       )
         return null
       return {
@@ -369,12 +403,16 @@ export function parseProductExperiencePageRequest(
         type: operation,
         correlationId: value.correlationId,
         targetUrl: value.targetUrl,
+        ...(typeof value.backendSessionId === 'string'
+          ? { backendSessionId: value.backendSessionId }
+          : {}),
       }
     }
 
     if (
       operation === 'stop-discovery' ||
-      operation === 'get-discovery-snapshot'
+      operation === 'get-discovery-snapshot' ||
+      operation === 'retry-discovery-upload'
     ) {
       if (
         !hasExactKeys(value, [

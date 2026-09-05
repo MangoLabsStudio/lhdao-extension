@@ -4,6 +4,11 @@ import {
 } from '../../product-experience-task-bridge'
 import { type CandidateSnapshot, CandidateStore } from './candidate-store'
 import { BODY_LIMIT, byteLength, freezeCopy, safeClone } from './redaction'
+import {
+  DiscoverySampleUploader,
+  type DiscoveryUploadState,
+  type SendDiscoveryBatch,
+} from './sample-uploader'
 
 export type DiscoveryCode =
   | 'INVALID_REQUEST'
@@ -19,6 +24,7 @@ export type DiscoveryCode =
   | 'QUOTA_REACHED'
   | 'STOPPED'
   | 'EXTENSION_ERROR'
+  | 'UPLOAD_FAILED'
 export type DiscoverySnapshot = CandidateSnapshot & {
   schema: 1
   sessionId: string
@@ -27,6 +33,7 @@ export type DiscoverySnapshot = CandidateSnapshot & {
   reason: DiscoveryCode | null
   startedAt: number
   expiresAt: number
+  upload?: DiscoveryUploadState
 }
 export type DiscoveryResponse = {
   type: 'discovery-result'
@@ -72,6 +79,7 @@ type Session = {
   timer?: ReturnType<typeof setInterval>
   targetLoaded?: () => void
   interruptSetup?: () => void
+  uploader?: DiscoverySampleUploader
 }
 const TTL = 15 * 60 * 1000
 const PENDING_TTL = 30_000
@@ -108,7 +116,10 @@ export class DiscoverySessionManager {
   private notification?: ReturnType<typeof setTimeout>
   private disposed = false
 
-  constructor(private lighthouseOrigin: string) {
+  constructor(
+    private lighthouseOrigin: string,
+    private sendDiscoveryBatch?: SendDiscoveryBatch,
+  ) {
     chrome.debugger?.onEvent.addListener(this.onEvent)
     chrome.debugger?.onDetach.addListener(this.onDetach)
     chrome.tabs.onUpdated.addListener(this.onTabUpdated)
@@ -144,6 +155,9 @@ export class DiscoverySessionManager {
       return fail('INVALID_SENDER')
     if (request.type === 'start-discovery') {
       if (this.session && !this.session.stopped) return fail('BUSY')
+      if (request.backendSessionId && !this.sendDiscoveryBatch)
+        return fail('UPLOAD_FAILED')
+      this.session?.uploader?.dispose()
       const session: Session = {
         id: crypto.randomUUID(),
         ownerTab: ownerTab as number,
@@ -161,6 +175,15 @@ export class DiscoverySessionManager {
         pending: new Map(),
       }
       this.session = session
+      if (request.backendSessionId) {
+        if (!this.sendDiscoveryBatch) return fail('UPLOAD_FAILED')
+        session.uploader = new DiscoverySampleUploader(
+          request.backendSessionId,
+          session.origin,
+          this.sendDiscoveryBatch,
+          () => this.notify(session),
+        )
+      }
       clearTimeout(this.notification)
       this.notification = undefined
       session.timer = setInterval(() => {
@@ -184,6 +207,17 @@ export class DiscoverySessionManager {
       })
       const setup = (async (): Promise<DiscoveryResponse> => {
         try {
+          if (session.uploader) {
+            try {
+              await session.uploader.connect()
+            } catch {
+              session.interruptSetup = undefined
+              this.stop(session, 'UPLOAD_FAILED')
+              return { ...envelope, ok: true, snapshot: this.snapshot(session) }
+            }
+            if (!this.active(session))
+              return fail(session.reason ?? 'NO_SESSION')
+          }
           const liveOwner = await chrome.tabs.get(session.ownerTab)
           if (!this.active(session) || liveOwner.url !== session.ownerUrl) {
             this.stop(session, 'OWNER_NAVIGATED')
@@ -286,6 +320,8 @@ export class DiscoverySessionManager {
       return fail('INVALID_SENDER')
     }
     if (request.type === 'stop-discovery') this.stop(session, 'STOPPED')
+    if (request.type === 'retry-discovery-upload')
+      await session.uploader?.retry()
     return { ...envelope, ok: true, snapshot: this.snapshot(session) }
   }
 
@@ -308,6 +344,7 @@ export class DiscoverySessionManager {
       startedAt: session.startedAt,
       expiresAt: session.startedAt + TTL,
       ...session.store.snapshot(),
+      ...(session.uploader ? { upload: session.uploader.snapshot() } : {}),
     })
   }
   private notify(session: Session) {
@@ -607,10 +644,15 @@ export class DiscoverySessionManager {
     })
     erase(pending)
     if (result === 'quota') this.stop(session, 'QUOTA_REACHED')
-    else if (result === 'added') this.notify(session)
+    else if (result === 'added') {
+      session.uploader?.enqueue(session.store.snapshot().candidates)
+      void session.uploader?.flush()
+      this.notify(session)
+    }
   }
   dispose() {
     if (this.session) this.stop(this.session, 'STOPPED')
+    this.session?.uploader?.dispose()
     this.disposed = true
     clearTimeout(this.notification)
     chrome.debugger?.onEvent.removeListener(this.onEvent)

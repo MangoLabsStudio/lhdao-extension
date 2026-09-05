@@ -39,7 +39,13 @@ import type {
 export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
 
 export type MsgRequest =
-  | { type: 'start-discovery'; correlationId: string; targetUrl: string }
+  | {
+      type: 'start-discovery'
+      correlationId: string
+      targetUrl: string
+      backendSessionId?: string
+    }
+  | { type: 'retry-discovery-upload'; correlationId: string; sessionId: string }
   | { type: 'stop-discovery'; correlationId: string; sessionId: string }
   | { type: 'get-discovery-snapshot'; correlationId: string; sessionId: string }
   | { type: 'discovery-snapshot-changed' }

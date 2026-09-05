@@ -98,6 +98,7 @@ describe('PLUGIN_OPERATIONS', () => {
     expect(
       PLUGIN_OPERATIONS.map((operation) => operation.operationName),
     ).toEqual([
+      'UploadProductDiscoveryBatch',
       'CreateExtensionPairing',
       'PollExtensionPairing',
       'Me',

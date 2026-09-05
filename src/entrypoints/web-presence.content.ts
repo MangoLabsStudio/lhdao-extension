@@ -120,7 +120,8 @@ export default defineContentScript({
       if (
         request.type === 'start-discovery' ||
         request.type === 'stop-discovery' ||
-        request.type === 'get-discovery-snapshot'
+        request.type === 'get-discovery-snapshot' ||
+        request.type === 'retry-discovery-upload'
       ) {
         const { channel: _channel, ...runtimeRequest } = request
         void chrome.runtime

@@ -23,6 +23,7 @@ import {
   SUBMIT_ENGAGEMENT_PROOF_MUTATION,
   SubmitProductExperienceProofOperationName,
 } from './queries'
+import { PRODUCT_DISCOVERY_UPLOAD_DOCUMENT } from './zktls/discovery/sample-uploader'
 
 const PRODUCT_EXPERIENCE_DOCUMENT_SHA256 =
   'afa8256b861be2b084ac8976478a14bd716d50473c203ca87e62868cce720577'
@@ -44,6 +45,13 @@ export interface PluginOperationDefinition {
 }
 
 export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
+  operation(
+    'capture.product-discovery.batch.v1',
+    'UploadProductDiscoveryBatch',
+    PRODUCT_DISCOVERY_UPLOAD_DOCUMENT,
+    '86cd7de7322710c9a4f2d3f2d9072c7ec3eae2e351dd712b1db338b5d802afe2',
+    'capture',
+  ),
   operation(
     'pairing.create.v1',
     'CreateExtensionPairing',

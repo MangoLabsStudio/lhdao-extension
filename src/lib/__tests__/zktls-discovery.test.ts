@@ -491,6 +491,30 @@ describe('native discovery vertical slice', () => {
     sessionId = (result as { snapshot: { sessionId: string } }).snapshot
       .sessionId
   }
+  it('authenticates a backend session before opening a tab and exposes upload failures', async () => {
+    manager.dispose()
+    const send = vi
+      .fn()
+      .mockRejectedValue(new Error('DISCOVERY_DEVICE_MISMATCH'))
+    manager = new DiscoverySessionManager('https://app.lhdao.top', send)
+    const result = await manager.handle(
+      { ...start, backendSessionId: 'server-session' },
+      owner,
+    )
+    expect(create).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: 'stopped',
+        reason: 'UPLOAD_FAILED',
+        upload: {
+          sessionId: 'server-session',
+          error: 'DISCOVERY_DEVICE_MISMATCH',
+        },
+      },
+    })
+  })
   async function snapshot(sender = owner, id = sessionId) {
     const query = {
       type: 'get-discovery-snapshot' as const,
@@ -529,6 +553,49 @@ describe('native discovery vertical slice', () => {
     event({ tabId: 8 }, 'Network.loadingFinished', { requestId: id })
     await vi.advanceTimersByTimeAsync(0)
   }
+  it('uploads only redacted captured data after the backend handshake', async () => {
+    manager.dispose()
+    const send = vi.fn(async (input) => ({
+      ...input,
+      pageOrigin: new URL(start.targetUrl).origin,
+    }))
+    manager = new DiscoverySessionManager('https://app.lhdao.top', send)
+    const input = {
+      ...start,
+      type: 'start-discovery' as const,
+      backendSessionId: 'server-session',
+    }
+    const started = await manager.handle(input, owner)
+    expect(parseDiscoveryResponse(started, input)).toEqual(started)
+    expect(send.mock.calls[0]?.[0].candidates).toEqual([])
+    sessionId = (started as { snapshot: { sessionId: string } }).snapshot
+      .sessionId
+    request()
+    await finish()
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send.mock.calls[1]?.[0]).toMatchObject({
+      sessionId: 'server-session',
+      candidates: [{ method: 'GET', path: '/balance' }],
+    })
+    expect(JSON.stringify(send.mock.calls)).not.toContain('SECRET_COOKIE')
+    expect(await snapshot()).toMatchObject({
+      ok: true,
+      snapshot: {
+        upload: { candidates: [{ status: 'uploaded', error: null }] },
+      },
+    })
+    const stopped = await manager.handle(
+      { type: 'stop-discovery', correlationId: 'stop-test', sessionId },
+      owner,
+    )
+    expect(stopped).toMatchObject({
+      ok: true,
+      snapshot: {
+        candidates: [],
+        upload: { candidates: [{ status: 'uploaded' }] },
+      },
+    })
+  })
   it.each([
     discoveryFixture.cases[0],
     discoveryFixture.cases[1],
