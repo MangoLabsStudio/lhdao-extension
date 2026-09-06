@@ -34,6 +34,7 @@ import {
   assertTicketAvailable,
   fetchAndVerifySignedConfig,
 } from '@/lib/zktls/signed-config'
+import { matchV4Body } from '@/lib/zktls/v4-template'
 
 const DISCOVERY_FIXTURE = JSON.parse(
   readFileSync('test/fixtures/product-zktls-discovery-workbench.json', 'utf8'),
@@ -478,6 +479,60 @@ function differenceConnector(collection = false): MutableV4 {
   return config
 }
 
+function uniqueConnector(binding = false): MutableV4 {
+  const config = cloneV4()
+  config.pipelines = [
+    {
+      output: 'wallet',
+      sourcePath: '$.rows[*]',
+      valuePath: '$.wallet',
+      cast: 'STRING',
+      reduce: 'UNIQUE',
+    },
+  ]
+  config.disclosure = {
+    key_paths: ['$.rows', '$.rows[*].wallet'],
+    scalar_paths: ['$.rows[*].wallet'],
+    collection_paths: ['$.rows'],
+    max_elements: 200,
+  }
+  if (binding) {
+    config.purpose = 'ACCOUNT_BINDING'
+    config.account_binding = {
+      providerKey: 'example',
+      accountVariable: 'accountId',
+      walletOutput: 'wallet',
+      addressType: 'EVM',
+    }
+    config.variables = [
+      {
+        name: 'accountId',
+        scalarType: 'STRING',
+        source: {
+          kind: 'CAPTURED_REQUEST',
+          location: 'BODY_JSON',
+          selector: '$.input.account',
+        },
+      },
+    ]
+    config.resolved_variables = {}
+    config.request.matcher.query.required = {}
+    config.request.body = { input: { account: { $var: 'accountId' } } }
+    config.pipelines[0].filter = {
+      op: 'EQ',
+      path: '$.account',
+      value: { $var: 'accountId' },
+    }
+    config.disclosure.key_paths = [
+      '$.rows',
+      '$.rows[*].account',
+      '$.rows[*].wallet',
+    ]
+    config.disclosure.scalar_paths = ['$.rows[*].account', '$.rows[*].wallet']
+  }
+  return config
+}
+
 function decimalVariableConnector(value: string): MutableV4 {
   const config = cloneV4()
   config.variables[0] = {
@@ -648,6 +703,181 @@ async function signedV4Envelopes(
 }
 
 describe('zkTLS strict boundaries', () => {
+  test.each([
+    'STRING',
+    'INTEGER',
+    'DECIMAL',
+    'BOOLEAN',
+    'UTC_TIMESTAMP',
+    'EVM_ADDRESS_FROM_BYTES32_PREFIX',
+  ])('accepts UNIQUE with %s and no ordering', (cast) => {
+    const config = uniqueConnector()
+    config.pipelines[0].cast = cast
+    if (cast !== 'EVM_ADDRESS_FROM_BYTES32_PREFIX') {
+      Object.assign(config.pipelines[0], {
+        valueUnit: 'value',
+        outputUnit: 'value',
+      })
+    }
+    expect(validateConnector(config)).toMatchObject({
+      pipelines: [config.pipelines[0]],
+    })
+  })
+
+  test('accepts UNIQUE after an existing numeric difference cast', () => {
+    const config = differenceConnector(true)
+    config.pipelines[0].reduce = 'UNIQUE'
+    expect(validateConnector(config)).toMatchObject({
+      pipelines: [config.pipelines[0]],
+    })
+  })
+
+  test.each([
+    { reduce: 'UNKNOWN' },
+    { finalReduce: 'UNIQUE' },
+    { sourcePath: '$.rows' },
+    { valuePath: undefined },
+    { valueUnit: 'USDT', outputUnit: 'USD' },
+  ])('rejects invalid UNIQUE stages: %p', (patch) => {
+    const config = uniqueConnector()
+    Object.assign(config.pipelines[0], patch)
+    if ('valuePath' in patch) delete config.pipelines[0].valuePath
+    expect(() => validateConnector(config)).toThrow()
+  })
+
+  test.each([
+    { reduce: 'FIRST', orderBy: { path: '$.wallet', direction: 'ASC' } },
+    { reduce: 'SUM' },
+    { reduce: 'COUNT' },
+    { orderBy: { path: '$.wallet', direction: 'ASC' } },
+    { groupBy: { path: '$.day', interval: 'UTC_DAY' } },
+    { difference: { leftPath: '$.left', rightPath: '$.right' } },
+    { postFilter: { op: 'EQ', value: 'wallet' } },
+    { finalReduce: 'COUNT' },
+    { valueUnit: 'address', outputUnit: 'address' },
+  ])('rejects forbidden UNIQUE address stages: %p', (patch) => {
+    const config = uniqueConnector()
+    Object.assign(
+      config.pipelines[0],
+      { cast: 'EVM_ADDRESS_FROM_BYTES32_PREFIX' },
+      patch,
+    )
+    expect(() => validateConnector(config)).toThrow()
+  })
+
+  test('keeps captured account refs bound to exactly one request position', () => {
+    const config = uniqueConnector(true)
+    expect(validateConnector(config)).toMatchObject({
+      pipelines: [config.pipelines[0]],
+    })
+    config.request.matcher.query.required = { account: { $var: 'accountId' } }
+    expect(() => validateConnector(config)).toThrow(
+      'captured variable is ambiguous',
+    )
+    config.request.matcher.query.required = {}
+    config.request.body = { input: { account: 'acct-1' } }
+    expect(() => validateConnector(config)).toThrow(
+      'connector variable is unused',
+    )
+  })
+
+  test('keeps captured refs restricted to account-binding response filters', () => {
+    const metric = uniqueConnector(true)
+    metric.purpose = 'METRIC'
+    delete metric.account_binding
+    expect(() => validateConnector(metric)).toThrow(
+      'connector variable source is invalid',
+    )
+
+    const unknown = uniqueConnector(true)
+    testRecord(unknown.pipelines[0].filter).value = { $var: 'undeclared' }
+    expect(() => validateConnector(unknown)).toThrow(
+      'pipeline variable is invalid',
+    )
+
+    const postFilter = uniqueConnector(true)
+    Object.assign(postFilter.pipelines[0], {
+      groupBy: { path: '$.day', interval: 'UTC_DAY' },
+      postFilter: { op: 'EQ', value: { $var: 'accountId' } },
+      finalReduce: 'MIN',
+    })
+    expect(() => validateConnector(postFilter)).toThrow(
+      'pipeline variable is invalid',
+    )
+  })
+
+  test('preserves signed UNIQUE and captured account filtering through disclosure registration', async () => {
+    const config = uniqueConnector(true)
+    config.pipelines[0].cast = 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
+    const {
+      publicKeys,
+      signTicket: _signTicket,
+      ...response
+    } = await signedV4Envelopes(config)
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse(response))
+    try {
+      const verified = await fetchAndVerifySignedConfig(
+        'http://localhost/config',
+        {
+          publicKeys,
+          now: '2026-08-15T00:00:00.000Z',
+          local: true,
+        },
+      )
+      if (verified.config.interpreter_version !== 4)
+        throw new Error('expected V4')
+      expect(verified.config.pipelines[0]).toEqual(config.pipelines[0])
+      expect(Object.isFrozen(verified.config.pipelines[0])).toBe(true)
+      const body = '{"input":{"account":"acct-1"}}'
+      const captured = matchV4Body(
+        new TextEncoder().encode(body),
+        'application/json',
+        verified.config.request.body!,
+        verified.config.resolved_variables,
+        verified.config.variables,
+      )
+      expect(captured?.captured).toEqual({ accountId: 'acct-1' })
+      const sent = new TextEncoder().encode(
+        `POST /v1/volume HTTP/1.1\r\nHost: api.example.com\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`,
+      )
+      const responseBody = JSON.stringify({
+        rows: [{ account: 'acct-1', wallet: `0x${'a'.repeat(64)}` }],
+      })
+      const recv = new TextEncoder().encode(
+        `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${responseBody.length}\r\n\r\n${responseBody}`,
+      )
+      const message = {
+        ...verified,
+        config: verified.config,
+        id: 'unique-worker',
+        type: 'zktls-worker-prove' as const,
+        connectorId: verified.config.connector_id,
+        sessionId: verified.ticket.session_id,
+        captured: {
+          method: 'POST' as const,
+          path: '/v1/volume',
+          body,
+          content_type: 'application/json' as const,
+          secrets: {},
+          capturedVariables: captured!.captured,
+        },
+      }
+      await expect(
+        transcriptRevealRanges(message, sent, recv),
+      ).resolves.toEqual({
+        sent: [{ start: 0, end: sent.length }],
+        recv: [{ start: 0, end: recv.length }],
+      })
+      expect(sessionRegistrationPayload(message)).toMatchObject({
+        config_envelope: { config: { pipelines: [config.pipelines[0]] } },
+      })
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
   test('parses and deeply freezes signed V4 trigger paths without changing their order', async () => {
     const config = {
       ...v4Connector(),

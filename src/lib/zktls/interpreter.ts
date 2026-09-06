@@ -210,6 +210,7 @@ export type V4Pipeline = {
     | 'SUM'
     | 'COUNT'
     | 'DISTINCT_COUNT'
+    | 'UNIQUE'
     | 'MIN'
     | 'MAX'
     | 'AVG'
@@ -1640,8 +1641,9 @@ function v4VariableReference(
   const input = v4Exact(value, ['$var'], 'pipeline variable')
   const name = v4Identifier(input.$var, 'pipeline variable')
   const declaration = variables.get(name)
-  if (!declaration || declaration.source.kind === 'CAPTURED_REQUEST')
-    fail('pipeline variable is invalid.')
+  if (!declaration) fail('pipeline variable is invalid.')
+  // Captured filter operands do not add a request-template occurrence.
+  if (declaration.source.kind === 'CAPTURED_REQUEST') return
   references.set(name, (references.get(name) ?? 0) + 1)
 }
 
@@ -1742,7 +1744,7 @@ function v4PipelineCastType(cast: V4PipelineCast): V4ScalarType {
 }
 
 function v4ReducerSupports(reducer: string, input: V4ScalarType): boolean {
-  if (['COUNT', 'DISTINCT_COUNT', 'FIRST', 'LAST'].includes(reducer))
+  if (['COUNT', 'DISTINCT_COUNT', 'UNIQUE', 'FIRST', 'LAST'].includes(reducer))
     return true
   if (reducer === 'MIN' || reducer === 'MAX') return input !== 'BOOLEAN'
   return input === 'DECIMAL' || input === 'INTEGER'
@@ -1808,6 +1810,7 @@ function v4Pipelines(
         'SUM',
         'COUNT',
         'DISTINCT_COUNT',
+        'UNIQUE',
         'MIN',
         'MAX',
         'AVG',
@@ -1831,13 +1834,14 @@ function v4Pipelines(
       (input.absolute !== undefined &&
         (!numericCast || typeof input.absolute !== 'boolean')) ||
       (addressCast &&
-        (collection ||
-          input.filter !== undefined ||
+        ((collection
+          ? reduce !== 'UNIQUE'
+          : input.filter !== undefined ||
+            input.valuePath !== undefined ||
+            reduce !== undefined) ||
           input.orderBy !== undefined ||
           input.groupBy !== undefined ||
-          input.valuePath !== undefined ||
           difference !== undefined ||
-          reduce !== undefined ||
           input.postFilter !== undefined ||
           finalReduce !== undefined ||
           input.valueUnit !== undefined ||
