@@ -595,14 +595,31 @@ function reconcileFocalTaskHost() {
       )
     : []
   const article = candidates.at(-1)
-  if (focalTaskHost?.article === article && focalTaskHost?.tweetId === tweetId)
+  const actionRow = article?.querySelector('[role="group"]')
+  if (focalTaskHost && focalTaskHost.tweetId === tweetId) {
+    // Preserve state across X replacing either the controls or the entire
+    // article. Keep the panel detached until the new controls are available.
+    if (article && actionRow?.parentElement) {
+      if (
+        focalTaskHost.host.parentElement !== actionRow.parentElement ||
+        focalTaskHost.host.previousElementSibling !== actionRow
+      ) {
+        actionRow.parentElement.insertBefore(
+          focalTaskHost.host,
+          actionRow.nextSibling,
+        )
+      }
+      focalTaskHost.article = article
+    } else {
+      focalTaskHost.host.remove()
+    }
     return
+  }
   if (focalTaskHost) {
     focalTaskHost.root.unmount()
     focalTaskHost.host.remove()
     focalTaskHost = null
   }
-  const actionRow = article?.querySelector('[role="group"]')
   if (!article || !tweetId || !actionRow?.parentElement) return
   const host = createShadowHost('lhdao-inline-task', 'inline')
   host.style.display = 'block'
