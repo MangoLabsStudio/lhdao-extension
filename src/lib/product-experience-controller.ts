@@ -1099,7 +1099,8 @@ export class ProductExperienceController {
   ): Promise<ProductExperienceControllerState> {
     if (
       !event.stage ||
-      !/^[a-z0-9-]{1,100}$/.test(event.stage) ||
+      event.stage.length > 100 ||
+      !/^[a-z0-9-]+(?::failed)?$/.test(event.stage) ||
       !Number.isFinite(event.at) ||
       !['running', 'passed', 'failed'].includes(event.status)
     )

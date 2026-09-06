@@ -2788,6 +2788,44 @@ describe('zkTLS strict boundaries', () => {
     expect(secretBytes).toEqual(new Array(secretBytes!.length).fill(0))
   })
 
+  test.each([
+    '{"events":{"subaccounts":["0x' +
+      '12'.repeat(32) +
+      '"],"isolated":false,"event_types":["deposit_collateral"],"limit":{"txs":11}}}',
+    '{ "z": 9007199254740993, "a": "充值🚀", "escaped": "\\u0041" }',
+    '[1, false, null, "充值"]',
+  ])('preserves raw POST text and UTF-8 length at the WASM boundary: %s', async (body) => {
+    const config = validateConnector(v4Connector())
+    if (config.interpreter_version !== 4) throw new Error('wrong connector')
+    const message = {
+      id: 'raw-post-job',
+      type: 'zktls-worker-prove' as const,
+      sessionId: 's1',
+      connectorId: config.connector_id,
+      config,
+      ticket: { ...ticket, interpreter_version: 4 as const },
+      configEnvelope: { ...configEnvelope, config },
+      ticketEnvelope,
+      captured: {
+        path: '/v1/volume',
+        method: 'POST' as const,
+        body,
+        content_type: 'application/json' as const,
+        secrets: {},
+        resource_type: 'fetch' as const,
+        capturedVariables: {},
+      },
+    }
+    await sendProofHttpRequest(message, async (request) => {
+      expect(request.body).toBe(body)
+      expect(
+        new TextDecoder().decode(
+          new Uint8Array(request.headers.get('content-length')!),
+        ),
+      ).toBe(String(new TextEncoder().encode(body).length))
+    })
+  })
+
   test('replays an immutable V4 capture with only complete public headers', () => {
     const raw = v4Connector()
     testRecord(raw.request).public_headers = { 'x-client-type': 'public' }
@@ -2819,7 +2857,7 @@ describe('zkTLS strict boundaries', () => {
     captured.body = '{"changed":true}'
 
     expect(request.uri).toBe('/v1/volume?day=2026-08-20')
-    expect(new TextDecoder().decode(new Uint8Array(request.body!))).toBe(
+    expect(request.body).toBe(
       '{"operation":"volume","input":{"account":"acct-1","options":{"day":"2026-08-20"}}}',
     )
     expect([...request.headers.keys()]).toEqual([
@@ -2833,7 +2871,7 @@ describe('zkTLS strict boundaries', () => {
       new TextDecoder().decode(
         new Uint8Array(request.headers.get('content-length')!),
       ),
-    ).toBe(String(request.body!.length))
+    ).toBe(String(new TextEncoder().encode(request.body as string).length))
     expect(
       new TextDecoder().decode(
         new Uint8Array(request.headers.get('x-client-type')!),
@@ -2878,6 +2916,8 @@ describe('zkTLS strict boundaries', () => {
     }
 
     await sendProofHttpRequest(message, async (request) => {
+      // TLSNotary sends strings verbatim but JSON-serializes number arrays.
+      expect(request.body).toBe(captured.body)
       expect([...request.headers.keys()]).toEqual([
         'host',
         'connection',

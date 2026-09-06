@@ -27,6 +27,9 @@ function settle(job: Pending, result: Result): boolean {
   job.settled = true
   clearTimeout(job.timer)
   if (pending.get(job.id) === job) pending.delete(job.id)
+  // TLSNotary initializes process-global state once per worker. Never reuse
+  // that engine for the next condition or retry, even after a normal result.
+  retire(job.generation)
   job.resolve(result)
   return true
 }

@@ -92,7 +92,8 @@ type ProofHttpRequest = {
   uri: string
   method: 'GET' | 'POST'
   headers: Map<string, number[]>
-  body: number[] | undefined
+  // TLSNotary sends string contents verbatim; number[] is serialized as JSON.
+  body: string | undefined
 }
 
 function header(value: string): number[] {
@@ -116,7 +117,7 @@ export function proofHttpRequest(
     })
     if (replay.sentByteLength > message.config.request.max_sent_data)
       throw new Error('captured request did not match the signed provider')
-    const encodedBody = replay.body ? Array.from(replay.body) : undefined
+    const encodedBody = replay.body
     return {
       uri: message.captured.path,
       method: message.config.request.method,
@@ -147,7 +148,7 @@ export function proofHttpRequest(
             ]
           : []),
       ]),
-      body: encodedBody,
+      body: encodedBody ? message.captured.body : undefined,
     }
   }
 
@@ -187,7 +188,7 @@ export function proofHttpRequest(
         return [key, bytes] as [string, number[]]
       }),
     ]),
-    body: body ? header(body) : undefined,
+    body,
   }
 }
 
@@ -241,8 +242,15 @@ export function verifierUrls(
   return { verifierUrl: verifier.href, proxyUrl: proxy.href }
 }
 
-function websocketIo(url: string): Promise<SocketIo> {
+export function websocketIo(
+  url: string,
+  signal: AbortSignal,
+): Promise<SocketIo> {
   return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('proof transport cancelled'))
+      return
+    }
     const socket = new WebSocket(url)
     socket.binaryType = 'arraybuffer'
     const queue: Uint8Array[] = []
@@ -260,7 +268,23 @@ function websocketIo(url: string): Promise<SocketIo> {
         write: async (bytes) => socket.send(bytes),
         close: async () => socket.close(),
       })
-    socket.onerror = () => reject(new Error('verifier unavailable'))
+    const stop = () => {
+      closed = true
+      next?.(null)
+      next = null
+      signal.removeEventListener('abort', abort)
+    }
+    const abort = () => {
+      stop()
+      reject(new Error('proof transport cancelled'))
+      socket.close()
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    socket.onerror = () => {
+      stop()
+      reject(new Error('verifier unavailable'))
+      socket.close()
+    }
     socket.onmessage = (event) => {
       const bytes = new Uint8Array(event.data as ArrayBuffer)
       if (next) {
@@ -269,46 +293,89 @@ function websocketIo(url: string): Promise<SocketIo> {
         done(bytes)
       } else queue.push(bytes)
     }
-    socket.onclose = () => {
-      closed = true
-      next?.(null)
+    socket.onclose = (event) => {
+      stop()
+      reject(
+        Object.assign(new Error('proof transport closed'), {
+          closeCode: event.code,
+          wasClean: event.wasClean,
+        }),
+      )
     }
   })
 }
 
-async function registerSession(message: ProveMessage): Promise<{
+export async function registerSession(message: ProveMessage): Promise<{
   socket: WebSocket
+  sessionId: string
   verifierUrl: string
   proxyUrl: string
   completion: Promise<void>
+  waitFor<T>(operation: Promise<T>): Promise<T>
 }> {
   const endpoint = ZKTLS_PROFILE.verifierEndpoint
   if (!endpoint) throw new Error('verifier unavailable')
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(endpoint)
     let registered = false
+    let terminal = false
     let complete: () => void = () => undefined
     let failCompletion: (error: Error) => void = () => undefined
     const completion = new Promise<void>((done, fail) => {
       complete = done
       failCompletion = fail
     })
+    // Only failure interrupts local work. A completion packet must never skip
+    // setup, transcript validation, or reveal. Observe rejection immediately.
+    const failure = completion.then(() => new Promise<never>(() => {}))
+    void failure.catch(() => undefined)
+    const fail = (error: Error) => {
+      if (terminal) return
+      terminal = true
+      registered ? failCompletion(error) : reject(error)
+      socket.close()
+    }
     socket.onopen = () =>
       socket.send(JSON.stringify(sessionRegistrationPayload(message)))
     socket.onerror = () => {
-      const error = new Error('verifier unavailable')
-      registered ? failCompletion(error) : reject(error)
+      fail(new Error('verifier unavailable'))
     }
-    socket.onclose = () => {
-      if (registered) failCompletion(new Error('verifier unavailable'))
+    socket.onclose = (event) => {
+      fail(
+        Object.assign(new Error('verifier session closed'), {
+          code: 'VERIFIER_SESSION_CLOSED',
+          closeCode: event.code,
+          reason: event.reason.slice(0, 1024),
+          wasClean: event.wasClean,
+        }),
+      )
     }
     socket.onmessage = (event) => {
+      if (terminal) return
       try {
         const value = JSON.parse(String(event.data)) as {
           type?: unknown
           sessionId?: unknown
+          message?: unknown
+          code?: unknown
+          stage?: unknown
+          reason?: unknown
+        }
+        if (value.type === 'error') {
+          const error = new Error(
+            typeof value.message === 'string'
+              ? value.message.slice(0, 4096)
+              : 'verifier rejected session',
+          )
+          for (const key of ['code', 'stage', 'reason'] as const) {
+            if (typeof value[key] === 'string')
+              Object.assign(error, { [key]: value[key].slice(0, 1024) })
+          }
+          throw error
         }
         if (value.type === 'session_completed') {
+          if (!registered) throw new Error('verifier rejected session')
+          terminal = true
           complete()
           return
         }
@@ -318,18 +385,22 @@ async function registerSession(message: ProveMessage): Promise<{
         )
           throw new Error('verifier rejected session')
         if (registered) throw new Error('verifier rejected session')
+        const urls = verifierUrls(endpoint, value.sessionId)
         registered = true
         resolve({
           socket,
-          ...verifierUrls(endpoint, value.sessionId),
+          sessionId: value.sessionId,
+          ...urls,
           completion,
+          waitFor: <T>(operation: Promise<T>) =>
+            Promise.race([operation, failure]),
         })
       } catch (error) {
         const failure =
           error instanceof Error
             ? error
             : new Error('verifier rejected session')
-        registered ? failCompletion(failure) : reject(failure)
+        fail(failure)
       }
     }
   })
@@ -685,28 +756,44 @@ async function prove(message: ProveMessage): Promise<void> {
     lastStage = 'verifier-session-registered'
     trace.stage(lastStage, {
       verifier: new URL(registration.verifierUrl).origin,
+      verifierSessionId: registration.sessionId,
+      sessionId: message.sessionId,
+      connectorId: message.connectorId,
     })
-    const prover = new wasm.Prover({
-      server_name: origin.hostname,
-      mode: 'Mpc',
-      max_sent_data: message.config.request.max_sent_data,
-      max_sent_records: undefined,
-      max_recv_data_online: undefined,
-      max_recv_data: message.config.request.max_recv_data,
-      max_recv_records_online: undefined,
-      defer_decryption_from_start: undefined,
-      network: 'Bandwidth',
-      client_auth: undefined,
-      root_certs: undefined,
-    })
+    const transport = new AbortController()
     try {
-      await prover.setup(await websocketIo(registration.verifierUrl))
+      const prover = new wasm.Prover({
+        server_name: origin.hostname,
+        mode: 'Mpc',
+        max_sent_data: message.config.request.max_sent_data,
+        max_sent_records: undefined,
+        max_recv_data_online: undefined,
+        max_recv_data: message.config.request.max_recv_data,
+        max_recv_records_online: undefined,
+        defer_decryption_from_start: undefined,
+        network: 'Bandwidth',
+        client_auth: undefined,
+        root_certs: undefined,
+      })
+      const waitFor = registration.waitFor
+      lastStage = 'mpc-setup-started'
+      trace.stage(lastStage)
+      const verifierIo = await waitFor(
+        websocketIo(registration.verifierUrl, transport.signal),
+      )
+      await waitFor(prover.setup(verifierIo))
       lastStage = 'mpc-setup-complete'
       trace.stage(lastStage)
       assertAvailable(message)
-      const proxyIo = await websocketIo(registration.proxyUrl)
-      await sendProofHttpRequest(message, (request) =>
-        prover.send_request(proxyIo, request),
+      lastStage = 'proxy-request-started'
+      trace.stage(lastStage)
+      const proxyIo = await waitFor(
+        websocketIo(registration.proxyUrl, transport.signal),
+      )
+      await waitFor(
+        sendProofHttpRequest(message, (request) =>
+          prover.send_request(proxyIo, request),
+        ),
       )
       lastStage = 'proxy-request-sent'
       trace.stage(lastStage)
@@ -722,24 +809,27 @@ async function prove(message: ProveMessage): Promise<void> {
       })
       if (received.length > message.config.request.max_recv_data)
         throw new Error('response exceeded the signed receive limit')
-      const ranges = await transcriptRevealRanges(
-        message,
-        sent,
-        received,
-        (stage, details) => {
+      const ranges = await waitFor(
+        transcriptRevealRanges(message, sent, received, (stage, details) => {
           lastStage = stage
           trace.stage(stage, details)
-        },
+        }),
       )
-      await revealTranscript(prover, ranges)
+      lastStage = 'reveal-started'
+      trace.stage(lastStage)
+      await waitFor(revealTranscript(prover, ranges))
       lastStage = 'reveal-submitted'
       trace.stage(lastStage, ranges)
       await registration.completion
       lastStage = 'completion-received'
       trace.stage(lastStage)
+      // On failure a WASM call may still hold a mutable borrow. The offscreen
+      // owner terminates this worker after reporting the result; do not free
+      // its prover underneath the pending call or mask the original failure.
+      prover.free()
     } finally {
       registration.socket.close()
-      prover.free()
+      transport.abort()
     }
   } catch (error) {
     trace.fail(`${lastStage}:failed`, error, secretValues)

@@ -2227,6 +2227,65 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     )
   })
 
+  it('keeps worker failure details for the active attempt, but rejects stale or malformed diagnostics', async () => {
+    await harness.controller.cancel()
+    harness = createHarness(true)
+    harness.mintParticipant.mockResolvedValue(
+      ticket({ verificationMode: 'ZKTLS' }),
+    )
+    await harness.controller.saveTask(task())
+    await harness.controller.start()
+    harness.proveZkTls.mockImplementationOnce(() => new Promise(() => {}))
+    await harness.controller.handleEvidence(sender(), 'session-12345678', [
+      match('rule-a'),
+    ])
+    await vi.waitFor(() => expect(harness.proveZkTls).toHaveBeenCalledTimes(1))
+    const input = harness.proveZkTls.mock.calls[0][0]
+    const event = {
+      at: NOW,
+      stage: 'tls-transcript-received:failed',
+      status: 'failed' as const,
+      error: {
+        name: 'Error',
+        message: 'unsupported response transfer encoding',
+        authorization: 'Bearer hidden',
+      },
+    }
+    await harness.controller.handleProofDiagnostic(
+      input.sessionId,
+      input.connectorId,
+      'stale-attempt',
+      event,
+    )
+    await harness.controller.handleProofDiagnostic(
+      input.sessionId,
+      input.connectorId,
+      input.correlationId,
+      { ...event, stage: 'invalid:arbitrary:stage' },
+    )
+    expect(
+      harness.storage.session?.zkTlsDiagnostic?.events.some(
+        (entry) => entry.status === 'failed',
+      ),
+    ).toBe(false)
+    await harness.controller.handleProofDiagnostic(
+      input.sessionId,
+      input.connectorId,
+      input.correlationId,
+      event,
+    )
+    expect(harness.storage.session?.zkTlsDiagnostic?.events).toContainEqual(
+      expect.objectContaining({
+        stage: event.stage,
+        status: 'failed',
+        error: expect.objectContaining({ message: event.error.message }),
+      }),
+    )
+    expect(JSON.stringify(harness.storage.session)).not.toContain(
+      'Bearer hidden',
+    )
+  })
+
   it('records evidence acceptance before requesting a signed proof session', async () => {
     await harness.controller.cancel()
     harness = createHarness(true)

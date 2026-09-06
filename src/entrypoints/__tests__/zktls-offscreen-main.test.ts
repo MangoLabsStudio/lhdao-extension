@@ -76,6 +76,31 @@ describe('zkTLS offscreen worker lifecycle', () => {
     vi.restoreAllMocks()
   })
 
+  test.each<Result>([
+    { status: 'submitted' },
+    { status: 'error', code: 'PROVER_FAILED' },
+  ])('isolates the next proof after $status without reinitializing an old engine', async (result) => {
+    const first = runtimeListener(proofMessage())
+    const previous = FakeWorker.instances[0]!
+    previous.emit('message', { id: previous.posts[0]!.id, result })
+    await expect(first).resolves.toEqual(result)
+    expect(previous.terminate).toHaveBeenCalledTimes(1)
+
+    const next = runtimeListener(proofMessage())
+    const replacement = FakeWorker.instances[1]!
+    expect(replacement).toBeDefined()
+    expect(previous.posts).toHaveLength(1)
+    previous.emit('error', 'late error from the previous proof')
+    expect(replacement.terminate).not.toHaveBeenCalled()
+    replacement.emit('message', {
+      id: replacement.posts[0]!.id,
+      result: { status: 'submitted' },
+    })
+    await expect(next).resolves.toEqual({ status: 'submitted' })
+    expect(previous.terminate).toHaveBeenCalledTimes(1)
+    expect(replacement.terminate).toHaveBeenCalledTimes(1)
+  })
+
   test('terminates a hung worker once and uses a fresh generation', async () => {
     const firstMessage = proofMessage()
     const firstCapture = firstMessage.captured as {
@@ -128,7 +153,7 @@ describe('zkTLS offscreen worker lifecycle', () => {
       result: { status: 'submitted' },
     })
     await expect(second).resolves.toEqual({ status: 'submitted' })
-    expect(newWorker.terminate).not.toHaveBeenCalled()
+    expect(newWorker.terminate).toHaveBeenCalledTimes(1)
   })
 
   test('rejects a concurrent proof before posting and clears its secrets', async () => {
@@ -157,9 +182,10 @@ describe('zkTLS offscreen worker lifecycle', () => {
     await first
 
     const next = runtimeListener(proofMessage())
-    expect(worker.posts).toHaveLength(2)
-    worker.emit('message', {
-      id: worker.posts[1]!.id,
+    const nextWorker = FakeWorker.instances[1]!
+    expect(worker.posts).toHaveLength(1)
+    nextWorker.emit('message', {
+      id: nextWorker.posts[0]!.id,
       result: { status: 'submitted' },
     })
     await expect(next).resolves.toEqual({ status: 'submitted' })
@@ -295,7 +321,7 @@ describe('zkTLS offscreen worker lifecycle', () => {
     await expect(second).resolves.toEqual({ status: 'submitted' })
   })
 
-  test('first settlement cancels the timeout without retiring the worker', async () => {
+  test('first settlement cancels the timeout and retires the worker only once', async () => {
     const first = runtimeListener(proofMessage())
     const worker = FakeWorker.instances[0]!
     worker.emit('message', {
@@ -304,13 +330,14 @@ describe('zkTLS offscreen worker lifecycle', () => {
     })
     await expect(first).resolves.toEqual({ status: 'submitted' })
 
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(worker.terminate).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(worker.terminate).toHaveBeenCalledTimes(1)
 
     const second = runtimeListener(proofMessage())
-    expect(FakeWorker.instances).toHaveLength(1)
-    worker.emit('message', {
-      id: worker.posts[1]!.id,
+    expect(FakeWorker.instances).toHaveLength(2)
+    const nextWorker = FakeWorker.instances[1]!
+    nextWorker.emit('message', {
+      id: nextWorker.posts[0]!.id,
       result: { status: 'submitted' },
     })
     await expect(second).resolves.toEqual({ status: 'submitted' })
