@@ -49,10 +49,100 @@ const panel = () =>
     ?.shadowRoot?.querySelector('section')
 
 describe('content script focal task host', () => {
+  it('restores the LIKE verification panel after X replaces the action area', async () => {
+    rows = [
+      {
+        campaignId: 'reserved-like',
+        tweetId: '123456',
+        actionType: 'LIKE',
+        expectedReward: 1,
+        reserved: true,
+      },
+    ]
+    await act(async () => scanTimeline())
+    const host = document.querySelector('.lhdao-inline-task')!
+    const section = panel()
+    expect(section?.textContent).toContain('点赞')
+    vi.mocked(messaging.sendMessage).mockClear()
+
+    // X keeps the article but replaces its controls after a local update.
+    const controls = document.querySelector('[role="group"]')!.parentElement!
+    controls.innerHTML =
+      '<div role="group"><button data-testid="unlike">Unlike</button></div>'
+    expect(host.isConnected).toBe(false)
+    await act(async () => scanTimeline())
+
+    expect(document.querySelector('.lhdao-inline-task')).toBe(host)
+    expect(panel()).toBe(section)
+    expect(panel()?.textContent).toContain('点赞')
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
+    await act(async () => scanTimeline())
+    expect(document.querySelectorAll('.lhdao-inline-task')).toHaveLength(1)
+  })
+
+  it('preserves the panel across a temporary missing article and full DOM replacement', async () => {
+    rows = [
+      {
+        campaignId: 'like',
+        tweetId: '123456',
+        actionType: 'LIKE',
+        expectedReward: 1,
+        reserved: true,
+      },
+    ]
+    await act(async () => scanTimeline())
+    const host = document.querySelector('.lhdao-inline-task')!
+    const section = panel()
+    const article = document.querySelector('article')!
+    const replacement = article.cloneNode(true) as Element
+    replacement.querySelector('.lhdao-inline-task')?.remove()
+    article.remove()
+    await act(async () => scanTimeline())
+    expect(document.querySelector('.lhdao-inline-task')).toBeNull()
+    document.body.append(replacement)
+    await act(async () => scanTimeline())
+    expect(document.querySelector('.lhdao-inline-task')).toBe(host)
+    expect(panel()).toBe(section)
+    window.history.replaceState({}, '', '/user/status/654321')
+    replacement.querySelector('a')!.setAttribute('href', '/user/status/654321')
+    await act(async () => scanTimeline())
+    expect(document.querySelector('.lhdao-inline-task')).not.toBe(host)
+    expect(panel()).toBeNull()
+  })
+
+  it('waits for late action controls and recovers after they disappear temporarily', async () => {
+    rows = [
+      {
+        campaignId: 'like',
+        tweetId: '123456',
+        actionType: 'LIKE',
+        expectedReward: 1,
+        reserved: true,
+      },
+    ]
+    const controls = document.querySelector('[role="group"]')!.parentElement!
+    controls.innerHTML = ''
+    await act(async () => scanTimeline())
+    expect(document.querySelector('.lhdao-inline-task')).toBeNull()
+    controls.innerHTML =
+      '<div role="group"><button data-testid="like">Like</button></div>'
+    await act(async () => scanTimeline())
+    const host = document.querySelector('.lhdao-inline-task')!
+    expect(panel()?.textContent).toContain('点赞')
+    controls.innerHTML = ''
+    await act(async () => scanTimeline())
+    controls.innerHTML =
+      '<div role="group"><button data-testid="unlike">Unlike</button></div>'
+    await act(async () => scanTimeline())
+    expect(document.querySelector('.lhdao-inline-task')).toBe(host)
+  })
+
   it('mounts on a cold empty snapshot and displays first-sync failure', async () => {
     syncFailed = true
     await act(async () => scanTimeline())
-    expect(panel()?.textContent ?? '').toContain('评论引导暂时无法加载')
+    expect(panel()?.textContent ?? '').toContain('任务暂时无法加载')
     expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
     vi.mocked(messaging.sendMessage).mockClear()
     await act(async () => window.dispatchEvent(new Event('online')))

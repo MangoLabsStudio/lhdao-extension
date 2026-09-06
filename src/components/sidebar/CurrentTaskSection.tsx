@@ -55,7 +55,9 @@ export function CurrentTaskSection({
   )
   const accountGeneration = React.useRef(0)
   const [accountVersion, setAccountVersion] = React.useState(0)
+  const [reloadVersion, setReloadVersion] = React.useState(0)
   const [campaign, setCampaign] = React.useState<CurrentCampaign | null>(null)
+  const verificationGeneration = React.useRef(0)
   // 显式加载态:'loading' = 正在为当前焦点推文拉/归并任务(显骨架);
   // 'ready' = 已尘埃落定(拿到任务 or 确认无任务)。此前用 campaign===null
   // 兼表两义 → 拉取窗口整段空白(「偶发性不显示加载」)。
@@ -67,6 +69,14 @@ export function CurrentTaskSection({
   const [phase, setPhase] = React.useState<Phase>('detecting')
   const [busy, setBusy] = React.useState(false)
   const [errorMsg, setErrorMsg] = React.useState<string | undefined>(undefined)
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these values define which task owns an in-flight verification.
+  React.useEffect(() => {
+    setBusy(false)
+    return () => {
+      verificationGeneration.current++
+    }
+  }, [campaign?.campaignId, focalId, accountVersion])
 
   // 可见停留计时(refs 累计,focal 变则归零)
   const visibleMsRef = React.useRef(0)
@@ -100,6 +110,7 @@ export function CurrentTaskSection({
   }, [])
 
   // ── 焦点变化:重置全部状态 + 拉该推任务并归并 ──
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadVersion explicitly restarts loading after a user retry.
   React.useEffect(() => {
     setCampaign(null)
     setDetected(new Set())
@@ -175,10 +186,13 @@ export function CurrentTaskSection({
         if (
           cancelled ||
           generation !== accountGeneration.current ||
-          sequence !== loadSequence ||
-          snap.type !== 'tasks-snapshot'
+          sequence !== loadSequence
         )
           return
+        if (snap.type !== 'tasks-snapshot') {
+          showReadFailure()
+          return
+        }
         // Only a completed background refresh can clear a failed sync RPC;
         // ordinary cache reads must keep the failure visible.
         if (afterSync && snap.ready !== false && !snap.syncFailed) {
@@ -230,7 +244,13 @@ export function CurrentTaskSection({
 
     const refresh = () => {
       void sendMessage({ type: 'force-sync' })
-        .then(() => {
+        .then((response) => {
+          if (cancelled || generation !== accountGeneration.current) return
+          if (response.type === 'sync-result' && !response.ok) {
+            forceSyncFailed = true
+            showReadFailure()
+            return
+          }
           forceSyncFailed = false
           return load()
         })
@@ -285,7 +305,7 @@ export function CurrentTaskSection({
         // ignore
       }
     }
-  }, [focalId, accountVersion])
+  }, [focalId, accountVersion, reloadVersion])
 
   // ── 页面可见性记账(mount 一次) ──
   React.useEffect(() => {
@@ -348,6 +368,12 @@ export function CurrentTaskSection({
   // ── 验证发奖 ──
   const onVerify = React.useCallback(async () => {
     if (!campaign || busy) return
+    const generation = verificationGeneration.current
+    const account = accountGeneration.current
+    const isCurrent = () =>
+      generation === verificationGeneration.current &&
+      account === accountGeneration.current &&
+      focalIdFromUrl() === focalId
     setBusy(true)
     setErrorMsg(undefined)
     try {
@@ -355,6 +381,7 @@ export function CurrentTaskSection({
         type: 'verify-task',
         campaignId: campaign.campaignId,
       })
+      if (!isCurrent()) return
       if (r.type === 'verify-result' && r.ok) {
         setPhase('success')
         void sendMessage({ type: 'force-sync' })
@@ -363,11 +390,11 @@ export function CurrentTaskSection({
         setErrorMsg(r.message)
       }
     } catch {
-      setErrorMsg('验证失败,请重试')
+      if (isCurrent()) setErrorMsg('验证失败,请重试')
     } finally {
-      setBusy(false)
+      if (isCurrent()) setBusy(false)
     }
-  }, [campaign, busy, onRewarded])
+  }, [campaign, busy, focalId, onRewarded])
 
   // ── 验证成功 → 新开任务广场标签页并切过去(不动当前 X 页,委托后台开)。
   //    进入 success 后延时自动开,也可点按钮立即开。切走推文(组件卸载)清定时器。
@@ -389,7 +416,14 @@ export function CurrentTaskSection({
           <span className="lh-cur-eyebrow">当前任务</span>
         </div>
         <div className="lh-cur-card lh-cur-guide" role="status">
-          评论引导暂时无法加载
+          任务暂时无法加载
+          <button
+            type="button"
+            className="lh-cur-btn on"
+            onClick={() => setReloadVersion((version) => version + 1)}
+          >
+            重试加载
+          </button>
         </div>
       </section>
     )

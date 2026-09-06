@@ -69,6 +69,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 const render = async () => act(async () => root.render(<CurrentTaskSection />))
 
@@ -119,7 +120,94 @@ describe('current-task comment guide', () => {
         : { type: 'ack' },
     )
     await render()
-    expect(container.textContent).toContain('评论引导暂时无法加载')
+    expect(container.textContent).toContain('任务暂时无法加载')
+  })
+
+  it('shows a retryable task error when force-sync returns a failure result', async () => {
+    const recovered = [{ ...rows[0], actionType: 'LIKE' as const }]
+    rows = []
+    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+    let failed = true
+    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+      if (req.type === 'force-sync') {
+        if (failed) return { type: 'sync-result', ok: false, error: 'offline' }
+        rows = recovered
+        return {
+          type: 'sync-result',
+          ok: true,
+          lastSyncAt: Date.now(),
+          taskCount: 1,
+          tweetCount: 1,
+        }
+      }
+      return previous(req)
+    })
+    await render()
+    expect(container.textContent).toContain('任务暂时无法加载')
+    const retry = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === '重试加载',
+    )!
+    expect(retry).toBeDefined()
+    failed = false
+    await act(async () => retry.click())
+    expect(container.textContent).toContain('点赞')
+    expect(container.textContent).not.toContain('任务暂时无法加载')
+  })
+
+  for (const change of ['account', 'route'] as const) {
+    it(`ignores verification completion after ${change} changes`, async () => {
+      vi.useFakeTimers()
+      vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+      rows[0].actionType = 'LIKE'
+      let complete!: (response: MsgResponse) => void
+      const rewarded = vi.fn()
+      const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+      vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+        if (req.type === 'get-captured-actions')
+          return { type: 'captured-actions', actions: ['LIKE'] }
+        if (req.type === 'verify-task')
+          return new Promise((resolve) => {
+            complete = resolve
+          })
+        return previous(req)
+      })
+      await act(async () =>
+        root.render(<CurrentTaskSection onRewarded={rewarded} />),
+      )
+      await act(async () => vi.advanceTimersByTime(10_000))
+      const verify = container.querySelector<HTMLButtonElement>('.lh-cur-btn')!
+      expect(verify.disabled).toBe(false)
+      await act(async () => verify.click())
+      expect(complete).toBeTypeOf('function')
+      if (change === 'account') {
+        rows = [{ ...rows[0], campaignId: 'new-account-task' }]
+        await act(async () =>
+          accountChanged(
+            { apiToken: { oldValue: 'A', newValue: 'B' } },
+            'local',
+          ),
+        )
+      } else {
+        window.history.replaceState({}, '', '/user/status/654321')
+        await act(async () => vi.advanceTimersByTime(500))
+      }
+      await act(async () =>
+        complete({ type: 'verify-result', ok: true, reward: 0 }),
+      )
+      await act(async () => vi.advanceTimersByTime(3000))
+      expect(rewarded).not.toHaveBeenCalled()
+      expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+        type: 'open-task-hall',
+      })
+      expect(container.textContent).not.toContain('奖励发放中')
+    })
+  }
+
+  it('shows a retryable error instead of an endless skeleton for an invalid snapshot', async () => {
+    vi.mocked(messaging.sendMessage).mockResolvedValue({ type: 'ack' })
+    await render()
+    expect(container.textContent).toContain('任务暂时无法加载')
+    expect(container.textContent).toContain('重试加载')
   })
 
   it('forces synchronization on opening an uncached task, reconnect and wake', async () => {
@@ -169,7 +257,7 @@ describe('current-task comment guide', () => {
         return previous(req)
       })
       await render()
-      expect(container.textContent).toContain('评论引导暂时无法加载')
+      expect(container.textContent).toContain('任务暂时无法加载')
     })
 
     it(`${requestType} failure retains a cached guide and marks update failure`, async () => {
@@ -200,7 +288,7 @@ describe('current-task comment guide', () => {
           : response
       })
       await act(async () => window.dispatchEvent(new Event('online')))
-      const failureText = hasCache ? '更新失败' : '评论引导暂时无法加载'
+      const failureText = hasCache ? '更新失败' : '任务暂时无法加载'
       expect(container.textContent).toContain(failureText)
 
       // A partial refresh must not treat a cached snapshot as recovery.
