@@ -1154,6 +1154,162 @@ describe('ProductExperienceController zkTLS authority queue', () => {
   })
 
   it.each([
+    ['initial', 'VERIFIED'],
+    ['initial', 'VERIFIED_NO'],
+    ['queue', 'VERIFIED'],
+    ['queue', 'VERIFIED_NO'],
+  ] as const)('runs the backend-selected shared prerequisite before the requested metric (%s, %s)', async (entrypoint, bindingStatus) => {
+    const current = entrypoint === 'initial' ? createHarness() : harness
+    const binding = {
+      connectorId: 'shared-binding',
+      triggerPaths: ['/account'],
+      dependentFactIds: ['shared-binding:a'],
+      dependentRuleIds: ['rule-a'],
+    }
+    const metric = {
+      connectorId: 'metric-b',
+      triggerPaths: ['/metric'],
+      dependentFactIds: ['metric-b:b'],
+      dependentRuleIds: ['rule-b'],
+    }
+    current.startZkTls
+      .mockResolvedValueOnce({
+        sessionId: 'proof-shared',
+        connectorId: binding.connectorId,
+        expiresAt: '2026-07-13T10:10:00.000Z',
+        executionPlan: { version: 1, steps: [binding, metric] },
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'proof-metric',
+        connectorId: metric.connectorId,
+        expiresAt: '2026-07-13T10:10:00.000Z',
+        executionPlan: { version: 1, steps: [metric] },
+      })
+    let bindingConfirmed = false
+    current.readZkTlsProgress.mockImplementation(async () =>
+      rules.map((rule) => ({
+        ruleId: rule.id,
+        title: rule.title,
+        status:
+          rule.id === 'rule-a' && bindingConfirmed
+            ? bindingStatus
+            : rule.id === 'rule-b' && current.proveZkTls.mock.calls.length === 2
+              ? 'VERIFIED'
+              : 'PENDING',
+        current: null,
+        target: 1,
+        unit: null,
+      })),
+    )
+    if (entrypoint === 'initial') {
+      current.mintParticipant.mockResolvedValue(
+        ticket({ verificationMode: 'ZKTLS', rules: [rules[1], rules[0]] }),
+      )
+      await current.controller.saveTask(task())
+      await current.controller.start({ executePlan: true })
+    } else {
+      await current.controller.handleEvidence(sender(), 'session-12345678', [
+        match('rule-b'),
+      ])
+    }
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(
+      current.startZkTls.mock.calls.map(([input]) => input.ruleId),
+    ).toEqual(['rule-b'])
+    expect(
+      current.proveZkTls.mock.calls.map(([input]) => input.connectorId),
+    ).toEqual(['shared-binding'])
+    expect(current.storage.session?.zkTlsQueue).toEqual([
+      expect.objectContaining({
+        ruleId: 'rule-a',
+        dependentRuleIds: ['rule-a'],
+        status: 'submitted',
+      }),
+      expect.objectContaining({ ruleId: 'rule-b', status: 'queued' }),
+    ])
+    expect(await current.controller.getState()).toMatchObject({
+      status: 'submitting',
+      zkTlsFinished: false,
+      matchedRuleIds: [],
+      error: null,
+    })
+    bindingConfirmed = true
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(
+      current.startZkTls.mock.calls.map(([input]) => input.ruleId),
+    ).toEqual(['rule-b', 'rule-b'])
+    expect(
+      current.proveZkTls.mock.calls.map(([input]) => input.connectorId),
+    ).toEqual(['shared-binding', 'metric-b'])
+    expect(current.storage.session?.zkTlsQueue[0]).toMatchObject({
+      ruleId: 'rule-a',
+      dependentRuleIds: ['rule-a'],
+      status: 'completed',
+    })
+    await vi.advanceTimersByTimeAsync(1100)
+    expect((await current.controller.getState()).zkTlsFinished).toBe(true)
+    expect(current.proveZkTls).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['initial', 'unknown-connector'],
+    ['initial', 'missing-seed'],
+    ['initial', 'unknown-dependency'],
+    ['initial', 'preceding-seed'],
+    ['queue', 'unknown-connector'],
+    ['queue', 'missing-seed'],
+    ['queue', 'unknown-dependency'],
+    ['queue', 'preceding-seed'],
+  ] as const)('rejects an invalid prerequisite plan (%s, %s)', async (entrypoint, invalid) => {
+    const current = entrypoint === 'initial' ? createHarness() : harness
+    const binding = {
+      connectorId: 'shared-binding',
+      triggerPaths: ['/account'],
+      dependentFactIds: ['shared-binding:a'],
+      dependentRuleIds: [
+        invalid === 'unknown-dependency' ? 'unknown' : 'rule-a',
+      ],
+    }
+    const metric = {
+      connectorId: 'metric-b',
+      triggerPaths: ['/metric'],
+      dependentFactIds: ['metric-b:b'],
+      dependentRuleIds: ['rule-b'],
+    }
+    current.startZkTls.mockResolvedValue({
+      sessionId: 'proof-shared',
+      connectorId:
+        invalid === 'unknown-connector' ? 'unknown' : binding.connectorId,
+      expiresAt: '2026-07-13T10:10:00.000Z',
+      executionPlan: {
+        version: 1,
+        steps:
+          invalid === 'missing-seed'
+            ? [binding]
+            : invalid === 'preceding-seed'
+              ? [metric, binding]
+              : [binding, metric],
+      },
+    })
+    if (entrypoint === 'initial') {
+      current.mintParticipant.mockResolvedValue(
+        ticket({ verificationMode: 'ZKTLS', rules: [rules[1], rules[0]] }),
+      )
+      await current.controller.saveTask(task())
+      await current.controller.start({ executePlan: true })
+    } else {
+      await current.controller.handleEvidence(sender(), 'session-12345678', [
+        match('rule-b'),
+      ])
+    }
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(current.proveZkTls).not.toHaveBeenCalled()
+    expect((await current.controller.getState()).error).toBe(
+      entrypoint === 'initial' ? 'EXTENSION_ERROR' : 'VERIFICATION_FAILED',
+    )
+  })
+
+  it.each([
     'ANY',
     'ALL',
   ])('waits for submitted confirmation before continuing a stateful %s plan', async (mode) => {
@@ -1444,49 +1600,80 @@ describe('ProductExperienceController zkTLS authority queue', () => {
     )
   })
 
-  it('proves a shared connector once and closes terminal yes/no without claiming all rules passed', async () => {
+  it('waits for one shared binding proof to confirm both metric rules without claiming all rules passed', async () => {
     harness.startZkTls.mockResolvedValue({
       sessionId: 'proof-shared',
-      connectorId: 'shared',
+      connectorId: 'account-binding',
       expiresAt: '2026-07-13T10:10:00.000Z',
       executionPlan: {
         version: 1,
         steps: [
           {
-            connectorId: 'shared',
+            connectorId: 'account-binding',
             triggerPaths: ['/app'],
-            dependentFactIds: ['shared:a', 'shared:b'],
+            dependentFactIds: ['account-binding:a', 'account-binding:b'],
             dependentRuleIds: ['rule-a', 'rule-b'],
           },
         ],
       },
     })
-    harness.readZkTlsProgress.mockResolvedValue([
-      {
-        ruleId: 'rule-a',
-        title: 'A',
-        status: 'VERIFIED',
-        current: 1,
-        target: 1,
-        unit: null,
-      },
-      {
-        ruleId: 'rule-b',
-        title: 'B',
-        status: 'VERIFIED_NO',
-        current: 2,
-        target: 3,
-        actual: 2,
-        required: 3,
-        comparator: 'GTE',
-        unit: null,
-      },
-    ])
+    harness.readZkTlsProgress
+      .mockResolvedValueOnce(
+        rules.map((rule) => ({
+          ruleId: rule.id,
+          title: rule.title,
+          status: 'PENDING',
+          current: null,
+          target: 1,
+          unit: null,
+        })),
+      )
+      .mockResolvedValue([
+        {
+          ruleId: 'rule-a',
+          title: 'A',
+          status: 'VERIFIED',
+          current: 1,
+          target: 1,
+          unit: null,
+        },
+        {
+          ruleId: 'rule-b',
+          title: 'B',
+          status: 'VERIFIED_NO',
+          current: 2,
+          target: 3,
+          actual: 2,
+          required: 3,
+          comparator: 'GTE',
+          unit: null,
+        },
+      ])
     await harness.controller.handleEvidence(sender(), 'session-12345678', [
       match('rule-a'),
       match('rule-b'),
     ])
     await vi.advanceTimersByTimeAsync(1100)
+    expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.startZkTls).toHaveBeenCalledTimes(1)
+    expect(harness.proveZkTls.mock.calls[0][0].connectorId).toBe(
+      'account-binding',
+    )
+    expect(await harness.controller.getState()).toMatchObject({
+      status: 'submitting',
+      matchedRuleIds: [],
+      zkTlsFinished: false,
+      error: null,
+    })
+    expect(harness.storage.session?.zkTlsQueue).toEqual([
+      expect.objectContaining({
+        connectorId: 'account-binding',
+        dependentRuleIds: ['rule-a', 'rule-b'],
+        binding: false,
+        status: 'submitted',
+      }),
+    ])
+    await vi.advanceTimersByTimeAsync(2100)
     expect(harness.proveZkTls).toHaveBeenCalledTimes(1)
     expect(harness.startZkTls).toHaveBeenCalledTimes(1)
     const state = await harness.controller.getState()

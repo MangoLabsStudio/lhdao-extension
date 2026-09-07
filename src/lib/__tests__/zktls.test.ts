@@ -1941,7 +1941,10 @@ describe('zkTLS strict boundaries', () => {
     expect(() => validateConnector(query)).toThrow()
   })
 
-  test('parses signed account-binding metadata only for binding connectors', () => {
+  test.each([
+    false,
+    true,
+  ])('parses signed account-binding metadata only for binding connectors (shared metric=%s)', (sharedMetric) => {
     const binding = cloneV4()
     binding.purpose = 'ACCOUNT_BINDING'
     binding.account_binding = {
@@ -1973,11 +1976,23 @@ describe('zkTLS strict boundaries', () => {
       collection_paths: [],
       max_elements: 200,
     }
+    if (sharedMetric) {
+      binding.pipelines.unshift({
+        output: 'balance',
+        sourcePath: '$.balance',
+        cast: 'DECIMAL',
+        valueUnit: 'USDT',
+        outputUnit: 'USDT',
+      })
+      binding.disclosure.key_paths = ['$.balance', '$.wallet']
+      binding.disclosure.scalar_paths = ['$.balance', '$.wallet']
+    }
     const missingAccountBinding = structuredClone(binding)
 
     expect(validateConnector(binding)).toMatchObject({
       purpose: 'ACCOUNT_BINDING',
       account_binding: { providerKey: 'example' },
+      pipelines: binding.pipelines,
     })
     expect(() =>
       validateConnector({ ...v4Connector(), account_binding: {} }),

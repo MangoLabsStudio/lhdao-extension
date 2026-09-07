@@ -360,6 +360,29 @@ function reusableZkTlsSession(
   }
 }
 
+function plannedZkTlsStep(
+  session: ProductZkTlsSession,
+  requestedRuleId: string | undefined,
+  rules: ProductExperienceRule[],
+) {
+  const steps = session.executionPlan?.steps ?? []
+  const index = steps.findIndex(
+    (step) => step.connectorId === session.connectorId,
+  )
+  const step = steps[index]
+  if (
+    !requestedRuleId ||
+    !rules.some((rule) => rule.id === requestedRuleId) ||
+    !step?.dependentRuleIds.length ||
+    step.dependentRuleIds.some((id) => !rules.some((rule) => rule.id === id)) ||
+    !steps
+      .slice(index)
+      .some((item) => item.dependentRuleIds.includes(requestedRuleId))
+  )
+    return null
+  return step
+}
+
 function terminalRuleIds(session: ProductExperienceSession): Set<string> {
   if (session.ticketKind === 'TEST')
     return new Set(
@@ -884,22 +907,17 @@ export class ProductExperienceController {
           if (this.generation !== mintGeneration)
             return this.getStateWithoutRetry()
         } else {
-          const step = prepared.executionPlan.steps.find(
-            (item) => item.connectorId === prepared.connectorId,
-          )
-          if (
-            !seedRuleId ||
-            !step?.dependentRuleIds.includes(seedRuleId) ||
-            step.dependentRuleIds.some(
-              (id) => !minted.rules.some((rule) => rule.id === id),
-            )
-          )
+          const step = plannedZkTlsStep(prepared, seedRuleId, minted.rules)
+          if (!step)
             return this.setTransient(
               this.errorState(currentTask, 'EXTENSION_ERROR'),
             )
           session.zkTlsQueue = [
             {
-              ruleId: seedRuleId,
+              ruleId:
+                seedRuleId && step.dependentRuleIds.includes(seedRuleId)
+                  ? seedRuleId
+                  : step.dependentRuleIds[0],
               status: 'queued',
               sessionId: prepared.sessionId,
               connectorId: prepared.connectorId,
@@ -1776,6 +1794,7 @@ export class ProductExperienceController {
       const correlationId =
         session.zkTlsDiagnostic?.correlationId ??
         this.dependencies.randomSessionId()
+      let proofRuleId = item.ruleId
       const proving = await this.mutateZkTlsSession(
         session.sessionId,
         (current) => {
@@ -1791,19 +1810,18 @@ export class ProductExperienceController {
           queued.stage = 'proof-session-ready'
           queued.details = undefined
           if (started.executionPlan) {
-            const step = started.executionPlan.steps.find(
-              (entry) => entry.connectorId === started.connectorId,
-            )
-            if (
-              !step?.dependentRuleIds.includes(queued.ruleId) ||
-              step.dependentRuleIds.some(
-                (id) => !current.rules.some((rule) => rule.id === id),
-              )
-            ) {
+            const step = plannedZkTlsStep(started, queued.ruleId, current.rules)
+            if (!step) {
               queued.status = 'paused'
               queued.failureCode = 'UNSUPPORTED_CONNECTOR'
               current.error = 'VERIFICATION_FAILED'
               return
+            }
+            // A backend-selected prerequisite owns its own rules. The
+            // requested rule remains queued on its later connector step.
+            if (!step.dependentRuleIds.includes(queued.ruleId)) {
+              queued.ruleId = step.dependentRuleIds[0]
+              proofRuleId = queued.ruleId
             }
             queued.dependentRuleIds = step.dependentRuleIds.filter(
               (id) => !terminalRuleIds(current).has(id),
@@ -1850,7 +1868,7 @@ export class ProductExperienceController {
         },
       )
       const provingItem = proving?.zkTlsQueue.find(
-        (entry) => entry.ruleId === item.ruleId,
+        (entry) => entry.ruleId === proofRuleId,
       )
       if (!provingItem || provingItem.status !== 'proving') return
 
@@ -1873,7 +1891,7 @@ export class ProductExperienceController {
       } catch {
         await this.resetZkTlsItem(
           session.sessionId,
-          item.ruleId,
+          proofRuleId,
           'VERIFICATION_FAILED',
           false,
           'ZKTLS_UNKNOWN_FAILURE',
@@ -1893,7 +1911,7 @@ export class ProductExperienceController {
               : 'VERIFICATION_FAILED'
         await this.resetZkTlsItem(
           session.sessionId,
-          item.ruleId,
+          proofRuleId,
           publicError,
           result.code === 'SESSION_EXPIRED',
           publicError === 'VERIFICATION_FAILED'
@@ -1911,7 +1929,7 @@ export class ProductExperienceController {
         session.sessionId,
         (current) => {
           const provingEntry = current.zkTlsQueue.find(
-            (entry) => entry.ruleId === item.ruleId,
+            (entry) => entry.ruleId === proofRuleId,
           )
           if (
             !provingEntry ||
