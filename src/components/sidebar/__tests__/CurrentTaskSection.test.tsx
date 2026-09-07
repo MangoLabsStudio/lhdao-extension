@@ -89,18 +89,22 @@ describe('current-task comment guide', () => {
     const guide = container.querySelector('.lh-cur-guide-text')
     expect(guide?.textContent).toBe(rows[0].commentGuide)
     const text = container.textContent ?? ''
-    expect(text.indexOf('作者')).toBeLessThan(text.indexOf('评论引导'))
-    expect(text.indexOf('评论引导')).toBeLessThan(text.indexOf('要完成'))
+    expect(text.indexOf('作者')).toBeLessThan(
+      text.indexOf('买家希望的评论方向'),
+    )
+    expect(text.indexOf('买家希望的评论方向')).toBeLessThan(
+      text.indexOf('要完成'),
+    )
     expect(text).not.toContain('旧关键词')
   })
   it('hides known null but distinguishes unknown and failed cached reads', async () => {
     rows[0].commentGuide = null
     await render()
-    expect(container.textContent).not.toContain('评论引导')
+    expect(container.textContent).not.toContain('买家希望的评论方向')
     rows[0].commentGuide = undefined
     rows[0].commentGuideStatus = 'unavailable'
     await act(async () => updated({ type: 'tasks-updated' }))
-    expect(container.textContent).toContain('评论引导暂时无法加载')
+    expect(container.textContent).toContain('评论方向暂时无法加载')
     rows[0].commentGuide = '缓存方向'
     rows[0].commentGuideStatus = 'stale'
     await act(async () => updated({ type: 'tasks-updated' }))
@@ -301,7 +305,7 @@ describe('current-task comment guide', () => {
       await act(async () => updated({ type: 'tasks-updated' }))
       expect(container.textContent).toContain('后台成功刷新后的引导')
       expect(container.textContent).not.toContain('更新失败')
-      expect(container.textContent).not.toContain('评论引导暂时无法加载')
+      expect(container.textContent).not.toContain('评论方向暂时无法加载')
     })
   }
 

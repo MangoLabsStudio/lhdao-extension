@@ -509,12 +509,12 @@ export function CurrentTaskSection({
             <div className="lh-cur-guide">
               {campaign.commentGuideStatus === 'unavailable' ? (
                 <div className="lh-cur-guide-status" role="status">
-                  评论引导暂时无法加载
+                  评论方向暂时无法加载
                 </div>
               ) : (
                 <>
                   <div className="lh-cur-guide-label">
-                    评论引导
+                    买家希望的评论方向
                     {campaign.commentGuideStatus === 'stale' ? (
                       <span className="lh-cur-guide-status" role="status">
                         更新失败
