@@ -139,7 +139,11 @@ function responseBody(
     return fail()
   const length = headers.get('content-length')
   const body = received.subarray(bodyOffset)
-  if (connector.response_transfer_encoding === 'chunked') {
+  if (
+    connector.response_transfer_encoding === 'chunked' ||
+    (connector.response_transfer_encoding === 'auto' &&
+      headers.has('transfer-encoding'))
+  ) {
     if (!decode(lines[0]!).startsWith('HTTP/1.1 ')) return fail()
     if (headers.get('transfer-encoding') !== 'chunked' || length !== undefined)
       return fail()
@@ -575,7 +579,6 @@ export async function v4ResponseDisclosureRanges(
     return [{ start: 0, end: received.length }]
   } finally {
     if (decoded && decoded !== entity) decoded.fill(0)
-    if (entity && connector.response_transfer_encoding === 'chunked')
-      entity.fill(0)
+    if (entity && entity.buffer !== received.buffer) entity.fill(0)
   }
 }

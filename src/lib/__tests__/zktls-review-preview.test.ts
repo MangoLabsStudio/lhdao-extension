@@ -140,6 +140,66 @@ describe('local proof review snapshot', () => {
     expect(buildProofReviewSnapshot(args).account.observed).toBe(wallet)
   })
 
+  it('preserves subaccount business identifiers for signed wallet extraction', () => {
+    const args = input()
+    const subaccount = `${wallet}64656661756c740000000000`
+    args.connector.pipelines[0].valuePath = '$.subaccount'
+    args.connector.pipelines[0].cast = 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
+    args.response.text = JSON.stringify({
+      accounts: [{ account: 'subaccount-a', subaccount }],
+    })
+    expect(buildProofReviewSnapshot(args)).toMatchObject({
+      response: { accounts: [{ subaccount }] },
+      account: { observed: wallet, status: 'matched' },
+      canConfirm: true,
+      error: null,
+    })
+  })
+
+  it.each([
+    'wallet-1',
+    'owner-result',
+  ])('uses signed wallet semantics for output %s', (output) => {
+    const args = input()
+    args.connector.account_binding!.walletOutput = output
+    args.connector.pipelines[0].output = output
+    expect(buildProofReviewSnapshot(args)).toMatchObject({
+      account: { observed: wallet, status: 'matched' },
+      values: [{ output, value: wallet }],
+      canConfirm: true,
+      error: null,
+    })
+  })
+
+  it.each([
+    'token',
+    'subaccount_token',
+  ])('still hides a credential field named %s', (field) => {
+    const args = input()
+    const secret = `${wallet}64656661756c740000000000`
+    args.connector.pipelines[0].valuePath = `$.${field}`
+    args.connector.pipelines[0].cast = 'EVM_ADDRESS_FROM_BYTES32_PREFIX'
+    args.response.text = JSON.stringify({
+      accounts: [
+        { account: 'subaccount-a', [field]: secret, subaccount: secret },
+      ],
+    })
+    const snapshot = buildProofReviewSnapshot(args)
+    expect(snapshot.canConfirm).toBe(false)
+    expect(JSON.stringify(snapshot)).not.toContain(secret)
+  })
+
+  it('does not exempt a sensitive wallet output name', () => {
+    const args = input()
+    args.connector.account_binding!.walletOutput = 'accessToken'
+    args.connector.pipelines[0].output = 'accessToken'
+    expect(buildProofReviewSnapshot(args)).toMatchObject({
+      canConfirm: false,
+      values: [],
+      error: 'PRODUCT_ZKTLS_REVIEW_REDACTED',
+    })
+  })
+
   it('labels METRIC identity as verified binding without inventing a response wallet', () => {
     const args = input()
     args.connector = structuredClone(fixture.connector)

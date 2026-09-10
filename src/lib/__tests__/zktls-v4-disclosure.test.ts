@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import type { CapturedRequest } from '../zktls/capture'
-import type { V4Connector } from '../zktls/interpreter'
+import { type V4Connector, validateConnector } from '../zktls/interpreter'
 import {
   v4PublicRequestDetails,
   v4RequestDisclosureRanges,
@@ -42,6 +42,34 @@ const INTEGRATION_FIXTURE = JSON.parse(
   >
 }
 const GZIP_INTEGRATION = fixedBytes(INTEGRATION_FIXTURE.gzipBase64)
+
+test('signed auto framing accepts fixed and chunked without relaxing malformed framing', async () => {
+  for (const [mode, fixture] of Object.entries(INTEGRATION_FIXTURE.modes)) {
+    const config = validateConnector({
+      ...integrationConnector(mode as keyof typeof INTEGRATION_FIXTURE.modes),
+      response_transfer_encoding: 'auto',
+    }) as V4Connector
+    const received = fixedBytes(fixture.responseBase64)
+    await expect(v4ResponseDisclosureRanges(received, config)).resolves.toEqual(
+      [{ start: 0, end: received.length }],
+    )
+    const headerEnd = decoder.decode(received).indexOf('\r\n\r\n')
+    const extraLength = encoder.encode('Content-Length: 1\r\n')
+    const conflicting = new Uint8Array(received.length + extraLength.length)
+    conflicting.set(received.subarray(0, headerEnd + 2))
+    conflicting.set(extraLength, headerEnd + 2)
+    conflicting.set(
+      received.subarray(headerEnd + 2),
+      headerEnd + 2 + extraLength.length,
+    )
+    await expect(
+      v4ResponseDisclosureRanges(conflicting, config),
+    ).rejects.toThrow()
+    await expect(
+      v4ResponseDisclosureRanges(received.slice(0, -1), config),
+    ).rejects.toThrow()
+  }
+})
 const WINDOW_FIXTURE_BYTES = readFileSync(
   'test/fixtures/product-zktls-v4-window.json',
 )

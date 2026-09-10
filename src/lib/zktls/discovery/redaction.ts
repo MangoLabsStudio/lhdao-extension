@@ -70,7 +70,7 @@ export const sensitiveKey = (key: string) =>
   )
 
 const businessIdentifierKey = (key: string) =>
-  /(?:^|[_.-])(?:id|wallet|wallet[_.-]?address|account|account[_.-]?id|address|user[_.-]?id|customer[_.-]?id)$/.test(
+  /(?:^|[_.-])(?:id|wallet|wallet[_.-]?address|account|account[_.-]?id|sub[_.-]?account(?:[_.-]?id)?|address|user[_.-]?id|customer[_.-]?id)$/.test(
     normalizedKey(key),
   )
 export const dynamicKey = (key: string) =>

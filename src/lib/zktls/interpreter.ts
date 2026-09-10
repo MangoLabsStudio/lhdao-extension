@@ -257,7 +257,7 @@ export type V4Connector = {
   resolved_variables: Record<string, V4ResolvedVariable>
   response_format: 'json'
   response_status: 200
-  response_transfer_encoding?: 'chunked'
+  response_transfer_encoding?: 'chunked' | 'auto'
   response_content_encoding?: 'gzip'
   max_decoded_data?: number
   disclosure: {
@@ -2226,7 +2226,8 @@ function validateV4Connector(value: unknown): V4Connector {
     fail('period_days is invalid.')
   if (
     hasResponseTransferEncoding &&
-    input.response_transfer_encoding !== 'chunked'
+    input.response_transfer_encoding !== 'chunked' &&
+    input.response_transfer_encoding !== 'auto'
   )
     fail('V4 response framing is invalid.')
   if (

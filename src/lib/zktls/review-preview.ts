@@ -206,7 +206,16 @@ export function buildProofReviewSnapshot(
         body.value,
         variables,
       )
-      const safeValue = text(String(result.value), pipeline.output)
+      // Wallet semantics come from the signed binding, not its arbitrary output name.
+      const walletOutput =
+        connector.purpose === 'ACCOUNT_BINDING' &&
+        pipeline.output === connector.account_binding.walletOutput &&
+        !sensitiveKey(pipeline.output) &&
+        evmAddress(result.value)
+      const safeValue = text(
+        String(result.value),
+        walletOutput ? 'walletAddress' : pipeline.output,
+      )
       if (safeValue === REDACTED)
         throw new Error('PRODUCT_ZKTLS_REVIEW_REDACTED')
       return {
