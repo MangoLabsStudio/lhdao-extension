@@ -3,6 +3,7 @@ mutation StartProductZkTlsProof($campaignId: String!, $ruleId: String!) {
     sessionId
     connectorId
     expiresAt
+    reviewWalletAddress
     executionPlan {
       version
       steps {
@@ -20,6 +21,7 @@ mutation StartProductZkTlsTestProof($campaignId: String!, $ruleId: String!) {
     sessionId
     connectorId
     expiresAt
+    reviewWalletAddress
     executionPlan {
       version
       steps {

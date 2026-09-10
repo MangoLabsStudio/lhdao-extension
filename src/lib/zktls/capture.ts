@@ -994,6 +994,7 @@ export class CaptureSession {
       binding.method === 'POST' ? details.requestBody : undefined
     if (binding.method === 'POST' && !requestBody)
       fail('captured POST body is invalid')
+    let semanticCanonical: string | undefined
     if (v4 && requestBody) {
       const bodyVariables = binding.variables.filter(
         (variable) =>
@@ -1013,6 +1014,17 @@ export class CaptureSession {
         return
       }
       if (bodyMatch === null) return
+      semanticCanonical = bodyMatch.semanticCanonical
+      // Keep the first exact replay. Polling the same public query is not
+      // another account candidate; its headers/completion cannot replace ours.
+      if (
+        !this.#used &&
+        !this.#failed &&
+        this.#requestId !== details.requestId &&
+        this.#candidate?.path === path &&
+        this.#candidate.semanticCanonical === semanticCanonical
+      )
+        return
     }
     if (this.#used || this.#failed || this.#candidate || this.#captured) {
       if (this.#requestId !== details.requestId)
@@ -1028,6 +1040,7 @@ export class CaptureSession {
     this.#candidate = {
       path,
       secrets: {},
+      ...(semanticCanonical === undefined ? {} : { semanticCanonical }),
       ...(binding.method === 'POST' ? { method: 'POST' as const } : {}),
       ...(binding.matcher
         ? v4

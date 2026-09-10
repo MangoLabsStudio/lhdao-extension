@@ -204,7 +204,7 @@ describe('product experience popup', () => {
     requests.splice(0)
 
     await act(async () => {
-      findButton(container, '开始验证').click()
+      findButton(container, '读取当前页面').click()
     })
 
     await vi.waitFor(() => {
@@ -278,7 +278,7 @@ describe('product experience popup', () => {
     expect(container.textContent).toContain('要求 GTE 3')
     expect(container.textContent).toContain('NO_REQUEST_OBSERVED')
     const button = [...container.querySelectorAll('button')].find(
-      (item) => item.textContent === '继续此条件',
+      (item) => item.textContent === '重新读取此条件',
     )
     expect(button).toBeDefined()
     await act(async () => button?.click())
@@ -294,7 +294,7 @@ describe('product experience popup', () => {
       productState('observing', { zkTlsFinished: true, zkTlsProgress: [] }),
     )
     expect(container.textContent).toContain('验证完成，部分条件不满足')
-    expect(container.textContent).not.toContain('继续证明')
+    expect(container.textContent).not.toContain('读取当前页面')
     expect(container.textContent).not.toContain('证明失败')
   })
 
@@ -326,8 +326,8 @@ describe('product experience popup', () => {
     )
     expect(container.textContent).toContain('未验证，无需继续')
     expect(container.textContent).not.toContain('等待证明')
-    expect(container.textContent).not.toContain('重试此条件')
-    expect(container.textContent).not.toContain('继续此条件')
+    expect(container.textContent).not.toContain('重新读取此条件')
+    expect(container.textContent).not.toContain('重新读取此条件')
   })
 
   it('shows captured proof stages and exact safe failure details', async () => {
@@ -548,7 +548,7 @@ describe('product experience popup', () => {
       }),
     )
 
-    const button = findButton(harness.container, '继续证明')
+    const button = findButton(harness.container, '读取当前页面')
     await act(async () => button.click())
 
     await vi.waitFor(() => {
@@ -562,7 +562,7 @@ describe('product experience popup', () => {
         ),
       ).toEqual([{ type: 'start-product-experience' }])
     })
-    expect(harness.container.textContent).not.toContain('重试证明')
+    expect(harness.container.textContent).not.toContain('重新读取')
   })
 
   it('continues a backend PENDING next-stage proof through the existing start action', async () => {
@@ -584,7 +584,7 @@ describe('product experience popup', () => {
     await vi.waitFor(() =>
       expect(harness.container.textContent).toContain('等待证明'),
     )
-    const button = findButton(harness.container, '继续证明')
+    const button = findButton(harness.container, '读取当前页面')
     await act(async () => button.click())
 
     await vi.waitFor(() => {
@@ -605,7 +605,7 @@ describe('product experience popup', () => {
       productState('observing', { zkTlsProgress: [] }),
     )
 
-    await act(async () => findButton(harness.container, '继续证明').click())
+    await act(async () => findButton(harness.container, '读取当前页面').click())
 
     await vi.waitFor(() => {
       expect(
@@ -628,7 +628,7 @@ describe('product experience popup', () => {
     expect(harness.requests).toContainEqual({
       type: 'start-product-experience',
     })
-    expect(harness.container.textContent).not.toContain('重试证明')
+    expect(harness.container.textContent).not.toContain('重新读取')
   })
 
   it('shows verified only for the authoritative verified state', async () => {
@@ -696,7 +696,7 @@ describe('product experience popup', () => {
     )
 
     await vi.waitFor(() =>
-      expect(findButton(container, '重试证明')).toBeTruthy(),
+      expect(findButton(container, '重新读取')).toBeTruthy(),
     )
     expect(container.textContent).toContain('错误码：PROVER_TIMEOUT')
   })
@@ -713,7 +713,7 @@ describe('product experience popup', () => {
   ] as const)('does not offer retry after the controller finishes into %s', async (_name, state, label) => {
     const { container } = await renderPopup(state)
     await vi.waitFor(() => expect(container.textContent).toContain(label))
-    expect(container.textContent).not.toContain('重试证明')
+    expect(container.textContent).not.toContain('重新读取')
   })
 
   it('distinguishes origin mismatch from permission reauthorization', async () => {

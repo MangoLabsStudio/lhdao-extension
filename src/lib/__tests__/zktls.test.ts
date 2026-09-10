@@ -3892,7 +3892,11 @@ describe('zkTLS V4 page and target permissions', () => {
     )
   })
 
-  test('ignores a malformed body event and submits a later exact V4 request', async () => {
+  test.each([
+    'none',
+    'pending',
+    'captured',
+  ])('submits one exact V4 request after malformed traffic and %s duplicates', async (duplicateStage) => {
     const rawConfig = { ...v4Connector(), trigger_paths: ['/first', '/second'] }
     const config = validateConnector(rawConfig)
     const signed = await signedV4Envelopes(rawConfig)
@@ -3997,11 +4001,26 @@ describe('zkTLS V4 page and target permissions', () => {
       requestId: 'exact',
       requestBody: { raw: [{ bytes: exact.buffer }] },
     })
+    const dispatchDuplicate = () => {
+      dispatchBody({
+        ...request,
+        requestId: 'duplicate',
+        requestBody: { raw: [{ bytes: exact.buffer }] },
+      })
+      dispatchHeaders({
+        ...request,
+        requestId: 'duplicate',
+        requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+      })
+      dispatchCompleted({ requestId: 'duplicate' })
+    }
+    if (duplicateStage === 'pending') dispatchDuplicate()
     dispatchHeaders({
       ...request,
       requestId: 'exact',
       requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
     })
+    if (duplicateStage === 'captured') dispatchDuplicate()
     dispatchCompleted({ requestId: 'exact' })
 
     await expect(proving).resolves.toEqual({

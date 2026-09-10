@@ -26,6 +26,7 @@ import type {
   UserProfile,
 } from '@/lib/storage'
 import type { DiscoveryResponse } from '@/lib/zktls/discovery/session-manager'
+import type { ProofReviewUiState } from '@/lib/zktls/review-channel'
 import type {
   ProductExperienceRule,
   ProductExperienceTaskRef,
@@ -39,6 +40,9 @@ import type {
 export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
 
 export type MsgRequest =
+  | { type: 'get-product-proof-review' }
+  | { type: 'confirm-product-proof-review'; reviewId: string }
+  | { type: 'reread-product-proof' }
   | {
       type: 'start-discovery'
       correlationId: string
@@ -251,6 +255,7 @@ export type MsgRequest =
 // ── Responses ────────────────────────────────────────────────────────
 
 export type MsgResponse =
+  | { type: 'product-proof-review-result'; state: ProofReviewUiState | null }
   | DiscoveryResponse
   | {
       type: 'zktls-prove-result'

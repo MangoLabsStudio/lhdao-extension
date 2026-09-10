@@ -5,6 +5,7 @@ import { sendMessage } from '@/lib/messaging'
 import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
 import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
 import type { UserProfile } from '@/lib/storage'
+import type { ProofReviewUiState } from '@/lib/zktls/review-channel'
 import type { PairingState } from '@/types/messages'
 
 /**
@@ -39,6 +40,27 @@ export function App() {
   const [productState, setProductState] =
     React.useState<ProductExperienceControllerState | null>(null)
   const [startingProduct, setStartingProduct] = React.useState(false)
+  const [proofReview, setProofReview] =
+    React.useState<ProofReviewUiState | null>(null)
+  const readProofReview = React.useCallback(async () => {
+    try {
+      const response = await sendMessage({ type: 'get-product-proof-review' })
+      setProofReview(
+        response.type === 'product-proof-review-result' ? response.state : null,
+      )
+    } catch {
+      setProofReview(null)
+    }
+  }, [])
+  React.useEffect(() => {
+    void readProofReview()
+    const listener = (message: { type?: string }) => {
+      if (message.type === 'product-proof-review-changed')
+        void readProofReview()
+    }
+    chrome.runtime.onMessage.addListener(listener)
+    return () => chrome.runtime.onMessage.removeListener(listener)
+  }, [readProofReview])
 
   const readData = React.useCallback(async () => {
     const r = await sendMessage({ type: 'get-popup-data' })
@@ -178,6 +200,18 @@ export function App() {
           state={productState}
           busy={startingProduct}
           onStart={startProductExperience}
+          review={proofReview}
+          onConfirmReview={async (reviewId) => {
+            await sendMessage({
+              type: 'confirm-product-proof-review',
+              reviewId,
+            })
+            await readProofReview()
+          }}
+          onReread={async () => {
+            await sendMessage({ type: 'reread-product-proof' })
+            await readProofReview()
+          }}
         />
       )}
       {data === null ? (

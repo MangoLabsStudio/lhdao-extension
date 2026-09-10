@@ -1103,6 +1103,9 @@ function parseProductZkTlsSession(value: unknown): ProductZkTlsSession {
     'sessionId',
     'connectorId',
     'expiresAt',
+    ...(Object.hasOwn(requireRecord(value), 'reviewWalletAddress')
+      ? ['reviewWalletAddress']
+      : []),
     ...(Object.hasOwn(requireRecord(value), 'executionPlan')
       ? ['executionPlan']
       : []),
@@ -1111,6 +1114,14 @@ function parseProductZkTlsSession(value: unknown): ProductZkTlsSession {
     sessionId: requireString(session, 'sessionId'),
     connectorId: requireString(session, 'connectorId'),
     expiresAt: requireDateTime(session, 'expiresAt'),
+    ...(Object.hasOwn(session, 'reviewWalletAddress')
+      ? {
+          reviewWalletAddress:
+            session.reviewWalletAddress === null
+              ? null
+              : requireString(session, 'reviewWalletAddress'),
+        }
+      : {}),
     ...(Object.hasOwn(session, 'executionPlan')
       ? {
           executionPlan:

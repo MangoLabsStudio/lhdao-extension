@@ -176,6 +176,7 @@ export interface ProductExperienceRuntimeSender {
 }
 
 export type ProductZkTlsQueueItem = {
+  reviewWalletAddress?: string | null
   ruleId: string
   status: 'queued' | 'paused' | 'proving' | 'submitted' | 'completed'
   sessionId: string | null
@@ -213,7 +214,7 @@ export interface ProductExperienceSession {
   zkTlsQueue: ProductZkTlsQueueItem[]
   preparedZkTls?: { ruleId: string } & Pick<
     ProductZkTlsSession,
-    'sessionId' | 'connectorId' | 'expiresAt'
+    'sessionId' | 'connectorId' | 'expiresAt' | 'reviewWalletAddress'
   >
   plannedExecution?: boolean
   zkTlsTestPassed?: boolean
@@ -357,6 +358,7 @@ function reusableZkTlsSession(
     sessionId: item.sessionId,
     connectorId: item.connectorId,
     expiresAt: item.expiresAt,
+    reviewWalletAddress: item.reviewWalletAddress,
   }
 }
 
@@ -655,7 +657,13 @@ export class ProductExperienceController {
       if (isZkTlsSession(existing) && allZkTlsConditionsFinished(existing))
         return this.stateFromSession(existing)
       if (isZkTlsSession(existing) && existing.plannedExecution) {
+        if (!existing.allowedOrigins.includes(origin))
+          return this.setTransient(this.originMismatchState(task))
         await this.mutateZkTlsSession(existing.sessionId, (current) => {
+          current.tabId = tab.id
+          current.authorizedOrigin = origin
+          current.currentOrigin = origin
+          current.currentOriginAllowed = true
           current.status = 'observing'
           current.error = null
           current.zkTlsFailureCode = null
@@ -922,6 +930,7 @@ export class ProductExperienceController {
               sessionId: prepared.sessionId,
               connectorId: prepared.connectorId,
               expiresAt: prepared.expiresAt,
+              reviewWalletAddress: prepared.reviewWalletAddress,
               dependentRuleIds: step.dependentRuleIds,
               binding: step.dependentFactIds.length === 0,
             },
@@ -952,6 +961,7 @@ export class ProductExperienceController {
           sessionId: prepared.sessionId,
           connectorId: prepared.connectorId,
           expiresAt: prepared.expiresAt,
+          reviewWalletAddress: prepared.reviewWalletAddress,
         }
         if (!session.currentOriginAllowed) {
           session.status = 'reauthorize'
@@ -1386,6 +1396,7 @@ export class ProductExperienceController {
               sessionId: prepared?.sessionId ?? null,
               connectorId: prepared?.connectorId ?? null,
               expiresAt: prepared?.expiresAt ?? null,
+              reviewWalletAddress: prepared?.reviewWalletAddress,
             })
             if (prepared) delete current.preparedZkTls
           }
@@ -1803,6 +1814,7 @@ export class ProductExperienceController {
           )
           if (!queued || queued.status !== 'queued') return
           queued.status = 'proving'
+          queued.reviewWalletAddress = started.reviewWalletAddress
           queued.sessionId = started.sessionId
           queued.connectorId = started.connectorId
           queued.expiresAt = started.expiresAt
@@ -1870,7 +1882,7 @@ export class ProductExperienceController {
       const provingItem = proving?.zkTlsQueue.find(
         (entry) => entry.ruleId === proofRuleId,
       )
-      if (!provingItem || provingItem.status !== 'proving') return
+      if (!proving || !provingItem || provingItem.status !== 'proving') return
 
       let result: ZkTlsRunResult
       try {
@@ -1887,6 +1899,15 @@ export class ProductExperienceController {
               event,
             )
           },
+          reviewContext: {
+            tabId: proving.tabId,
+            expectedWallet: started.reviewWalletAddress ?? null,
+            title:
+              proving.rules.find((rule) => rule.id === proofRuleId)?.title ??
+              proving.title,
+            ownerSessionId: proving.sessionId,
+            configVersion: proving.configVersion,
+          },
         })
       } catch {
         await this.resetZkTlsItem(
@@ -1902,6 +1923,15 @@ export class ProductExperienceController {
       }
 
       if (result.status !== 'submitted') {
+        if (result.code === 'REVIEW_READ_AGAIN') {
+          await this.mutateZkTlsSession(session.sessionId, (current) => {
+            const entry = current.zkTlsQueue.find(
+              (entry) => entry.ruleId === proofRuleId,
+            )
+            if (entry) entry.status = 'queued'
+          })
+          continue
+        }
         const publicError =
           result.status === 'pending_login' ||
           result.code === 'PERMISSION_DENIED'

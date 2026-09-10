@@ -71,6 +71,7 @@ export interface ProductExperienceTicket {
 }
 
 export interface ProductZkTlsSession {
+  reviewWalletAddress?: string | null
   sessionId: string
   connectorId: string
   expiresAt: string

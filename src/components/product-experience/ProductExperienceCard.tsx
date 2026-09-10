@@ -1,15 +1,20 @@
 import type { ProductExperienceControllerState } from '@/lib/product-experience-controller'
+import type { ProofReviewUiState } from '@/lib/zktls/review-channel'
 import type {
   ProductZkTlsRuleProgress,
   ProductZkTlsScalar,
 } from '@/types/product-experience'
 import { ProductExperienceDiagnostics } from './ProductExperienceDiagnostics'
+import { ProofReviewCard } from './ProofReviewCard'
 
 interface ProductExperienceCardProps {
   state: ProductExperienceControllerState
   busy?: boolean
   onStart(): void
   onRetryRule?(ruleId: string): void
+  review?: ProofReviewUiState | null
+  onConfirmReview?(id: string): void
+  onReread?(): void
 }
 
 const STATUS_COPY: Record<
@@ -83,9 +88,9 @@ function actionLabel(state: ProductExperienceControllerState): string | null {
     )
   )
     return null
-  if (isRetryableProofState(state)) return '重试证明'
-  if (isContinuableZkTlsProofState(state)) return '继续证明'
-  if (status === 'ready') return '开始验证'
+  if (isRetryableProofState(state)) return '重新读取'
+  if (isContinuableZkTlsProofState(state)) return '读取当前页面'
+  if (status === 'ready') return '读取当前页面'
   return null
 }
 
@@ -185,7 +190,7 @@ function projectCopy(
     }
     return {
       label: '等待证明',
-      detail: '达到页面条件后，插件会自动发起证明。',
+      detail: '先读取当前页面的数据；查看并确认后，再生成证明。',
       tone: 'bg-slate-500',
     }
   }
@@ -240,15 +245,37 @@ export function ProductExperienceCard({
   busy = false,
   onStart,
   onRetryRule,
+  review,
+  onConfirmReview,
+  onReread,
 }: ProductExperienceCardProps) {
-  const copy = projectCopy(state, busy)
+  const copy = { ...projectCopy(state, busy) }
+  if (review && review.phase !== 'failed') {
+    copy.label =
+      review.phase === 'preparing'
+        ? '准备读取'
+        : review.phase === 'reading'
+          ? '正在读取'
+          : review.phase === 'ready'
+            ? '等待确认'
+            : '正在生成证明'
+    copy.detail =
+      review.phase === 'proving'
+        ? '请保持当前页面打开，等待后端验证结果。'
+        : '先读取并展示数据，确认之后才会生成证明。'
+  }
   const completed = Math.min(
     new Set(state.matchedRuleIds).size,
     Math.max(0, state.totalRuleCount),
   )
   const total = Math.max(0, state.totalRuleCount)
   const progress = total === 0 ? 0 : Math.round((completed / total) * 100)
-  const action = busy ? null : actionLabel(state)
+  const action =
+    busy || (review && review.phase !== 'failed')
+      ? null
+      : review?.phase === 'failed'
+        ? '读取当前页面'
+        : actionLabel(state)
   const originMismatch =
     state.status === 'origin-mismatch' || state.error === 'ORIGIN_NOT_ALLOWED'
   const originAllowed = state.currentOriginAllowed && !originMismatch
@@ -365,6 +392,14 @@ export function ProductExperienceCard({
           </ul>
         )}
 
+        {review && onConfirmReview && onReread && (
+          <ProofReviewCard
+            state={review}
+            onConfirm={onConfirmReview}
+            onReread={onReread}
+          />
+        )}
+
         {state.zkTlsDiagnostic && (
           <ProductExperienceDiagnostics diagnostic={state.zkTlsDiagnostic} />
         )}
@@ -408,9 +443,7 @@ export function ProductExperienceCard({
                       onClick={() => onRetryRule(condition.ruleId)}
                       className="mt-1 rounded bg-teal-300 px-2 py-1 font-bold text-slate-950 disabled:opacity-50"
                     >
-                      {condition.status === 'action_required'
-                        ? '继续此条件'
-                        : '重试此条件'}
+                      重新读取此条件
                     </button>
                   )}
               </li>

@@ -10,6 +10,7 @@ import {
   type RequestDetails,
 } from './capture'
 import { sanitizeZkTlsDebugValue } from './debug'
+import { redact } from './discovery/redaction'
 import {
   assertConnectorAvailable,
   type CapturedConnector,
@@ -24,6 +25,9 @@ import {
   type ProviderAction,
   runProviderActionsInPage,
 } from './provider-actions'
+import { canConfirmProofReview, type ProofReviewSnapshot } from './review'
+import { observeProofReview } from './review-capture'
+import { buildProofReviewSnapshot } from './review-preview'
 import { parseZkTlsRuntimeRequest } from './runtime-request'
 import {
   assertTicketAvailable,
@@ -80,6 +84,20 @@ type Permission = {
 }
 
 export type ZkTlsRunRequest = {
+  reviewContext?: {
+    tabId: number
+    expectedWallet: string | null
+    title: string
+    ownerSessionId: string
+    configVersion: number
+  }
+  review?: {
+    signal: AbortSignal
+    onReady(): void
+    confirm(snapshot: ProofReviewSnapshot): Promise<boolean>
+    assertOwner(): Promise<void>
+    onProving(): void
+  }
   sessionId: string
   connectorId: string
   correlationId: string
@@ -88,6 +106,7 @@ export type ZkTlsRunRequest = {
 }
 
 export type ZkTlsRunResult = {
+  message?: string
   type: 'zktls-prove-result'
   correlationId: string
   status:
@@ -412,6 +431,22 @@ async function proveCapturedRequest(
   configEnvelope: ConfigEnvelope,
   ticketEnvelope: TicketEnvelope,
 ): Promise<ZkTlsRunResult> {
+  if (request.reviewContext) {
+    if (config.interpreter_version !== 4 || !request.review)
+      return {
+        type: 'zktls-prove-result',
+        correlationId: request.correlationId,
+        status: 'unsupported',
+        code: 'REVIEW_UNSUPPORTED',
+      }
+    return proveReviewedRequest(
+      request,
+      config,
+      ticket,
+      configEnvelope,
+      ticketEnvelope,
+    )
+  }
   const pageOrigin =
     config.interpreter_version === 4 ? config.page_origin : config.origin
   await reportDiagnostic(request, {
@@ -624,8 +659,141 @@ async function proveCapturedRequest(
   }
 }
 
+async function proveReviewedRequest(
+  request: ZkTlsRunRequest,
+  config: V4Connector,
+  ticket: Ticket,
+  configEnvelope: ConfigEnvelope,
+  ticketEnvelope: TicketEnvelope,
+): Promise<ZkTlsRunResult> {
+  const context = request.reviewContext!
+  const review = request.review!
+  let observer: Awaited<ReturnType<typeof observeProofReview>> | undefined
+  let captured: CapturedRequest | undefined
+  const result = (
+    status: ZkTlsRunResult['status'],
+    code?: string,
+  ): ZkTlsRunResult => ({
+    type: 'zktls-prove-result',
+    correlationId: request.correlationId,
+    status,
+    ...(code ? { code } : {}),
+  })
+  try {
+    await ensurePermissions(
+      [config.page_origin, config.origin],
+      request.connectorId,
+    )
+    assertAvailable(config, ticket)
+    await review.assertOwner()
+    observer = await observeProofReview({
+      tabId: context.tabId,
+      sessionId: request.sessionId,
+      config,
+      signal: review.signal,
+      onReady: review.onReady,
+    })
+    await reportDiagnostic(request, {
+      stage: 'capture-ready',
+      status: 'running',
+    })
+    const data = await observer.read
+    captured = data.captured
+    const snapshot = buildProofReviewSnapshot({
+      connector: config,
+      captured,
+      requestHeaders: data.requestHeaders,
+      response: {
+        text: data.responseBody,
+        contentType: data.contentType,
+        status: data.status,
+        headers: data.responseHeaders,
+      },
+      expectedWallet: context.expectedWallet,
+      pageUrl: data.pageUrl,
+      id: crypto.randomUUID(),
+      title: context.title,
+      expiresAt: Math.min(
+        Date.now() + 60_000,
+        Date.parse(ticket.expires_at),
+        Date.parse(config.expires_at),
+      ),
+    })
+    data.responseBody = undefined
+    data.requestHeaders = undefined
+    data.responseHeaders = undefined
+    const accepted = await Promise.race([
+      review.confirm(snapshot),
+      observer.invalidated.then((reason) => {
+        throw new Error(reason)
+      }),
+    ])
+    if (!accepted) return result('action_required', 'REVIEW_CANCELLED')
+    if (!canConfirmProofReview(snapshot))
+      throw new Error('REVIEW_INVALID_OR_EXPIRED')
+    await review.assertOwner()
+    await observer.assertCurrent()
+    assertAvailable(config, ticket)
+    if (
+      !(await chrome.permissions.contains({
+        origins: [`${config.page_origin}/*`, `${config.origin}/*`],
+      }))
+    )
+      throw new Error('PERMISSION_DENIED')
+    if (review.signal.aborted) throw new Error('REVIEW_CANCELLED')
+    await ensureOffscreen()
+    // Recheck after async worker setup, before any MPC/Verifier registration.
+    await review.assertOwner()
+    await observer.assertCurrent()
+    assertAvailable(config, ticket)
+    if (review.signal.aborted) throw new Error('REVIEW_CANCELLED')
+    review.onProving()
+    if (!canConfirmProofReview(snapshot))
+      throw new Error('REVIEW_INVALID_OR_EXPIRED')
+    const proof = chrome.runtime.sendMessage({
+      type: 'zktls-offscreen-prove',
+      sessionId: request.sessionId,
+      connectorId: request.connectorId,
+      correlationId: request.correlationId,
+      config,
+      ticket,
+      configEnvelope,
+      ticketEnvelope,
+      captured,
+    })
+    await observer.dispose()
+    const response = (await proof) as {
+      status: 'submitted' | 'error'
+      code?: string
+    }
+    return result(response.status, response.code)
+  } catch (error) {
+    const code =
+      error instanceof Error && /^[A-Z][A-Z0-9_]{1,80}$/.test(error.message)
+        ? error.message
+        : 'REVIEW_CAPTURE_FAILED'
+    await reportDiagnostic(request, {
+      stage: 'capture-failed',
+      status: 'failed',
+      error: { code },
+    })
+    const message =
+      error instanceof Error
+        ? String(redact(error.message.slice(0, 512)))
+        : undefined
+    return {
+      ...result('action_required', code),
+      ...(message ? { message } : {}),
+    }
+  } finally {
+    await observer?.dispose()
+    if (captured) clearCapturedRequest(captured)
+  }
+}
+
 async function runValidatedZkTlsRequest(
   request: ZkTlsRunRequest,
+  fromPage = false,
 ): Promise<ZkTlsRunResult> {
   if (!ZKTLS_PROFILE.enabled || /firefox/i.test(navigator.userAgent))
     return {
@@ -636,6 +804,13 @@ async function runValidatedZkTlsRequest(
   try {
     const { config, ticket, configEnvelope, ticketEnvelope } =
       await signedConnector(request.sessionId, request.connectorId)
+    if (fromPage && config.interpreter_version === 4)
+      return {
+        type: 'zktls-prove-result',
+        correlationId: request.correlationId,
+        status: 'action_required',
+        code: 'REVIEW_REQUIRED',
+      }
     if (
       config.interpreter_version === 2 ||
       config.interpreter_version === 3 ||
@@ -749,8 +924,11 @@ function unavailableResult(
   }
 }
 
-function beginProof(request: ZkTlsRunRequest): Promise<ZkTlsRunResult> {
-  const flight = runValidatedZkTlsRequest(request)
+function beginProof(
+  request: ZkTlsRunRequest,
+  fromPage = false,
+): Promise<ZkTlsRunResult> {
+  const flight = runValidatedZkTlsRequest(request, fromPage)
   proofFlight = flight
   return flight.finally(() => {
     if (proofFlight === flight) proofFlight = null
@@ -819,7 +997,7 @@ export async function handleZkTlsProof(
   if (proofFlight || productWaiter) {
     return unavailableResult(request, 'ZKTLS_BUSY')
   }
-  return beginProof(request)
+  return beginProof(request, true)
 }
 
 export function registerZkTlsRuntime(): void {

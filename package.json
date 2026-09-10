@@ -25,6 +25,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "decimal.js": "10.6.0",
     "md5": "^2.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

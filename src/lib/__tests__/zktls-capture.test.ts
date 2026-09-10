@@ -1919,6 +1919,81 @@ describe('zkTLS v4 capture', () => {
     ).toThrow('content type')
   })
 
+  test.each([
+    'pending',
+    'captured',
+  ] as const)('deduplicates identical V4 POSTs while the first request is %s', (stage) => {
+    const capture = v4Session()
+    const request = {
+      requestId: 'first',
+      tabId: 7,
+      frameId: 0,
+      method: 'POST',
+      url,
+      type: 'fetch',
+      initiator: 'https://app.example.com',
+      requestBody: { raw: chunks.map((chunk) => ({ bytes: chunk.buffer })) },
+    }
+    const headers = [{ name: 'Content-Type', value: 'application/json' }]
+    capture.observeBody(request)
+    if (stage === 'captured')
+      capture.observe({ ...request, requestHeaders: headers })
+    expect(() =>
+      capture.observeBody({ ...request, requestId: 'duplicate' }),
+    ).not.toThrow()
+    capture.observe({
+      ...request,
+      requestId: 'duplicate',
+      requestHeaders: headers,
+    })
+    expect(capture.completes('duplicate')).toBe(false)
+    expect(capture.reject('duplicate', 'duplicate failed')).toBe(false)
+    if (stage === 'pending')
+      capture.observe({ ...request, requestHeaders: headers })
+    expect(capture.completes('first')).toBe(true)
+    expect(capture.diagnostics()?.code).not.toBe('AMBIGUOUS_REQUEST')
+    expect(capture.take()).toMatchObject({
+      body: chunks.map((chunk) => new TextDecoder().decode(chunk)).join(''),
+      capturedVariables: { accountId: 'acct-body', queryAccount: 'acct-query' },
+    })
+    expect(() => capture.take()).toThrow('no provider request')
+  })
+
+  test.each([
+    'body',
+    'query',
+  ] as const)('rejects distinct V4 POSTs with a different %s account', (difference) => {
+    const capture = v4Session()
+    observePost(capture, 'first')
+    const body = chunks.map((chunk) => new TextDecoder().decode(chunk)).join('')
+    expect(() =>
+      capture.observeBody({
+        requestId: 'other-account',
+        tabId: 7,
+        frameId: 0,
+        method: 'POST',
+        url:
+          difference === 'query'
+            ? url.replace('acct-query', 'other-query')
+            : url,
+        type: 'fetch',
+        initiator: 'https://app.example.com',
+        requestBody: {
+          raw: [
+            {
+              bytes: new TextEncoder().encode(
+                difference === 'body'
+                  ? body.replace('acct-body', 'other-body')
+                  : body,
+              ).buffer,
+            },
+          ],
+        },
+      }),
+    ).toThrow('capture already completed')
+    expect(capture.diagnostics()?.code).toBe('AMBIGUOUS_REQUEST')
+  })
+
   test('fails closed for zero, multiple, body-less POST, and GET body candidates', () => {
     expect(() => v4Session().take()).toThrow('no provider request')
 
@@ -1942,7 +2017,15 @@ describe('zkTLS v4 capture', () => {
         url,
         type: 'fetch',
         initiator: 'https://app.example.com',
-        requestBody: { raw: chunks.map((chunk) => ({ bytes: chunk.buffer })) },
+        requestBody: {
+          raw: [
+            {
+              bytes: new TextEncoder().encode(
+                '{"operation":"account","input":{"account":"different","day":"2026-08-21"}}',
+              ).buffer,
+            },
+          ],
+        },
       }),
     ).toThrow('capture already completed')
 

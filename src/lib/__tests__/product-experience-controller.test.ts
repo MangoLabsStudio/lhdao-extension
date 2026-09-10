@@ -25,6 +25,27 @@ const discoveryFixture = JSON.parse(
 const CLIENT_ORIGIN = 'https://client.example'
 const SECOND_ORIGIN = 'https://second.example'
 
+it('reauthorizes a planned review on the explicitly selected customer tab', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(NOW)
+  const h = createHarness()
+  h.mintTest.mockResolvedValue(ticket({ verificationMode: 'ZKTLS' }))
+  await h.controller.saveTask(task('TEST'))
+  await h.controller.start()
+  const session = h.storage.session!
+  session.plannedExecution = true
+  session.tabId = 99
+  session.currentOriginAllowed = false
+  await h.storage.setSession(session)
+  await h.controller.start({ executePlan: true })
+  expect(h.storage.session).toMatchObject({
+    tabId: 7,
+    authorizedOrigin: CLIENT_ORIGIN,
+    currentOriginAllowed: true,
+  })
+  vi.useRealTimers()
+})
+
 const rules: ProductExperienceRule[] = [
   {
     id: 'rule-a',

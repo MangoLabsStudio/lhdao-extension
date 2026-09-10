@@ -121,6 +121,7 @@ import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import { PRODUCT_DISCOVERY_UPLOAD_DOCUMENT } from '@/lib/zktls/discovery/sample-uploader'
 import { DiscoverySessionManager } from '@/lib/zktls/discovery/session-manager'
 import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
+import { ProductProofReview } from '@/lib/zktls/review-channel'
 import {
   handleZkTlsProof,
   proveZkTlsSession,
@@ -370,7 +371,9 @@ export function productZkTlsStartGqlOptions(
   return { operationName, timeoutMs: 30_000 } as const
 }
 
-function createProductExperienceController(): ProductExperienceController {
+function createProductExperienceController(
+  review: ProductProofReview,
+): ProductExperienceController {
   return new ProductExperienceController({
     diagnosticsEnabled: ZKTLS_PROFILE.debug,
     storage: productExperienceStore,
@@ -435,7 +438,39 @@ function createProductExperienceController(): ProductExperienceController {
       )
       return parseStartProductZkTlsProofResult(result).startProductZkTlsProof
     },
-    proveZkTls: proveZkTlsSession,
+    async proveZkTls(request) {
+      const token = await localStore.get('apiToken')
+      return review.run(request, proveZkTlsSession, async () => {
+        const context = request.reviewContext
+        const session = await productExperienceStore.getSession()
+        const task = await productExperienceStore.getTask()
+        if (
+          !context ||
+          !token ||
+          token !== (await localStore.get('apiToken')) ||
+          !session ||
+          !task ||
+          task.campaignId !== session.campaignId ||
+          task.configVersion !== session.configVersion ||
+          task.ticketKind !== session.ticketKind ||
+          !Number.isFinite(Date.parse(session.expiresAt)) ||
+          Date.parse(session.expiresAt) <= Date.now() ||
+          session.status === 'reauthorize' ||
+          !session.currentOriginAllowed ||
+          session.authorizedOrigin !== session.currentOrigin ||
+          session.sessionId !== context.ownerSessionId ||
+          session.configVersion !== context.configVersion ||
+          session.tabId !== context.tabId ||
+          !session.zkTlsQueue.some(
+            (item) =>
+              item.sessionId === request.sessionId &&
+              item.connectorId === request.connectorId &&
+              item.status === 'proving',
+          )
+        )
+          throw new Error('REVIEW_OWNER_CHANGED')
+      })
+    },
     async readZkTlsProgress(campaignId) {
       const result = await gql<unknown, ProductZkTlsRuleProgressVariables>(
         PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
@@ -480,7 +515,12 @@ function createProductExperienceController(): ProductExperienceController {
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
-  const productExperienceController = createProductExperienceController()
+  const review = new ProductProofReview(() => {
+    void chrome.runtime
+      .sendMessage({ type: 'product-proof-review-changed' })
+      .catch(() => {})
+  })
+  const productExperienceController = createProductExperienceController(review)
   const discovery = new DiscoverySessionManager(
     new URL(WEB_ENDPOINT).origin,
     async (variables) => {
@@ -518,6 +558,18 @@ export default defineBackground(() => {
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
     if (
+      req.type === 'get-product-proof-review' ||
+      req.type === 'confirm-product-proof-review' ||
+      req.type === 'reread-product-proof'
+    ) {
+      if (!review.isPopup(sender)) return { type: 'ack' }
+      await review.checkOwner()
+      if (req.type === 'confirm-product-proof-review')
+        review.confirm(req.reviewId)
+      if (req.type === 'reread-product-proof') review.cancel(true)
+      return { type: 'product-proof-review-result', state: review.state() }
+    }
+    if (
       req.type === 'start-discovery' ||
       req.type === 'stop-discovery' ||
       req.type === 'get-discovery-snapshot' ||
@@ -532,6 +584,7 @@ export default defineBackground(() => {
     if (binanceProbeResponse) return binanceProbeResponse
 
     if (req.type === 'save-product-experience-task') {
+      review.cancel()
       const result = await productExperienceController.saveTask(req.task)
       if (!result.saved) {
         return {
@@ -568,6 +621,7 @@ export default defineBackground(() => {
       }
     }
     if (req.type === 'start-product-experience') {
+      review.cancel()
       return {
         type: 'product-experience-state-result',
         state: await productExperienceController.start({ executePlan: true }),
@@ -811,8 +865,15 @@ export default defineBackground(() => {
   // 不必等下一个 60s alarm 才看到任务)
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && 'apiToken' in changes) {
+      review.cancel()
       void handleTaskTokenChange()
     }
+    if (
+      area === 'session' &&
+      ('productExperienceSession' in changes ||
+        'activeProductExperienceTask' in changes)
+    )
+      void review.checkOwner()
   })
 })
 
