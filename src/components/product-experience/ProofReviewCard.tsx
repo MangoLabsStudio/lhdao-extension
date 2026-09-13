@@ -19,6 +19,8 @@ export function ProofReviewCard({
   onReread(): void
 }) {
   const data = state.snapshot
+  const activeStep =
+    state.phase === 'proving' ? 2 : state.phase === 'ready' ? 1 : 0
   const title =
     state.phase === 'preparing'
       ? '正在准备读取'
@@ -42,9 +44,36 @@ export function ProofReviewCard({
       aria-label="本次读取的数据"
       className="mt-3 rounded-lg border border-teal-300/25 bg-slate-900/80 p-3 text-[11px] leading-relaxed text-slate-200"
     >
+      <ol
+        aria-label="验证步骤"
+        className="mb-3 grid grid-cols-3 gap-1 border-b border-white/10 pb-3 text-[10px]"
+      >
+        {['读取数据', '核对数据', '生成证明'].map((label, index) => (
+          <li
+            key={label}
+            aria-current={
+              state.phase !== 'failed' && index === activeStep
+                ? 'step'
+                : undefined
+            }
+            className={
+              index === activeStep && state.phase !== 'failed'
+                ? 'font-bold text-teal-200'
+                : 'text-slate-400'
+            }
+          >
+            {index + 1}. {label}
+          </li>
+        ))}
+      </ol>
       <h3 role="status" className="font-bold text-teal-200">
         {title}
       </h3>
+      {state.phase === 'failed' && (
+        <p className="mt-1 text-rose-200">
+          技术失败不代表条件不满足。请查看下方原始错误，处理后重新读取。
+        </p>
+      )}
       {state.phase === 'preparing' && (
         <p className="mt-1">
           请保持已登录的网站打开；如出现权限页，请完成授权。

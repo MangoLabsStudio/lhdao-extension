@@ -30,4 +30,19 @@ test('shows the original failure code without a success label', () => {
   )
   expect(html).toContain('REVIEW_ACCOUNT_MISMATCH')
   expect(html).not.toContain('验证通过')
+  expect(html).toContain('技术失败不代表条件不满足')
+})
+
+test('shows the read-confirm-prove flow with the current step', () => {
+  const html = renderToStaticMarkup(
+    <ProofReviewCard
+      state={{ phase: 'reading', snapshot: null, error: null }}
+      onConfirm={vi.fn()}
+      onReread={vi.fn()}
+    />,
+  )
+  expect(html).toContain('读取数据')
+  expect(html).toContain('核对数据')
+  expect(html).toContain('生成证明')
+  expect(html).toContain('aria-current="step"')
 })

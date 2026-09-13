@@ -158,6 +158,34 @@ function findButton(container: HTMLElement, label: string): HTMLButtonElement {
 }
 
 describe('product experience popup', () => {
+  it('does not render a zero-denominator completion bar before rules load', async () => {
+    const { container } = await renderPopup(
+      productState('ready', { totalRuleCount: 0 }),
+    )
+    expect(container.textContent).toContain('等待加载验证条件')
+    expect(container.querySelector('[role="progressbar"]')).toBeNull()
+  })
+
+  it('labels a failed proof as a technical problem and preserves its code', async () => {
+    const { container } = await renderPopup(
+      productState('observing', {
+        zkTlsProgress: [],
+        zkTlsConditions: [
+          {
+            ruleId: 'r1',
+            status: 'failed',
+            code: 'PROVER_FAILED',
+            stage: 'mpc-setup',
+            correlationId: null,
+          },
+        ],
+      }),
+    )
+    expect(container.textContent).toContain('技术失败，不代表条件不满足')
+    expect(container.textContent).toContain('PROVER_FAILED')
+    expect(container.textContent).toContain('重新读取此条件')
+  })
+
   beforeEach(() => {
     fakeBrowser.reset()
     document.body.replaceChildren()

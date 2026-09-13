@@ -143,6 +143,13 @@ function projectCopy(
         '请在打开的目标页面登录、连接钱包或加载对应记录，然后继续此条件。其他已完成条件会保留。',
       tone: 'bg-amber-300',
     }
+  if (state.zkTlsConditions?.some((item) => item.status === 'failed'))
+    return {
+      label: '验证遇到问题',
+      detail:
+        '技术失败，不代表条件不满足。查看失败阶段和原始错误后，可重新读取此条件。',
+      tone: 'bg-rose-300',
+    }
   if (
     state.error === 'ORIGIN_NOT_ALLOWED' ||
     state.status === 'origin-mismatch'
@@ -323,10 +330,18 @@ export function ProductExperienceCard({
         <div className="mt-3 flex items-end justify-between gap-3">
           <div>
             <p className="text-[9px] font-bold uppercase tracking-[0.13em] text-slate-500">
-              Rules complete
+              条件进度
             </p>
             <p className="mt-0.5 text-[18px] font-black tabular-nums text-white">
-              {completed} <span className="text-slate-600">/</span> {total}
+              {total > 0 ? (
+                <>
+                  {completed} <span className="text-slate-600">/</span> {total}
+                </>
+              ) : (
+                <span className="text-[11px] font-medium text-slate-400">
+                  等待加载验证条件
+                </span>
+              )}
             </p>
           </div>
           <span
@@ -340,19 +355,21 @@ export function ProductExperienceCard({
             {originLabel}
           </span>
         </div>
-        <div
-          role="progressbar"
-          aria-label="规则完成进度"
-          aria-valuemin={0}
-          aria-valuemax={total}
-          aria-valuenow={completed}
-          className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800"
-        >
+        {total > 0 && (
           <div
-            className="h-full rounded-full bg-gradient-to-r from-teal-400 to-cyan-300 transition-[width] duration-300"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
+            role="progressbar"
+            aria-label="规则完成进度"
+            aria-valuemin={0}
+            aria-valuemax={total}
+            aria-valuenow={completed}
+            className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800"
+          >
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-teal-400 to-cyan-300 transition-[width] duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        )}
 
         <p className="mt-2.5 text-[10.5px] leading-relaxed text-slate-300">
           {copy.detail}
@@ -454,7 +471,9 @@ export function ProductExperienceCard({
         {action && (
           <div className="mt-3 grid grid-cols-[1fr_auto] items-center gap-3 border-t border-white/8 pt-3">
             <p className="text-[9.5px] leading-relaxed text-slate-400">
-              只在本次授权的当前网站读取 Buyer 配置的完成标记
+              {state.zkTlsProgress !== undefined
+                ? '只读取本次授权网站中任务所需的数据，确认后才生成证明。'
+                : '只在本次授权的当前网站读取 Buyer 配置的完成标记'}
             </p>
             <button
               type="button"
