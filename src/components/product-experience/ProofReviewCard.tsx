@@ -42,11 +42,11 @@ export function ProofReviewCard({
   return (
     <section
       aria-label="本次读取的数据"
-      className="mt-3 rounded-lg border border-teal-300/25 bg-slate-900/80 p-3 text-[11px] leading-relaxed text-slate-200"
+      className="mt-4 rounded-xl border border-teal-300/25 bg-slate-950 p-4 text-xs leading-relaxed text-slate-200"
     >
       <ol
         aria-label="验证步骤"
-        className="mb-3 grid grid-cols-3 gap-1 border-b border-white/10 pb-3 text-[10px]"
+        className="mb-4 grid grid-cols-3 gap-2 border-b border-white/10 pb-4 text-[11px]"
       >
         {['读取数据', '核对数据', '生成证明'].map((label, index) => (
           <li
@@ -66,7 +66,7 @@ export function ProofReviewCard({
           </li>
         ))}
       </ol>
-      <h3 role="status" className="font-bold text-teal-200">
+      <h3 role="status" className="text-base font-bold text-white">
         {title}
       </h3>
       {state.phase === 'failed' && (
@@ -96,9 +96,11 @@ export function ProofReviewCard({
       )}
       {data && (
         <>
-          <p className="mt-1 font-semibold">{data.title}</p>
-          <p className="mt-1 text-amber-200">本地预览 · 尚未验证</p>
-          <dl className="mt-3 space-y-2 break-all">
+          <p className="mt-2 font-semibold text-teal-200">{data.title}</p>
+          <p className="mt-3 rounded-lg border border-amber-200/15 bg-amber-200/5 px-3 py-2 text-amber-200">
+            本地预览 · 尚未验证
+          </p>
+          <dl className="mt-4 space-y-3 break-all rounded-lg border border-white/10 bg-slate-900/60 p-3">
             <div>
               <dt className="text-slate-400">来源页面</dt>
               <dd>
@@ -149,7 +151,7 @@ export function ProofReviewCard({
                 ? '钱包不一致。请检查网站当前登录账号，再重新读取。'
                 : '无法确定归属钱包，不能开始证明。'}
           </p>
-          <div className="mt-3 border-t border-white/10 pt-3">
+          <div className="mt-4 border-t border-white/10 pt-4">
             <p className="text-slate-400">
               {RESPONSE_COPY[data.responseState]}
             </p>
@@ -161,12 +163,12 @@ export function ProofReviewCard({
             {data.values.map((value) => (
               <div
                 key={value.output}
-                className="mt-2 rounded-md bg-teal-300/10 p-2"
+                className="mt-3 rounded-lg border border-teal-300/20 bg-teal-300/5 p-3"
               >
                 <p className="text-slate-400">
                   按保存规则计算 · {value.output}
                 </p>
-                <p className="break-all text-sm font-bold tabular-nums text-teal-200">
+                <p className="mt-1 break-all text-xl font-bold tabular-nums text-teal-200">
                   {value.value}
                   {value.unit ? ` ${value.unit}` : ''}
                 </p>
@@ -196,19 +198,19 @@ export function ProofReviewCard({
           <p className="mt-3 text-[10px] text-slate-400">
             确认只代表同意使用这批数据。证明会重放该请求，响应可能变化。
           </p>
-          <div className="mt-3 flex flex-col gap-2">
+          <div className="mt-4 flex flex-col gap-2">
             <button
               type="button"
               disabled={!data.canConfirm || !!data.error}
               onClick={() => onConfirm(data.id)}
-              className="rounded-lg bg-teal-300 px-3 py-2 font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-10 rounded-lg bg-teal-300 px-3 py-2 font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
             >
               确认数据并开始证明
             </button>
             <button
               type="button"
               onClick={onReread}
-              className="rounded-lg border border-slate-600 px-3 py-2 text-slate-200"
+              className="min-h-10 rounded-lg border border-slate-600 px-3 py-2 text-slate-200"
             >
               重新读取
             </button>
