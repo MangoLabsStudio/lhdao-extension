@@ -337,7 +337,7 @@ export function parseDiscoveryResponse(
       state.schema !== 1 ||
       !id(state.sessionId) ||
       !origin(state.pageOrigin, true) ||
-      !['ready', 'stopped'].includes(state.status as string) ||
+      !['prepared', 'ready', 'stopped'].includes(state.status as string) ||
       !(
         state.reason === null ||
         (typeof state.reason === 'string' && codes.has(state.reason))
@@ -380,25 +380,30 @@ export function parseDiscoveryResponse(
     )
       return null
     if (
-      request.type === 'start-discovery'
+      request.type === 'start-discovery' || request.type === 'open-discovery'
         ? state.pageOrigin !== new URL(request.targetUrl).origin
         : state.sessionId !== request.sessionId
     )
       return null
     if (
-      state.status === 'ready' ? state.reason !== null : state.reason === null
+      state.status !== 'stopped' ? state.reason !== null : state.reason === null
     )
       return null
     if (request.type === 'stop-discovery' && state.status !== 'stopped')
       return null
+    if (request.type === 'open-discovery' && state.status !== 'prepared')
+      return null
     if (
       !list(state.candidates, DISCOVERY_LIMITS.candidates) ||
+      (state.status === 'prepared' && state.candidates.length !== 0) ||
       !state.candidates.every((item) =>
         candidate(item, state.pageOrigin as string),
       ) ||
       new Set(state.candidates.map((item) => (item as RecordValue).candidateId))
         .size !== state.candidates.length ||
-      (state.status === 'stopped' && state.candidates.length !== 0)
+      (state.status === 'stopped' &&
+        state.reason !== 'STOPPED' &&
+        state.candidates.length !== 0)
     )
       return null
     const quota = state.quota
@@ -409,7 +414,9 @@ export function parseDiscoveryResponse(
       !Object.entries(DISCOVERY_LIMITS).every(
         ([key, number]) => (quota.limits as RecordValue)[key] === number,
       ) ||
-      (state.status === 'stopped' && quota.bytes !== 0)
+      (state.status === 'stopped' &&
+        state.reason !== 'STOPPED' &&
+        quota.bytes !== 0)
     )
       return null
     return freezeCopy(value) as DiscoveryResponse

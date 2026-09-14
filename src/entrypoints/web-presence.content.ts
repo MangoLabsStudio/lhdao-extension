@@ -119,6 +119,7 @@ export default defineContentScript({
 
       if (
         request.type === 'start-discovery' ||
+        request.type === 'open-discovery' ||
         request.type === 'stop-discovery' ||
         request.type === 'get-discovery-snapshot' ||
         request.type === 'retry-discovery-upload'

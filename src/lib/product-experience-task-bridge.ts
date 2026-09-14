@@ -8,6 +8,7 @@ export const PRODUCT_EXPERIENCE_CAPABILITIES = [
   PRODUCT_EXPERIENCE_CAPABILITY,
   'product-zktls-discovery-v1',
   'product-discovery-upload-v1',
+  'product-discovery-manual-v1',
   'product-zktls-execution-v1',
 ] as const
 
@@ -30,6 +31,7 @@ export type ProductExperiencePageRequest =
       {
         type:
           | 'start-discovery'
+          | 'open-discovery'
           | 'stop-discovery'
           | 'get-discovery-snapshot'
           | 'retry-discovery-upload'
@@ -183,6 +185,7 @@ export type DiscoveryRequest = Extract<
   {
     type:
       | 'start-discovery'
+      | 'open-discovery'
       | 'stop-discovery'
       | 'get-discovery-snapshot'
       | 'retry-discovery-upload'
@@ -197,6 +200,7 @@ export function parseDiscoveryRequest(input: unknown): DiscoveryRequest | null {
     if (
       ![
         'start-discovery',
+        'open-discovery',
         'stop-discovery',
         'get-discovery-snapshot',
         'retry-discovery-upload',
@@ -208,9 +212,15 @@ export function parseDiscoveryRequest(input: unknown): DiscoveryRequest | null {
     const keys = [
       'type',
       'correlationId',
-      type === 'start-discovery' ? 'targetUrl' : 'sessionId',
+      type === 'start-discovery' || type === 'open-discovery'
+        ? 'targetUrl'
+        : 'sessionId',
       ...(type === 'start-discovery' && Object.hasOwn(input, 'backendSessionId')
         ? ['backendSessionId']
+        : []),
+      ...(type === 'start-discovery' &&
+      Object.hasOwn(input, 'preparedSessionId')
+        ? ['preparedSessionId']
         : []),
     ]
     if (Reflect.ownKeys(input).length !== keys.length) return null
@@ -227,12 +237,17 @@ export function parseDiscoveryRequest(input: unknown): DiscoveryRequest | null {
     const value = structuredClone(input)
     if (!isCorrelationId(value.correlationId)) return null
     if (
+      value.preparedSessionId !== undefined &&
+      !isCampaignId(value.preparedSessionId)
+    )
+      return null
+    if (
       value.backendSessionId !== undefined &&
       !isCampaignId(value.backendSessionId)
     )
       return null
     if (
-      type === 'start-discovery'
+      type === 'start-discovery' || type === 'open-discovery'
         ? !isDiscoveryTargetUrl(value.targetUrl)
         : !isCampaignId(value.sessionId)
     )
@@ -253,10 +268,16 @@ function discoverySnapshot(
     'channel',
     'type',
     'correlationId',
-    operation === 'start-discovery' ? 'targetUrl' : 'sessionId',
+    operation === 'start-discovery' || operation === 'open-discovery'
+      ? 'targetUrl'
+      : 'sessionId',
     ...(operation === 'start-discovery' &&
     Object.hasOwn(value, 'backendSessionId')
       ? ['backendSessionId']
+      : []),
+    ...(operation === 'start-discovery' &&
+    Object.hasOwn(value, 'preparedSessionId')
+      ? ['preparedSessionId']
       : []),
   ]
   const ownKeys = Reflect.ownKeys(value)
@@ -342,6 +363,7 @@ export function parseProductExperiencePageRequest(
     if (typeof operation !== 'string') return null
     if (
       operation === 'start-discovery' ||
+      operation === 'open-discovery' ||
       operation === 'stop-discovery' ||
       operation === 'get-discovery-snapshot' ||
       operation === 'retry-discovery-upload'
@@ -382,31 +404,12 @@ export function parseProductExperiencePageRequest(
         : null
     }
 
-    if (operation === 'start-discovery') {
-      if (
-        !hasExactKeys(value, [
-          'channel',
-          'correlationId',
-          'targetUrl',
-          'type',
-          ...(Object.hasOwn(value, 'backendSessionId')
-            ? ['backendSessionId']
-            : []),
-        ]) ||
-        !isDiscoveryTargetUrl(value.targetUrl) ||
-        (value.backendSessionId !== undefined &&
-          !isCampaignId(value.backendSessionId))
-      )
-        return null
-      return {
-        channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-        type: operation,
-        correlationId: value.correlationId,
-        targetUrl: value.targetUrl,
-        ...(typeof value.backendSessionId === 'string'
-          ? { backendSessionId: value.backendSessionId }
-          : {}),
-      }
+    if (operation === 'start-discovery' || operation === 'open-discovery') {
+      const { channel: _channel, ...runtime } = value
+      const parsed = parseDiscoveryRequest(runtime)
+      return parsed
+        ? { ...parsed, channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL }
+        : null
     }
 
     if (

@@ -571,6 +571,7 @@ export default defineBackground(() => {
     }
     if (
       req.type === 'start-discovery' ||
+      req.type === 'open-discovery' ||
       req.type === 'stop-discovery' ||
       req.type === 'get-discovery-snapshot' ||
       req.type === 'retry-discovery-upload'

@@ -48,6 +48,14 @@ export type MsgRequest =
       correlationId: string
       targetUrl: string
       backendSessionId?: string
+      preparedSessionId?: string
+    }
+  | {
+      type: 'open-discovery'
+      correlationId: string
+      targetUrl: string
+      backendSessionId?: never
+      preparedSessionId?: never
     }
   | { type: 'retry-discovery-upload'; correlationId: string; sessionId: string }
   | { type: 'stop-discovery'; correlationId: string; sessionId: string }

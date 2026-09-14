@@ -29,7 +29,7 @@ export type DiscoverySnapshot = CandidateSnapshot & {
   schema: 1
   sessionId: string
   pageOrigin: string
-  status: 'ready' | 'stopped'
+  status: 'prepared' | 'ready' | 'stopped'
   reason: DiscoveryCode | null
   startedAt: number
   expiresAt: number
@@ -70,6 +70,9 @@ type Session = {
   epoch: number
   attached: boolean
   ready: boolean
+  prepared?: boolean
+  manual?: boolean
+  draining?: Promise<void>
   stopped: boolean
   reason: DiscoveryCode | null
   startedAt: number
@@ -153,11 +156,34 @@ export class DiscoverySessionManager {
       originOf(sender.url) !== this.lighthouseOrigin
     )
       return fail('INVALID_SENDER')
-    if (request.type === 'start-discovery') {
-      if (this.session && !this.session.stopped) return fail('BUSY')
+    if (
+      request.type === 'start-discovery' ||
+      request.type === 'open-discovery'
+    ) {
+      const prepared = request.preparedSessionId ? this.session : null
+      if (request.preparedSessionId) {
+        if (
+          !prepared ||
+          prepared.id !== request.preparedSessionId ||
+          !prepared.prepared ||
+          !this.active(prepared)
+        )
+          return fail('NO_SESSION')
+        if (
+          prepared.ownerTab !== ownerTab ||
+          prepared.ownerDocument !== sender.documentId ||
+          prepared.ownerUrl !== sender.url
+        )
+          return fail('INVALID_SENDER')
+        if (prepared.origin !== new URL(request.targetUrl).origin)
+          return fail('ORIGIN_CHANGED')
+      }
+      if (this.session && !this.session.stopped && !prepared)
+        return fail('BUSY')
       if (request.backendSessionId && !this.sendDiscoveryBatch)
         return fail('UPLOAD_FAILED')
       this.session?.uploader?.dispose()
+      if (prepared) this.stop(prepared, 'STOPPED')
       const session: Session = {
         id: crypto.randomUUID(),
         ownerTab: ownerTab as number,
@@ -167,6 +193,9 @@ export class DiscoverySessionManager {
         epoch: 0,
         attached: false,
         ready: false,
+        prepared: request.type === 'open-discovery',
+        manual: !!prepared,
+        targetTab: prepared?.targetTab,
         stopped: false,
         reason: null,
         startedAt: Date.now(),
@@ -190,6 +219,7 @@ export class DiscoverySessionManager {
         if (!this.active(session)) return
         if (
           !session.ready &&
+          !session.prepared &&
           performance.now() >= session.deadline - TTL + PENDING_TTL
         ) {
           this.stop(session, 'ATTACH_FAILED')
@@ -223,10 +253,13 @@ export class DiscoverySessionManager {
             this.stop(session, 'OWNER_NAVIGATED')
             return fail('INVALID_SENDER')
           }
-          const tab = await chrome.tabs.create({
-            url: request.targetUrl,
-            active: true,
-          })
+          const tab =
+            session.targetTab !== undefined
+              ? await chrome.tabs.get(session.targetTab)
+              : await chrome.tabs.create({
+                  url: request.targetUrl,
+                  active: true,
+                })
           if (!this.active(session)) return fail(session.reason ?? 'NO_SESSION')
           if (tab.id === undefined) {
             this.stop(session, 'ATTACH_FAILED')
@@ -240,6 +273,10 @@ export class DiscoverySessionManager {
           ) {
             this.stop(session, 'ORIGIN_CHANGED')
             return fail('ORIGIN_CHANGED')
+          }
+          if (session.prepared) {
+            session.interruptSetup = undefined
+            return { ...envelope, ok: true, snapshot: this.snapshot(session) }
           }
           await chrome.debugger.attach({ tabId: tab.id }, '1.3')
           session.attached = true
@@ -319,7 +356,13 @@ export class DiscoverySessionManager {
       this.stop(session, 'OWNER_NAVIGATED')
       return fail('INVALID_SENDER')
     }
-    if (request.type === 'stop-discovery') this.stop(session, 'STOPPED')
+    if (request.type === 'stop-discovery') {
+      if (session.manual && !session.stopped) {
+        session.draining ??= this.finishBatch(session)
+        await session.draining
+      } else this.stop(session, 'STOPPED')
+      if (session.manual) await session.uploader?.flush()
+    }
     if (request.type === 'retry-discovery-upload')
       await session.uploader?.retry()
     return { ...envelope, ok: true, snapshot: this.snapshot(session) }
@@ -339,7 +382,11 @@ export class DiscoverySessionManager {
       schema: 1,
       sessionId: session.id,
       pageOrigin: session.origin,
-      status: session.stopped ? 'stopped' : 'ready',
+      status: session.stopped
+        ? 'stopped'
+        : session.prepared
+          ? 'prepared'
+          : 'ready',
       reason: session.reason,
       startedAt: session.startedAt,
       expiresAt: session.startedAt + TTL,
@@ -364,13 +411,17 @@ export class DiscoverySessionManager {
       .detach({ tabId: session.targetTab })
       .catch(() => undefined)
   }
-  private stop(session: Session, reason: DiscoveryCode) {
+  private stop(
+    session: Session,
+    reason: DiscoveryCode,
+    preserveSamples = false,
+  ) {
     if (session.stopped) return
     session.stopped = true
     session.reason = reason
     session.epoch += 1
     clearPending(session)
-    session.store.clear()
+    if (!preserveSamples) session.store.clear()
     clearInterval(session.timer)
     session.targetLoaded?.()
     session.targetLoaded = undefined
@@ -378,6 +429,21 @@ export class DiscoverySessionManager {
     session.interruptSetup = undefined
     this.detach(session)
     this.notify(session)
+  }
+  private async finishBatch(session: Session) {
+    // Freeze the request boundary immediately, but finish responses already seen.
+    const deadline = performance.now() + PENDING_TTL
+    while (
+      this.active(session) &&
+      session.pending.size &&
+      performance.now() < deadline
+    )
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+    for (const pending of session.pending.values())
+      this.insert(session, pending)
+    clearPending(session)
+    this.stop(session, 'STOPPED', true)
+    await session.uploader?.flush()
   }
   tabUpdated(tabId: number, change: { status?: string; url?: string }) {
     const session = this.session
@@ -464,6 +530,7 @@ export class DiscoverySessionManager {
       return
     const id = params.requestId
     if (method === 'Network.requestWillBeSent') {
+      if (session.draining) return
       const request = record(params.request)
       if (!request || typeof request.url !== 'string') return
       if (params.frameId !== session.frameId) return

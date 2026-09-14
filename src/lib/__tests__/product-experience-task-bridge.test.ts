@@ -74,6 +74,7 @@ describe('parseProductExperiencePageRequest', () => {
       'product-experience-v1',
       'product-zktls-discovery-v1',
       'product-discovery-upload-v1',
+      'product-discovery-manual-v1',
       'product-zktls-execution-v1',
     ])
   })

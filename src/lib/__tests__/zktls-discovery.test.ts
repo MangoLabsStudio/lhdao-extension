@@ -491,6 +491,42 @@ describe('native discovery vertical slice', () => {
     sessionId = (result as { snapshot: { sessionId: string } }).snapshot
       .sessionId
   }
+  it('opens without capturing, then starts on the same owner-bound tab', async () => {
+    const opened = await manager.handle(
+      { ...start, type: 'open-discovery' },
+      owner,
+    )
+    expect(opened).toMatchObject({
+      ok: true,
+      snapshot: { status: 'prepared', candidates: [] },
+    })
+    expect(attach).not.toHaveBeenCalled()
+    expect(command).not.toHaveBeenCalled()
+    if (!opened.ok) throw new Error('open failed')
+    await vi.advanceTimersByTimeAsync(35_000)
+    const input = { ...start, preparedSessionId: opened.snapshot.sessionId }
+    expect(
+      await manager.handle(input, { ...owner, documentId: 'other-doc' }),
+    ).toMatchObject({ ok: false, code: 'INVALID_SENDER' })
+    const started = await manager.handle(input, owner)
+    expect(started).toMatchObject({ ok: true, snapshot: { status: 'ready' } })
+    if (!started.ok) throw new Error('start failed')
+    expect(create).toHaveBeenCalledOnce()
+    expect(attach).toHaveBeenCalledWith({ tabId: 8 }, '1.3')
+    request()
+    await finish()
+    const stopRequest = {
+      type: 'stop-discovery' as const,
+      correlationId: 'stop-test',
+      sessionId: started.snapshot.sessionId,
+    }
+    const stopped = await manager.handle(stopRequest, owner)
+    expect(stopped).toMatchObject({
+      ok: true,
+      snapshot: { status: 'stopped', candidates: [{ method: 'GET' }] },
+    })
+    expect(parseDiscoveryResponse(stopped, stopRequest)).toEqual(stopped)
+  })
   it('authenticates a backend session before opening a tab and exposes upload failures', async () => {
     manager.dispose()
     const send = vi
@@ -525,6 +561,63 @@ describe('native discovery vertical slice', () => {
     expect(parseDiscoveryResponse(result, query)).toEqual(result)
     return result
   }
+  it('manual stop drains the existing response and upload, rejecting new requests', async () => {
+    manager.dispose()
+    let resolveUpload: () => void = () => {}
+    const send = vi.fn(async (input) => {
+      if (input.candidates.length)
+        await new Promise<void>((resolve) => {
+          resolveUpload = resolve
+        })
+      return {
+        sessionId: input.sessionId,
+        batchId: input.batchId,
+        pageOrigin: 'https://client.example',
+      }
+    })
+    manager = new DiscoverySessionManager('https://app.lhdao.top', send)
+    const opened = await manager.handle(
+      { ...start, type: 'open-discovery' },
+      owner,
+    )
+    if (!opened.ok) throw new Error('open failed')
+    const started = await manager.handle(
+      {
+        ...start,
+        preparedSessionId: opened.snapshot.sessionId,
+        backendSessionId: 'server-session',
+      },
+      owner,
+    )
+    if (!started.ok) throw new Error('start failed')
+    sessionId = started.snapshot.sessionId
+    request('before-stop')
+    let settled = false
+    const result = manager
+      .handle(
+        { type: 'stop-discovery', correlationId: 'stop-test', sessionId },
+        owner,
+      )
+      .then((value) => {
+        settled = true
+        return value
+      })
+    await vi.advanceTimersByTimeAsync(1)
+    request('after-stop')
+    await finish('after-stop')
+    await finish('before-stop')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(settled).toBe(false)
+    expect(send.mock.calls[1]?.[0].candidates[0].occurrences).toBe(1)
+    resolveUpload()
+    expect(await result).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: 'stopped',
+        upload: { candidates: [{ status: 'uploaded' }] },
+      },
+    })
+  })
   function request(id = 'req1', extra = {}) {
     event({ tabId: 8 }, 'Network.requestWillBeSent', {
       requestId: id,

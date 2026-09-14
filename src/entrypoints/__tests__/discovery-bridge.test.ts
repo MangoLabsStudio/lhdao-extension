@@ -90,6 +90,31 @@ describe('discovery page to background bridge', () => {
     await emit(request, { origin: 'https://evil.example' })
     expect(send).toHaveBeenCalledTimes(1)
   })
+  it('forwards open without capture and the owner-bound prepared reference on start', async () => {
+    const opened = {
+      ...response,
+      requestType: 'open-discovery',
+      snapshot: { ...response.snapshot, status: 'prepared' },
+    }
+    send.mockResolvedValueOnce(opened as never)
+    await emit({ ...request, type: 'open-discovery' })
+    expect(send).toHaveBeenLastCalledWith({
+      type: 'open-discovery',
+      correlationId: request.correlationId,
+      targetUrl: request.targetUrl,
+    })
+    expect(post).toHaveBeenLastCalledWith(
+      { channel: request.channel, ...opened },
+      origin,
+    )
+    await emit({ ...request, preparedSessionId: 'prepared-123' })
+    expect(send).toHaveBeenLastCalledWith({
+      type: 'start-discovery',
+      correlationId: request.correlationId,
+      targetUrl: request.targetUrl,
+      preparedSessionId: 'prepared-123',
+    })
+  })
   it('does not forward mismatched correlation/session responses or raw errors', async () => {
     send.mockImplementationOnce((async () => ({
       ...response,
