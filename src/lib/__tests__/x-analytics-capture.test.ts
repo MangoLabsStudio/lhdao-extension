@@ -51,6 +51,32 @@ describe('X account analytics capture', () => {
     expect(captureXAnalyticsPage(document)).toBeNull()
   })
 
+  it('reads metric values exposed through accessible labels', () => {
+    document.body.innerHTML = `
+      <button data-testid="SideNav_AccountSwitcher_Button">
+        <span>@wang_jl80536</span>
+      </button>
+      <button aria-label="Verified followers 598 / 2.2K"><svg /></button>
+      <button aria-label="Active followers 1.5K / 2.2K"><svg /></button>
+      <button aria-label="Impressions 11.7K ↓ -61%"><svg /></button>
+      <button aria-label="Engagement rate 1.3% ↓ -37%"><svg /></button>
+      <button aria-label="Engagements 158 ↓ -76%"><svg /></button>
+      <button aria-label="Profile visits 23 ↓ -70%"><svg /></button>
+      <button aria-label="Replies 74 ↓ -75%"><svg /></button>
+      <button aria-label="Likes 46 ↓ -82%"><svg /></button>
+      <button aria-label="Reposts 2 ↓ -71%"><svg /></button>
+      <button aria-label="Bookmarks 13 ↓ -40%"><svg /></button>
+      <button aria-label="Shares 0 ↓ -100%"><svg /></button>
+    `
+
+    expect(captureXAnalyticsPage(document)?.metrics).toMatchObject({
+      followers: 2200,
+      impressions: 11700,
+      engagementRate: 0.013,
+      shares: 0,
+    })
+  })
+
   it('uses the same inclusive rolling 90-day range as X 3M', () => {
     expect(rollingNinetyDayPeriod(new Date('2026-09-15T10:00:00Z'))).toEqual({
       periodStart: '2026-06-18',
