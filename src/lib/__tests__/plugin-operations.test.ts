@@ -98,6 +98,8 @@ describe('PLUGIN_OPERATIONS', () => {
     expect(
       PLUGIN_OPERATIONS.map((operation) => operation.operationName),
     ).toEqual([
+      'MyXAnalytics',
+      'SaveXAnalytics',
       'UploadProductDiscoveryBatch',
       'CreateExtensionPairing',
       'PollExtensionPairing',
@@ -226,5 +228,26 @@ describe('PLUGIN_OPERATIONS', () => {
         'SubmitProductExperienceProofTypo',
       ),
     ).toBeUndefined()
+  })
+})
+
+describe('X analytics signed capture boundary', () => {
+  it.each([
+    [
+      'query MyXAnalytics { myXAnalytics }',
+      'MyXAnalytics',
+      'x-analytics.me.v1',
+      'read',
+    ],
+    [
+      'mutation SaveXAnalytics($input: XAnalyticsInput!) { saveXAnalytics(input: $input) }',
+      'SaveXAnalytics',
+      'x-analytics.save.v1',
+      'capture',
+    ],
+  ])('registers %s with the backend contract', async (document, name, id, permission) => {
+    const operation = getPluginOperationByDocument(document, name)
+    expect(operation).toMatchObject({ id, permission })
+    expect(operation?.documentSha256).toBe(await sha256Hex(document))
   })
 })

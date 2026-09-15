@@ -77,6 +77,44 @@ export interface MeResult {
   } | null
 }
 
+export const MY_X_ANALYTICS_QUERY = 'query MyXAnalytics { myXAnalytics }'
+
+export const SAVE_X_ANALYTICS_MUTATION =
+  'mutation SaveXAnalytics($input: XAnalyticsInput!) { saveXAnalytics(input: $input) }'
+
+export interface XAnalyticsStatusResult {
+  myXAnalytics: {
+    required: boolean
+    completed: boolean
+    twitterUserId: string | null
+    twitterUsername: string | null
+  }
+}
+
+export interface SaveXAnalyticsVars {
+  input: {
+    captureId: string
+    twitterUserId: string
+    twitterUsername: string
+    periodStart: string
+    periodEnd: string
+    capturedAt: string
+    metrics: Record<string, number>
+  }
+}
+
+export interface SaveXAnalyticsResult {
+  saveXAnalytics: {
+    id: string
+    twitterUserId: string
+    periodStart: string
+    periodEnd: string
+    capturedAt: string
+    savedAt: string
+    metrics: Record<string, number>
+  }
+}
+
 // ── 拉可参与的 engagement 任务 ────────────────────────────────────────
 //
 // 字段来自 backend src/modules/unified-campaign/dto/campaign.model.ts:

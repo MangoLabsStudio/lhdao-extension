@@ -46,6 +46,20 @@ export interface PluginOperationDefinition {
 
 export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
   operation(
+    'x-analytics.me.v1',
+    'MyXAnalytics',
+    'query MyXAnalytics { myXAnalytics }',
+    'c190cf7109956e3139e95fe8da124fccb93134a1881c1eef00a69f9c981abede',
+    'read',
+  ),
+  operation(
+    'x-analytics.save.v1',
+    'SaveXAnalytics',
+    'mutation SaveXAnalytics($input: XAnalyticsInput!) { saveXAnalytics(input: $input) }',
+    '8d35391bae27777c1b20394ce8ed07ef320b383c788209dffc656b2950c3a1e5',
+    'capture',
+  ),
+  operation(
     'capture.product-discovery.batch.v1',
     'UploadProductDiscoveryBatch',
     PRODUCT_DISCOVERY_UPLOAD_DOCUMENT,
