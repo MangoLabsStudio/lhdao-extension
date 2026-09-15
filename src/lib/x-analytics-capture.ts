@@ -62,7 +62,7 @@ export function captureXAnalyticsPage(
 
   const metrics: Record<string, number> = {}
   for (const button of root.querySelectorAll('button')) {
-    const text = (button.getAttribute('aria-label') || button.textContent || '')
+    const text = accessibleText(button)
       .replace(/\s+/g, ' ')
       .trim()
     const followers = text.match(
@@ -96,6 +96,14 @@ export function captureXAnalyticsPage(
     twitterUsername: handle.toLowerCase(),
     metrics: metrics as XAnalyticsPageCapture['metrics'],
   }
+}
+
+function accessibleText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
+  if (!(node instanceof Element)) return ''
+  const label = node.getAttribute('aria-label')
+  if (label) return label
+  return Array.from(node.childNodes).map(accessibleText).join(' ')
 }
 
 function parsePercent(value: string): number | null {

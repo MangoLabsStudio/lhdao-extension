@@ -56,17 +56,17 @@ describe('X account analytics capture', () => {
       <button data-testid="SideNav_AccountSwitcher_Button">
         <span>@wang_jl80536</span>
       </button>
-      <button aria-label="Verified followers 598 / 2.2K"><svg /></button>
-      <button aria-label="Active followers 1.5K / 2.2K"><svg /></button>
-      <button aria-label="Impressions 11.7K ↓ -61%"><svg /></button>
-      <button aria-label="Engagement rate 1.3% ↓ -37%"><svg /></button>
-      <button aria-label="Engagements 158 ↓ -76%"><svg /></button>
-      <button aria-label="Profile visits 23 ↓ -70%"><svg /></button>
-      <button aria-label="Replies 74 ↓ -75%"><svg /></button>
-      <button aria-label="Likes 46 ↓ -82%"><svg /></button>
-      <button aria-label="Reposts 2 ↓ -71%"><svg /></button>
-      <button aria-label="Bookmarks 13 ↓ -40%"><svg /></button>
-      <button aria-label="Shares 0 ↓ -100%"><svg /></button>
+      <button><span>Verified followers</span><span aria-label="598"></span> / <span aria-label="2.2K"></span></button>
+      <button><span>Active followers</span><span aria-label="1.5K"></span> / <span aria-label="2.2K"></span></button>
+      <button><span>Impressions</span><span aria-label="11.7K"></span> ↓ <span aria-label="-61%"></span></button>
+      <button><span>Engagement rate</span><span aria-label="1.3%"></span> ↓ <span aria-label="-37%"></span></button>
+      <button><span>Engagements</span><span aria-label="158"></span> ↓ <span aria-label="-76%"></span></button>
+      <button><span>Profile visits</span><span aria-label="23"></span> ↓ <span aria-label="-70%"></span></button>
+      <button><span>Replies</span><span aria-label="74"></span> ↓ <span aria-label="-75%"></span></button>
+      <button><span>Likes</span><span aria-label="46"></span> ↓ <span aria-label="-82%"></span></button>
+      <button><span>Reposts</span><span aria-label="2"></span> ↓ <span aria-label="-71%"></span></button>
+      <button><span>Bookmarks</span><span aria-label="13"></span> ↓ <span aria-label="-40%"></span></button>
+      <button><span>Shares</span><span aria-label="0"></span> ↓ <span aria-label="-100%"></span></button>
     `
 
     expect(captureXAnalyticsPage(document)?.metrics).toMatchObject({
