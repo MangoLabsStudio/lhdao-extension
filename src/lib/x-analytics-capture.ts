@@ -62,7 +62,9 @@ export function captureXAnalyticsPage(
 
   const metrics: Record<string, number> = {}
   for (const button of root.querySelectorAll('button')) {
-    const text = button.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+    const text = (button.getAttribute('aria-label') || button.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim()
     const followers = text.match(
       /^(Verified followers|Active followers)\s+([\d.,]+[KMB]?)\s*\/\s*([\d.,]+[KMB]?)/i,
     )
