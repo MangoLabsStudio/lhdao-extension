@@ -75,6 +75,18 @@ describe('X account analytics capture', () => {
     ])
   })
 
+  it('reads the nested handle when X labels the account button generically', () => {
+    document.body.innerHTML = `
+      <button data-testid="SideNav_AccountSwitcher_Button" aria-label="Account menu">
+        <span>@wang_jl80536</span>
+      </button>
+    `
+
+    expect(diagnoseXAnalyticsPage(document).missing).not.toContain(
+      'twitterUsername',
+    )
+  })
+
   it('reads metric values exposed through accessible labels', () => {
     document.body.innerHTML = `
       <button data-testid="SideNav_AccountSwitcher_Button">
