@@ -50,10 +50,15 @@ export function findThreeMonthButton(
 export function captureXAnalyticsPage(
   root: ParentNode,
 ): XAnalyticsPageCapture | null {
+  const labelledControls = Array.from(
+    root.querySelectorAll(
+      'button, [role="button"], [aria-label], [aria-labelledby]',
+    ),
+  )
   const accountButton =
     root.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]') ??
-    Array.from(root.querySelectorAll('button')).find((button) =>
-      /@[A-Za-z0-9_]{1,15}\b/.test(accessibleText(button)),
+    labelledControls.find((element) =>
+      /@[A-Za-z0-9_]{1,15}\b/.test(accessibleText(element)),
     )
   const handle = accountButton
     ? accessibleText(accountButton).match(/@([A-Za-z0-9_]{1,15})\b/)?.[1]
@@ -61,10 +66,8 @@ export function captureXAnalyticsPage(
   if (!handle) return null
 
   const metrics: Record<string, number> = {}
-  for (const button of root.querySelectorAll('button')) {
-    const text = accessibleText(button)
-      .replace(/\s+/g, ' ')
-      .trim()
+  for (const control of labelledControls) {
+    const text = accessibleText(control).replace(/\s+/g, ' ').trim()
     const followers = text.match(
       /^(Verified followers|Active followers)\s+([\d.,]+[KMB]?)\s*\/\s*([\d.,]+[KMB]?)/i,
     )

@@ -90,9 +90,9 @@ describe('X account analytics capture', () => {
       <div id="account">0xWang健林 <span aria-label="@wang_jl80536"></span></div>
       <button data-testid="SideNav_AccountSwitcher_Button" aria-labelledby="account"></button>
       <div id="verified">Verified followers <span aria-label="597"></span> / <span aria-label="2.2K"></span></div>
-      <button aria-labelledby="verified"></button>
+      <div role="button" aria-labelledby="verified"></div>
       <div id="active">Active followers <span aria-label="1.5K"></span> / <span aria-label="2.2K"></span></div>
-      <button aria-labelledby="active"></button>
+      <div role="button" aria-labelledby="active"></div>
       <button aria-label="Impressions 11.7K ↓ -61%"></button>
       <button aria-label="Engagement rate 1.3% ↓ -37%"></button>
       <button aria-label="Engagements 158 ↓ -76%"></button>
