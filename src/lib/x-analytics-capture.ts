@@ -71,7 +71,7 @@ export function captureXAnalyticsPage(
     if (followers) {
       const value = parseCompactNumber(followers[2])
       const total = parseCompactNumber(followers[3])
-      if (value === null || total === null) return null
+      if (value === null || total === null) continue
       metrics[
         followers[1].toLowerCase().startsWith('verified')
           ? 'verifiedFollowers'
@@ -87,7 +87,7 @@ export function captureXAnalyticsPage(
       const raw = text.slice(label.length).trim().split(/\s+/)[0]
       const value =
         key === 'engagementRate' ? parsePercent(raw) : parseCompactNumber(raw)
-      if (value === null) return null
+      if (value === null) continue
       metrics[key] = value
     }
   }
