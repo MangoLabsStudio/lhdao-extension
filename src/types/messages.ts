@@ -40,6 +40,16 @@ import type {
 export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
 
 export type MsgRequest =
+  | { type: 'get-x-analytics-status' }
+  | {
+      type: 'save-x-analytics'
+      captureId: string
+      twitterUsername: string
+      periodStart: string
+      periodEnd: string
+      capturedAt: string
+      metrics: Record<string, number>
+    }
   | { type: 'get-product-proof-review' }
   | { type: 'confirm-product-proof-review'; reviewId: string }
   | { type: 'reread-product-proof' }
@@ -263,6 +273,18 @@ export type MsgRequest =
 // ── Responses ────────────────────────────────────────────────────────
 
 export type MsgResponse =
+  | {
+      type: 'x-analytics-status'
+      twitterUserId: string | null
+      twitterUsername: string | null
+      completed: boolean
+    }
+  | { type: 'x-analytics-save-result'; ok: true; savedAt: string }
+  | {
+      type: 'x-analytics-save-result'
+      ok: false
+      code: 'NO_TOKEN' | 'WRONG_X_ACCOUNT' | 'INCOMPLETE' | 'NETWORK'
+    }
   | { type: 'product-proof-review-result'; state: ProofReviewUiState | null }
   | DiscoveryResponse
   | {

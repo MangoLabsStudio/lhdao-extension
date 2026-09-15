@@ -64,6 +64,7 @@ import {
   MintProductExperienceTicketOperationName,
   type MintProductExperienceTicketVariables,
   MY_RESERVED_ENGAGEMENTS_QUERY,
+  MY_X_ANALYTICS_QUERY,
   type MyReservedEngagementsResult,
   POLL_EXTENSION_PAIRING_QUERY,
   type PollExtensionPairingResult,
@@ -90,6 +91,9 @@ import {
   RESERVE_SLOT_MUTATION,
   type ReportEngagementCaptureResult,
   type ReserveSlotResult,
+  SAVE_X_ANALYTICS_MUTATION,
+  type SaveXAnalyticsResult,
+  type SaveXAnalyticsVars,
   StartProductZkTlsProofOperationName,
   type StartProductZkTlsProofVariables,
   StartProductZkTlsTestProofOperationName,
@@ -100,6 +104,7 @@ import {
   type SubmitProductExperienceProofVariables,
   VERIFY_ENGAGEMENT_MUTATION,
   type VerifyEngagementResult,
+  type XAnalyticsStatusResult,
 } from '@/lib/queries'
 import {
   childSpendActionKey,
@@ -557,6 +562,103 @@ export default defineBackground(() => {
   })
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
+    if (
+      req.type === 'get-x-analytics-status' ||
+      req.type === 'save-x-analytics'
+    ) {
+      const senderUrl = sender.tab?.url ?? sender.url ?? ''
+      if (
+        sender.id !== chrome.runtime.id ||
+        sender.frameId !== 0 ||
+        !/^https:\/\/(?:x|twitter)\.com\/i\/account_analytics(?:[/?#]|$)/.test(
+          senderUrl,
+        )
+      ) {
+        return {
+          type: 'x-analytics-save-result',
+          ok: false,
+          code: 'INCOMPLETE',
+        }
+      }
+      try {
+        const status = await gql<XAnalyticsStatusResult>(MY_X_ANALYTICS_QUERY)
+        if (req.type === 'get-x-analytics-status') {
+          return {
+            type: 'x-analytics-status',
+            twitterUserId: status.myXAnalytics.twitterUserId,
+            twitterUsername: status.myXAnalytics.twitterUsername,
+            completed: status.myXAnalytics.completed,
+          }
+        }
+        const observed = req.twitterUsername.toLowerCase()
+        const bound = status.myXAnalytics.twitterUsername?.toLowerCase() ?? null
+        if (
+          !status.myXAnalytics.twitterUserId ||
+          !bound ||
+          observed !== bound
+        ) {
+          return {
+            type: 'x-analytics-save-result',
+            ok: false,
+            code: 'WRONG_X_ACCOUNT',
+          }
+        }
+        const result = await gql<SaveXAnalyticsResult, SaveXAnalyticsVars>(
+          SAVE_X_ANALYTICS_MUTATION,
+          {
+            input: {
+              captureId: req.captureId,
+              twitterUserId: status.myXAnalytics.twitterUserId,
+              twitterUsername: observed,
+              periodStart: req.periodStart,
+              periodEnd: req.periodEnd,
+              capturedAt: req.capturedAt,
+              metrics: req.metrics,
+            },
+          },
+        )
+        return {
+          type: 'x-analytics-save-result',
+          ok: true,
+          savedAt: result.saveXAnalytics.savedAt,
+        }
+      } catch (error) {
+        if (error instanceof GqlError) {
+          const codes = error.graphqlErrors?.map(
+            (item) => item.extensions?.code ?? item.message,
+          ) ?? [error.message]
+          if (
+            codes.some((value) => String(value).includes('X_ACCOUNT_MISMATCH'))
+          )
+            return {
+              type: 'x-analytics-save-result',
+              ok: false,
+              code: 'WRONG_X_ACCOUNT',
+            }
+          if (
+            codes.some((value) =>
+              String(value).includes('X_ANALYTICS_INCOMPLETE'),
+            )
+          )
+            return {
+              type: 'x-analytics-save-result',
+              ok: false,
+              code: 'INCOMPLETE',
+            }
+          if (error.kind === 'CLIENT')
+            return {
+              type: 'x-analytics-save-result',
+              ok: false,
+              code: 'NO_TOKEN',
+            }
+        }
+        return {
+          type: 'x-analytics-save-result',
+          ok: false,
+          code: 'NETWORK',
+        }
+      }
+    }
     if (
       req.type === 'get-product-proof-review' ||
       req.type === 'confirm-product-proof-review' ||
