@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   captureXAnalyticsPage,
+  diagnoseXAnalyticsPage,
   rollingNinetyDayPeriod,
 } from '../x-analytics-capture'
 
@@ -49,6 +50,29 @@ describe('X account analytics capture', () => {
   it('fails closed when a card or account identity is missing', () => {
     document.body.innerHTML = '<button>Impressions 0</button>'
     expect(captureXAnalyticsPage(document)).toBeNull()
+  })
+
+  it('reports the exact fields that prevented a complete capture', () => {
+    document.body.innerHTML = `
+      <button data-testid="SideNav_AccountSwitcher_Button">
+        <span>@wang_jl80536</span>
+      </button>
+      <button>Impressions 11.7K</button>
+      <button>Shares 0</button>
+    `
+
+    expect(diagnoseXAnalyticsPage(document).missing).toEqual([
+      'verifiedFollowers',
+      'activeFollowers',
+      'followers',
+      'engagementRate',
+      'engagements',
+      'profileVisits',
+      'replies',
+      'likes',
+      'reposts',
+      'bookmarks',
+    ])
   })
 
   it('reads metric values exposed through accessible labels', () => {
