@@ -75,8 +75,7 @@ async function saveCapture(
     const range = findThreeMonthButton(document)
     if (!range) return fail(status, 'X 分析页尚未加载完整，请稍后重试。')
     range.click()
-    await new Promise((resolve) => setTimeout(resolve, 1_200))
-    const page = captureXAnalyticsPage(document)
+    const page = await waitForCompleteCapture()
     if (!page) return fail(status, '汇总数据不完整，请等待页面加载后重试。')
 
     const account = await sendMessage({ type: 'get-x-analytics-status' })
@@ -120,6 +119,18 @@ async function saveCapture(
   } finally {
     button.disabled = false
   }
+}
+
+async function waitForCompleteCapture(): Promise<
+  ReturnType<typeof captureXAnalyticsPage>
+> {
+  const deadline = Date.now() + 8_000
+  while (Date.now() < deadline) {
+    const capture = captureXAnalyticsPage(document)
+    if (capture) return capture
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  return null
 }
 
 function fail(status: HTMLElement, message: string): void {

@@ -56,6 +56,7 @@ describe('X account analytics capture', () => {
       <button data-testid="SideNav_AccountSwitcher_Button">
         <span>@wang_jl80536</span>
       </button>
+      <button><span>Impressions</span><span aria-label="--"></span></button>
       <button><span>Verified followers</span><span aria-label="598"></span> / <span aria-label="2.2K"></span></button>
       <button><span>Active followers</span><span aria-label="1.5K"></span> / <span aria-label="2.2K"></span></button>
       <button><span>Impressions</span><span aria-label="11.7K"></span> ↓ <span aria-label="-61%"></span></button>
