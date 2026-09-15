@@ -22,6 +22,11 @@ export interface XAnalyticsPageCapture {
   metrics: Record<(typeof requiredMetrics)[number], number>
 }
 
+export interface XAnalyticsPageDiagnostic {
+  capture: XAnalyticsPageCapture | null
+  missing: string[]
+}
+
 export function rollingNinetyDayPeriod(now: Date): {
   periodStart: string
   periodEnd: string
@@ -50,6 +55,12 @@ export function findThreeMonthButton(
 export function captureXAnalyticsPage(
   root: ParentNode,
 ): XAnalyticsPageCapture | null {
+  return diagnoseXAnalyticsPage(root).capture
+}
+
+export function diagnoseXAnalyticsPage(
+  root: ParentNode,
+): XAnalyticsPageDiagnostic {
   const labelledControls = Array.from(
     root.querySelectorAll(
       'button, [role="button"], [aria-label], [aria-labelledby]',
@@ -63,9 +74,9 @@ export function captureXAnalyticsPage(
   const handle = accountButton
     ? accessibleText(accountButton).match(/@([A-Za-z0-9_]{1,15})\b/)?.[1]
     : undefined
-  if (!handle) return null
 
   const metrics: Record<string, number> = {}
+  let followersConflict = false
   for (const control of labelledControls) {
     const text = accessibleText(control).replace(/\s+/g, ' ').trim()
     const followers = text.match(
@@ -81,7 +92,7 @@ export function captureXAnalyticsPage(
           : 'activeFollowers'
       ] = value
       if (metrics.followers !== undefined && metrics.followers !== total)
-        return null
+        followersConflict = true
       metrics.followers = total
       continue
     }
@@ -94,10 +105,20 @@ export function captureXAnalyticsPage(
       metrics[key] = value
     }
   }
-  if (requiredMetrics.some((key) => metrics[key] === undefined)) return null
+  const missing: string[] = requiredMetrics.filter(
+    (key) =>
+      metrics[key] === undefined || (key === 'followers' && followersConflict),
+  )
+  if (!handle) missing.unshift('twitterUsername')
   return {
-    twitterUsername: handle.toLowerCase(),
-    metrics: metrics as XAnalyticsPageCapture['metrics'],
+    capture:
+      missing.length === 0
+        ? {
+            twitterUsername: handle!.toLowerCase(),
+            metrics: metrics as XAnalyticsPageCapture['metrics'],
+          }
+        : null,
+    missing,
   }
 }
 
