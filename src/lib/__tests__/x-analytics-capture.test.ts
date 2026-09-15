@@ -84,4 +84,29 @@ describe('X account analytics capture', () => {
       periodEnd: '2026-09-15',
     })
   })
+
+  it('follows aria-labelledby references used by X buttons', () => {
+    document.body.innerHTML = `
+      <div id="account">0xWang健林 <span aria-label="@wang_jl80536"></span></div>
+      <button data-testid="SideNav_AccountSwitcher_Button" aria-labelledby="account"></button>
+      <div id="verified">Verified followers <span aria-label="597"></span> / <span aria-label="2.2K"></span></div>
+      <button aria-labelledby="verified"></button>
+      <div id="active">Active followers <span aria-label="1.5K"></span> / <span aria-label="2.2K"></span></div>
+      <button aria-labelledby="active"></button>
+      <button aria-label="Impressions 11.7K ↓ -61%"></button>
+      <button aria-label="Engagement rate 1.3% ↓ -37%"></button>
+      <button aria-label="Engagements 158 ↓ -76%"></button>
+      <button aria-label="Profile visits 23 ↓ -70%"></button>
+      <button aria-label="Replies 74 ↓ -75%"></button>
+      <button aria-label="Likes 46 ↓ -82%"></button>
+      <button aria-label="Reposts 2 ↓ -71%"></button>
+      <button aria-label="Bookmarks 13 ↓ -40%"></button>
+      <button aria-label="Shares 0 ↓ -100%"></button>
+    `
+
+    expect(captureXAnalyticsPage(document)).toMatchObject({
+      twitterUsername: 'wang_jl80536',
+      metrics: { verifiedFollowers: 597, followers: 2200 },
+    })
+  })
 })

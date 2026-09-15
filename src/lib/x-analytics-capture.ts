@@ -53,11 +53,11 @@ export function captureXAnalyticsPage(
   const accountButton =
     root.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]') ??
     Array.from(root.querySelectorAll('button')).find((button) =>
-      /@[A-Za-z0-9_]{1,15}\b/.test(button.textContent ?? ''),
+      /@[A-Za-z0-9_]{1,15}\b/.test(accessibleText(button)),
     )
-  const handle = accountButton?.textContent?.match(
-    /@([A-Za-z0-9_]{1,15})\b/,
-  )?.[1]
+  const handle = accountButton
+    ? accessibleText(accountButton).match(/@([A-Za-z0-9_]{1,15})\b/)?.[1]
+    : undefined
   if (!handle) return null
 
   const metrics: Record<string, number> = {}
@@ -98,12 +98,26 @@ export function captureXAnalyticsPage(
   }
 }
 
-function accessibleText(node: Node): string {
+function accessibleText(node: Node, visited = new Set<Node>()): string {
+  if (visited.has(node)) return ''
+  visited.add(node)
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
   if (!(node instanceof Element)) return ''
+  const labelledBy = node.getAttribute('aria-labelledby')
+  if (labelledBy) {
+    const document = node.ownerDocument
+    return labelledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id))
+      .filter((element): element is HTMLElement => Boolean(element))
+      .map((element) => accessibleText(element, visited))
+      .join(' ')
+  }
   const label = node.getAttribute('aria-label')
   if (label) return label
-  return Array.from(node.childNodes).map(accessibleText).join(' ')
+  return Array.from(node.childNodes)
+    .map((child) => accessibleText(child, visited))
+    .join(' ')
 }
 
 function parsePercent(value: string): number | null {
