@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   captureXAnalyticsPage,
   diagnoseXAnalyticsPage,
@@ -160,5 +160,32 @@ describe('X account analytics capture', () => {
         shares: 0,
       },
     })
+  })
+
+  it('reads elements when the extension realm has a different Element constructor', () => {
+    document.body.innerHTML = `
+      <div><span>@wang_jl80536</span></div>
+      <button>Verified followers 597 / 2.2K</button>
+      <button>Active followers 1.5K / 2.2K</button>
+      <button>Impressions 11.7K</button>
+      <button>Engagement rate 1.3%</button>
+      <button>Engagements 158</button>
+      <button>Profile visits 23</button>
+      <button>Replies 74</button>
+      <button>Likes 46</button>
+      <button>Reposts 2</button>
+      <button>Bookmarks 13</button>
+      <button>Shares 0</button>
+    `
+
+    vi.stubGlobal('Element', class {})
+    try {
+      expect(captureXAnalyticsPage(document)).toMatchObject({
+        twitterUsername: 'wang_jl80536',
+        metrics: { impressions: 11700, engagementRate: 0.013 },
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

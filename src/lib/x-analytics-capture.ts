@@ -156,10 +156,11 @@ function accessibleText(node: Node, visited = new Set<Node>()): string {
   if (visited.has(node)) return ''
   visited.add(node)
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
-  if (!(node instanceof Element)) return ''
-  const labelledBy = node.getAttribute('aria-labelledby')
+  if (node.nodeType !== Node.ELEMENT_NODE) return ''
+  const element = node as Element
+  const labelledBy = element.getAttribute('aria-labelledby')
   if (labelledBy) {
-    const document = node.ownerDocument
+    const document = element.ownerDocument
     return labelledBy
       .split(/\s+/)
       .map((id) => document.getElementById(id))
@@ -167,9 +168,9 @@ function accessibleText(node: Node, visited = new Set<Node>()): string {
       .map((element) => accessibleText(element, visited))
       .join(' ')
   }
-  const label = node.getAttribute('aria-label')
+  const label = element.getAttribute('aria-label')
   if (label) return label
-  return Array.from(node.childNodes)
+  return Array.from(element.childNodes)
     .map((child) => accessibleText(child, visited))
     .join(' ')
 }
