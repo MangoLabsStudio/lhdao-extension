@@ -62,14 +62,16 @@ export function diagnoseXAnalyticsPage(
   root: ParentNode,
 ): XAnalyticsPageDiagnostic {
   const candidates = collectCaptureCandidates(root)
-  const accountButton =
-    root.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]') ??
-    candidates.find((element) =>
-      /@[A-Za-z0-9_]{1,15}\b/.test(accessibleText(element)),
-    )
-  const handle = accountButton
-    ? accessibleText(accountButton).match(/@([A-Za-z0-9_]{1,15})\b/)?.[1]
-    : undefined
+  const accountButton = root.querySelector(
+    '[data-testid="SideNav_AccountSwitcher_Button"]',
+  )
+  const identityCandidates = accountButton
+    ? [accountButton, ...candidates]
+    : candidates
+  const handle = identityCandidates
+    .map((element) => `${accessibleText(element)} ${element.textContent ?? ''}`)
+    .map((text) => text.match(/@([A-Za-z0-9_]{1,15})\b/)?.[1])
+    .find(Boolean)
 
   const metrics: Record<string, number> = {}
   let followersConflict = false
