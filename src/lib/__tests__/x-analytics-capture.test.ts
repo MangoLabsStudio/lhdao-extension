@@ -162,6 +162,52 @@ describe('X account analytics capture', () => {
     })
   })
 
+  it('reads number-flow values rendered in X open shadow roots', () => {
+    document.body.innerHTML = `
+      <div><span>@wang_jl80536</span></div>
+      <div><span>Verified followers</span><number-flow-react data-value="597"></number-flow-react> / <number-flow-react data-value="2.2K"></number-flow-react></div>
+      <div><span>Active followers</span><number-flow-react data-value="1.5K"></number-flow-react> / <number-flow-react data-value="2.2K"></number-flow-react></div>
+      <div><span>Impressions</span><number-flow-react data-value="11.7K"></number-flow-react></div>
+      <div><span>Engagement rate</span><number-flow-react data-value="1.3%"></number-flow-react></div>
+      <div><span>Engagements</span><number-flow-react data-value="158"></number-flow-react></div>
+      <div><span>Profile visits</span><number-flow-react data-value="23"></number-flow-react></div>
+      <div><span>Replies</span><number-flow-react data-value="74"></number-flow-react></div>
+      <div><span>Likes</span><number-flow-react data-value="46"></number-flow-react></div>
+      <div><span>Reposts</span><number-flow-react data-value="2"></number-flow-react></div>
+      <div><span>Bookmarks</span><number-flow-react data-value="13"></number-flow-react></div>
+      <div><span>Shares</span><number-flow-react data-value="0"></number-flow-react></div>
+    `
+
+    for (const host of document.querySelectorAll('number-flow-react')) {
+      const shadow = host.attachShadow({ mode: 'open' })
+      shadow.innerHTML = Array.from(host.getAttribute('data-value') ?? '')
+        .map((character) =>
+          /\d/.test(character)
+            ? `<span class="digit" style="--current: ${character}; --length: 10;"><span class="digit__num">0123456789</span></span>`
+            : `<span class="symbol">${character}</span>`,
+        )
+        .join('')
+    }
+
+    expect(captureXAnalyticsPage(document)).toEqual({
+      twitterUsername: 'wang_jl80536',
+      metrics: {
+        verifiedFollowers: 597,
+        activeFollowers: 1500,
+        followers: 2200,
+        impressions: 11700,
+        engagementRate: 0.013,
+        engagements: 158,
+        profileVisits: 23,
+        replies: 74,
+        likes: 46,
+        reposts: 2,
+        bookmarks: 13,
+        shares: 0,
+      },
+    })
+  })
+
   it('reads elements when the extension realm has a different Element constructor', () => {
     document.body.innerHTML = `
       <div><span>@wang_jl80536</span></div>
