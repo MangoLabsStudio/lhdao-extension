@@ -133,4 +133,32 @@ describe('X account analytics capture', () => {
       metrics: { verifiedFollowers: 597, followers: 2200 },
     })
   })
+
+  it('reads X clickable cards that use plain div containers', () => {
+    document.body.innerHTML = `
+      <div><div><span>0xWang健林</span><span>@wang_jl80536</span></div></div>
+      <div><span>Verified followers</span><span aria-label="597"></span> / <span aria-label="2.2K"></span></div>
+      <div><span>Active followers</span><span aria-label="1.5K"></span> / <span aria-label="2.2K"></span></div>
+      <div><span>Impressions</span><span aria-label="11.7K"></span> ↓ <span aria-label="-61%"></span></div>
+      <div><span>Engagement rate</span><span aria-label="1.3%"></span> ↓ <span aria-label="-37%"></span></div>
+      <div><span>Engagements</span><span aria-label="158"></span> ↓ <span aria-label="-76%"></span></div>
+      <div><span>Profile visits</span><span aria-label="23"></span> ↓ <span aria-label="-70%"></span></div>
+      <div><span>Replies</span><span aria-label="74"></span> ↓ <span aria-label="-75%"></span></div>
+      <div><span>Likes</span><span aria-label="46"></span> ↓ <span aria-label="-82%"></span></div>
+      <div><span>Reposts</span><span aria-label="2"></span> ↓ <span aria-label="-71%"></span></div>
+      <div><span>Bookmarks</span><span aria-label="13"></span> ↓ <span aria-label="-40%"></span></div>
+      <div><span>Shares</span><span aria-label="0"></span> ↓ <span aria-label="-100%"></span></div>
+    `
+
+    expect(captureXAnalyticsPage(document)).toMatchObject({
+      twitterUsername: 'wang_jl80536',
+      metrics: {
+        verifiedFollowers: 597,
+        followers: 2200,
+        impressions: 11700,
+        engagementRate: 0.013,
+        shares: 0,
+      },
+    })
+  })
 })

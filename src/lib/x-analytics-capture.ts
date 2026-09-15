@@ -61,14 +61,10 @@ export function captureXAnalyticsPage(
 export function diagnoseXAnalyticsPage(
   root: ParentNode,
 ): XAnalyticsPageDiagnostic {
-  const labelledControls = Array.from(
-    root.querySelectorAll(
-      'button, [role="button"], [aria-label], [aria-labelledby]',
-    ),
-  )
+  const candidates = collectCaptureCandidates(root)
   const accountButton =
     root.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]') ??
-    labelledControls.find((element) =>
+    candidates.find((element) =>
       /@[A-Za-z0-9_]{1,15}\b/.test(accessibleText(element)),
     )
   const handle = accountButton
@@ -77,7 +73,7 @@ export function diagnoseXAnalyticsPage(
 
   const metrics: Record<string, number> = {}
   let followersConflict = false
-  for (const control of labelledControls) {
+  for (const control of candidates) {
     const text = accessibleText(control).replace(/\s+/g, ' ').trim()
     const followers = text.match(
       /^(Verified followers|Active followers)\s+([\d.,]+[KMB]?)\s*\/\s*([\d.,]+[KMB]?)/i,
@@ -120,6 +116,40 @@ export function diagnoseXAnalyticsPage(
         : null,
     missing,
   }
+}
+
+function collectCaptureCandidates(root: ParentNode): Element[] {
+  const candidates = new Set(
+    root.querySelectorAll(
+      'button, [role="button"], [aria-label], [aria-labelledby]',
+    ),
+  )
+  const labels = [
+    'Verified followers',
+    'Active followers',
+    ...Object.keys(summaryMetrics),
+  ].map((label) => label.toLowerCase())
+
+  for (const element of root.querySelectorAll('*')) {
+    const ownText = Array.from(element.childNodes)
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent ?? '')
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (
+      !/@[A-Za-z0-9_]{1,15}\b/.test(ownText) &&
+      !labels.includes(ownText.toLowerCase())
+    )
+      continue
+
+    let candidate: Element | null = element
+    for (let depth = 0; candidate && depth < 6; depth += 1) {
+      candidates.add(candidate)
+      candidate = candidate.parentElement
+    }
+  }
+  return Array.from(candidates)
 }
 
 function accessibleText(node: Node, visited = new Set<Node>()): string {
