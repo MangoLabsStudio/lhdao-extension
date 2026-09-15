@@ -34,7 +34,7 @@ mkdir -p release/unpacked/{chrome,edge,firefox}
 unzip -q ".output/lhdao-extension-${VERSION}-chrome.zip" -d release/unpacked/chrome
 unzip -q ".output/lhdao-extension-${VERSION}-edge.zip" -d release/unpacked/edge
 unzip -q ".output/lhdao-extension-${VERSION}-firefox.zip" -d release/unpacked/firefox
-node scripts/verify-product-manifests.mjs \
+node scripts/verify-manifests.mjs \
   --chrome-dir release/unpacked/chrome \
   --edge-dir release/unpacked/edge \
   --firefox-dir release/unpacked/firefox
@@ -47,16 +47,12 @@ shasum -a 256 \
 The verifier requires all three manifests to have:
 
 - `manifest_version: 3` and package version `0.3.0`;
-- Chrome and Edge permissions: `storage`, `alarms`, `activeTab`, `scripting`,
-  `offscreen`, and `webRequest`;
-- Firefox permissions: `storage`, `alarms`, `activeTab`, and `scripting`;
+- Permissions: `storage` and `alarms` on all three browsers;
 - persistent host access only for X, Twitter, Binance, the production API, and
   the production web app;
-- Chrome and Edge optional host access `https://*/*`; Firefox has no optional
-  host access;
+- No optional host access;
 - no wildcard persistent, customer-specific, or loopback host access;
-- a runtime `content-scripts/product-experience.js` artifact that is absent
-  from static `content_scripts`.
+- No product evaluator or TLSNotary assets.
 
 ## 2. Tag-driven GitHub release
 
@@ -103,49 +99,18 @@ Use the following scope descriptions consistently across stores.
 ### `storage`
 
 Stores the Lighthouse plugin token, cached account/task summaries, engagement
-capture state, and short-lived Product Experience session state. The plugin
+capture state. The plugin
 token is transmitted only to the Lighthouse API as a Bearer credential.
 
 ### `alarms`
 
 Refreshes the user's available Lighthouse tasks in the background.
 
-### `activeTab`
-
-Grants temporary access to the current customer tab only after the user clicks
-**Start verification** or **Authorize again** in the popup. It is not persistent
-customer-site access.
-
-### `scripting`
-
-Injects the isolated Product Experience evaluator into the tab covered by that
-user-triggered `activeTab` grant. The evaluator is not a static customer-site
-content script.
-
-### `offscreen` (Chrome and Edge only)
-
-Keeps the user-started TLSNotary proof worker alive outside the popup and the
-customer tab. Firefox does not package or request the Chromium offscreen proof
-runtime.
-
-### `webRequest` (Chrome and Edge only)
-
-Observes the request selected during an active Product Experience capture so
-the extension can construct the TLSNotary request. The listener does not start
-an unrestricted background crawl and is inactive when no capture is running.
-
-### Optional host access (Chrome and Edge only)
-
-Declares `https://*/*` as optional access so a user can grant the specific
-customer origin needed for a Product Experience verification. It is not a
-persistent host permission. Firefox declares no optional host access.
-
 ### Host access
 
 - `x.com` and `twitter.com`: displays and verifies Lighthouse engagement tasks.
 - `www.binance.com`: discovers and verifies eligible Binance Square tasks.
-- `service.lhdao.top`: authenticates, synchronizes tasks, and submits task or
-  sanitized Product Experience proof data.
+- `service.lhdao.top`: authenticates, synchronizes tasks, and submits engagement task data.
 - `app.lhdao.top`: pairs the extension and exchanges the sanitized page bridge
   state used by Lighthouse task pages.
 
@@ -153,8 +118,7 @@ No customer website appears in persistent host permissions.
 
 ## 5. Data-use declarations
 
-The store declaration must cover the extension as a whole, not only Product
-Experience:
+The store declaration must cover the extension as a whole:
 
 - Authentication information: **Yes**. A plugin token authenticates Lighthouse
   API requests.
@@ -162,9 +126,6 @@ Experience:
   are submitted for task verification and abuse prevention.
 - Personal communications / website content: **Yes where applicable**. X
   comment tasks can submit the user's comment text for delivery or review.
-- Product Experience website content: page markers can be read locally, but
-  `TEXT_CONTAINS` text stays in memory and Product Experience proofs do not
-  upload page text, DOM, selectors, cookies, or form values.
 - Third-party advertising or analytics: **No**.
 
 Do not reuse older declarations that say the token never leaves the browser,
@@ -217,4 +178,4 @@ For each submitted version, retain:
 - release-gate command output;
 - signed-out privacy URL verification date;
 - store declaration screenshots or exported answers;
-- sanitized Chrome, Edge, and Firefox Product Experience smoke-test results.
+- Chrome, Edge, and Firefox engagement smoke-test results.

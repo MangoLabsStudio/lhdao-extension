@@ -1,7 +1,6 @@
 # Lighthouse browser extension
 
-Lighthouse 浏览器扩展让用户在 X (Twitter) 上完成 engagement 任务，并在用户主动
-授权的客户网站上验证 Product Experience 任务。
+Lighthouse 浏览器扩展让用户在 X (Twitter) 上完成 engagement 任务。产品体验任务由 Buyer 在 Lighthouse 网站人工审核。
 
 ## 开发
 
@@ -24,7 +23,7 @@ pnpm run build:firefox  # .output/firefox-mv3/
 pnpm run zip
 pnpm run zip:edge
 pnpm run zip:firefox
-node scripts/verify-product-manifests.mjs
+node scripts/verify-manifests.mjs
 ```
 
 默认端点为 `https://service.lhdao.top/graphql` 和 `https://app.lhdao.top`。生产构建拒绝 HTTP
@@ -39,16 +38,11 @@ pnpm run build
 
 `localhost`、`127.0.0.1` 和 `[::1]` 是唯一允许的本地 host；不允许本地与生产端点混用。
 
-## 产品验证的权限边界
+## 权限边界
 
-- Manifest 只有 `storage`、`alarms`、`activeTab` 和 `scripting` 权限。
-- Manifest 不包含 `<all_urls>` 或客户网站 host permission。
-- 只有当用户打开扩展 Popup 并点击“开始验证”后，扩展才在当前标签页临时注入
-  Product Experience evaluator。
-- 跨 Origin 导航会立即进入“需要重新授权”，必须由用户再次点击；已命中的规则
-  ID 进度会保留。
-- `TEXT_CONTAINS` 只在内存中比对。Product Experience proof 不上传页面正文、DOM、
-  Cookie 或表单值。
+- Manifest 只使用 `storage` 和 `alarms`。
+- 主机访问限定为 X、Twitter、Binance Square 及配置的 Lighthouse API 和网站。
+- 产品体验自动采集、规则匹配及证明运行时已移除。
 
 详细数据边界见 [PRIVACY.md](./PRIVACY.md)。
 
@@ -58,11 +52,10 @@ pnpm run build
 |---|---|
 | `src/entrypoints/background.ts` | MV3 service worker、任务同步、验证 controller 和网络请求 |
 | `src/entrypoints/content.ts` | X timeline 的 engagement UI |
-| `src/entrypoints/product-experience.content.ts` | 仅由 runtime injection 启动的声明式规则 evaluator |
 | `src/entrypoints/web-presence.content.ts` | Lighthouse 页面与扩展的脱敏 bridge |
-| `src/entrypoints/popup/` | 账号概览与 Product Experience 临时授权入口 |
+| `src/entrypoints/popup/` | 账号概览与登录连接 |
 | `src/entrypoints/options/` | Plugin token 配置 |
-| `src/lib/` | GraphQL、storage、proof、watcher 和强类型 messaging |
+| `src/lib/` | GraphQL、storage、互动证明和强类型 messaging |
 
 ## 浏览器状态
 

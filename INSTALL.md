@@ -1,14 +1,14 @@
 # Lighthouse 浏览器扩展安装指南
 
-本指南适用于 `0.2.0` 的 Chrome / Edge / Firefox MV3 内测包。
+本指南适用于 `0.3.0` 的 Chrome / Edge / Firefox MV3 内测包。
 
 ## 1. 下载并解压
 
 从 [GitHub Releases](https://github.com/MangoLabsStudio/lhdao-extension/releases) 下载与浏览器匹配的包：
 
-- `lhdao-extension-0.2.0-chrome.zip`
-- `lhdao-extension-0.2.0-edge.zip`
-- `lhdao-extension-0.2.0-firefox.zip`
+- `lhdao-extension-0.3.0-chrome.zip`
+- `lhdao-extension-0.3.0-edge.zip`
+- `lhdao-extension-0.3.0-firefox.zip`
 
 解压后应直接看到 `manifest.json`。加载已解压扩展时不要选择 zip，也不要选择多包了一层
 的外部目录。
@@ -52,25 +52,11 @@ Lighthouse 后端。不会发送给第三方服务。
 2. 在 timeline 或推文详情中完成 Lighthouse 标记的动作。
 3. 使用扩展注入的按钮预约并验证任务。
 
-## 5. 验证 Product Experience 任务
+## 5. 产品体验任务
 
-1. 在 Lighthouse 任务页选择 Product Experience 任务并打开 Buyer 指定的客户网站。
-2. 在客户网站的顶层页面打开 Lighthouse Popup。
-3. 确认按钮旁的说明：“只在本次授权的当前网站读取 Buyer 配置的完成标记”。
-4. 点击“开始验证”。这一用户操作临时授予当前 tab 的 `activeTab` 权限，然后扩展通过
-   `scripting` 注入验证器；浏览器不一定显示额外权限弹窗。
-5. 完成页面上 Buyer 声明的标记。Popup 只显示完成数，不显示 selector、页面文字、ticket
-   或 MAC key。
-6. 跨到另一个 Origin 后，Popup 会保留已完成数并提示“需要重新授权”。重新打开 Popup
-   并点击后才能继续。
+产品体验由 Buyer 在 Lighthouse 网站人工审核，无需扩展采集或验证客户网站。
 
-## 安全检查
-
-- Manifest 不应包含 `<all_urls>` 或任何客户网站 host permission。
-- Product Experience evaluator 应存在于
-  `content-scripts/product-experience.js`，但不应出现在 manifest 的静态 `content_scripts`
-  列表中。
-- 详细数据使用见 [PRIVACY.md](./PRIVACY.md)。
+详细数据使用见 [PRIVACY.md](./PRIVACY.md)。
 
 ## 升级
 

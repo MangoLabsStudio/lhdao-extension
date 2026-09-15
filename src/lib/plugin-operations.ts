@@ -7,26 +7,14 @@ import {
   LIGHTHOUSE_MEMBERS_QUERY,
   ME_QUERY,
   MINT_ENGAGEMENT_TICKET_MUTATION,
-  MintProductExperienceTestTicketOperationName,
-  MintProductExperienceTicketOperationName,
   MY_RESERVED_ENGAGEMENTS_QUERY,
   POLL_EXTENSION_PAIRING_QUERY,
   PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
-  PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-  PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
-  ProductZkTlsRuleProgressOperationName,
   RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
-  StartProductZkTlsProofOperationName,
-  StartProductZkTlsTestProofOperationName,
   SUBMIT_ENGAGEMENT_PROOF_MUTATION,
-  SubmitProductExperienceProofOperationName,
 } from './queries'
-import { PRODUCT_DISCOVERY_UPLOAD_DOCUMENT } from './zktls/discovery/sample-uploader'
-
-const PRODUCT_EXPERIENCE_DOCUMENT_SHA256 =
-  'afa8256b861be2b084ac8976478a14bd716d50473c203ca87e62868cce720577'
 
 export type PluginOperationPermission =
   | 'public'
@@ -45,13 +33,6 @@ export interface PluginOperationDefinition {
 }
 
 export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
-  operation(
-    'capture.product-discovery.batch.v1',
-    'UploadProductDiscoveryBatch',
-    PRODUCT_DISCOVERY_UPLOAD_DOCUMENT,
-    '86cd7de7322710c9a4f2d3f2d9072c7ec3eae2e351dd712b1db338b5d802afe2',
-    'capture',
-  ),
   operation(
     'pairing.create.v1',
     'CreateExtensionPairing',
@@ -156,76 +137,6 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     CREATE_AUTO_REINVEST_MUTATION,
     'a0c6556c6b608b355ef18f961fe8733e1ee59b2e89bc8c319422568a742bf855',
     'spend',
-  ),
-  operation(
-    'verify.product-experience.ticket.v2',
-    MintProductExperienceTicketOperationName,
-    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
-    'verify',
-  ),
-  operation(
-    'verify.product-experience.test-ticket.v2',
-    MintProductExperienceTestTicketOperationName,
-    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
-    'verify',
-  ),
-  operation(
-    'verify.product-experience.proof.v2',
-    SubmitProductExperienceProofOperationName,
-    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
-    'verify',
-  ),
-  operation(
-    'verify.product-experience.zktls-start.v1',
-    StartProductZkTlsProofOperationName,
-    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
-    'verify',
-  ),
-  operation(
-    'verify.product-experience.zktls-test-start.v1',
-    StartProductZkTlsTestProofOperationName,
-    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
-    'verify',
-  ),
-  operation(
-    'read.product-experience.zktls-progress.v1',
-    ProductZkTlsRuleProgressOperationName,
-    PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-    PRODUCT_EXPERIENCE_DOCUMENT_SHA256,
-    'read',
-  ),
-  operation(
-    'verify.product-experience.zktls-start.v3',
-    'StartProductZkTlsProof',
-    PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-    'a8909e08770042f8869ba37da6c376387716d4b216f2490af5ce2ecd570094b6',
-    'verify',
-  ),
-  operation(
-    'verify.product-experience.zktls-test-start.v3',
-    'StartProductZkTlsTestProof',
-    PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-    'a8909e08770042f8869ba37da6c376387716d4b216f2490af5ce2ecd570094b6',
-    'verify',
-  ),
-  operation(
-    'read.product-experience.zktls-progress.v3',
-    'ProductZkTlsRuleProgress',
-    PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-    'a8909e08770042f8869ba37da6c376387716d4b216f2490af5ce2ecd570094b6',
-    'read',
-  ),
-  operation(
-    'read.product-experience.integration-status.v2',
-    'ProductTrackerIntegrationStatus',
-    PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-    'a8909e08770042f8869ba37da6c376387716d4b216f2490af5ce2ecd570094b6',
-    'read',
   ),
 ]
 

@@ -107,36 +107,15 @@
 
 ---
 
-## 6. Product Experience / activeTab 验收
+## 6. 产品体验自动验证移除
 
-使用 Buyer 发布的 TEST ticket 和可控的客户页面。页面至少包含两个声明式规则，其中一个
-为 `TEXT_CONTAINS` 或 `ATTRIBUTE_EQUALS`。
-
-- [ ] 在 Lighthouse 页保存 Product Experience TEST 任务后，Popup 显示 campaign title、
-  `0 / N` 与“准备验证”。
-- [ ] 按钮旁精确显示“只在本次授权的当前网站读取 Buyer 配置的完成标记”；不宣称浏览器
-  会弹权限警告。
-- [ ] 点击前，客户页没有运行 `product-experience.js`；manifest 也没有客户 host permission
-  或静态 evaluator。
-- [ ] 在允许的客户页点击“开始验证”，状态依次进入授权/检查，完成数随页面标记变化。
-- [ ] 完整 reload 与同 Origin 第二页会自动重新注入，不重新 mint ticket。
-- [ ] 导航到不同 Origin 后立即进入“需要重新授权”，保留已命中数，且不自动注入。
-- [ ] 重新打开 Popup 并点击“重新授权”后才继续。
-- [ ] 所有规则完成后只提交一次 proof，最终显示“验证通过”。
-- [ ] 重启 extension service worker / 重开 Popup 后，不确定网络结果使用同一份已签名 payload
-  重试，不生成新 nonce。
-
-## 7. Product Experience 隐私检查
-
-- [ ] DevTools 确认 proof 只含 rule ID、时间、origin、path hash 与防重放字段。
-- [ ] `TEXT_CONTAINS` 的 matched text 没有出现在 message、storage、request 或 log 中。
-- [ ] 验证过程不读 Cookie、input value、整页 HTML、iframe document 或表单数据。
-- [ ] Popup 和 Lighthouse page bridge 不显示 ticket、MAC key、selector、matched text 或 device ID。
+- [ ] Popup 不再展示产品体验采集或证明入口。
+- [ ] 网站握手不再声明产品体验能力，客户网站没有产品采集脚本。
 
 ## 8. Chrome / Edge / Firefox MV3
 
 - [ ] `pnpm run build`、`pnpm run build:edge`、`pnpm run build:firefox` 均退出 0。
-- [ ] `node scripts/verify-product-manifests.mjs` 通过。
+- [ ] `node scripts/verify-manifests.mjs` 通过。
 - [ ] Chrome 完整执行 engagement 和 Product Experience 正常/跨 Origin 流程。
 - [ ] Edge 使用新 TEST ticket 重复 Product Experience 授权、pending → done 与 proof accepted。
 - [ ] Firefox 使用新 TEST ticket 重复同一流程，不得出现 MV2 API/permission 错误。

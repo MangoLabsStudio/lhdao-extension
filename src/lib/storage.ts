@@ -1,17 +1,4 @@
-/**
- * 类型化的 chrome.storage 封装。
- *
- *  - **local**:持久(用户数据,跨浏览器会话保留)。装 plugin token、用户偏好。
- *  - **session**:浏览器一关就清(MV3 SW 重启可活下来,但用户关浏览器会失效)。
- *    装可重新拉取的任务缓存。
- *
- * 不暴露 raw chrome.storage.* — 调用方只看到 typed get/set,违法 key
- * 直接 TS 编译期就报错。
- */
-
-import type { ProductExperienceTaskRef } from '../types/product-experience'
 import type { BinanceProbeObservation } from './binance-square-probe'
-import type { ProductExperienceSession } from './product-experience-controller'
 import type { AvailableEngagement } from './queries'
 
 export type BinanceSquareActionType = 'LIKE' | 'COMMENT' | 'SHARE' | 'FOLLOW'
@@ -75,12 +62,6 @@ interface SessionSchema {
   /** Beta 探针暂存的脱敏网络形状；不包含原始请求或响应。 */
   binanceSquareProbeObservations: BinanceProbeObservation[]
   /** Lighthouse 页面保存的脱敏产品任务引用，不含规则或凭据。 */
-  activeProductExperienceTask: ProductExperienceTaskRef
-  /**
-   * Product 验证会话。zkTLS 分支只保存规则、公开状态及
-   * session/connector ID；连接器、凭据、响应和证明材料不落盘。
-   */
-  productExperienceSession: ProductExperienceSession
   /**
    * key = tweetId, value = 这条推文上挂着的"推文级"任务(LIKE/RT/COMMENT)。
    * content script 拿到 tweetId 时 O(1) 查询。
@@ -298,23 +279,4 @@ export const sessionStore = {
   async clear() {
     await chrome.storage.session.clear()
   },
-}
-
-const PRODUCT_EXPERIENCE_SESSION_KEYS = [
-  'activeProductExperienceTask',
-  'productExperienceSession',
-] as const satisfies readonly (keyof SessionSchema)[]
-
-export async function clearProductExperienceStorage(): Promise<void> {
-  await chrome.storage.session.remove([...PRODUCT_EXPERIENCE_SESSION_KEYS])
-}
-
-export const productExperienceStore = {
-  getTask: () => sessionStore.get('activeProductExperienceTask'),
-  setTask: (task: ProductExperienceTaskRef) =>
-    sessionStore.set('activeProductExperienceTask', task),
-  getSession: () => sessionStore.get('productExperienceSession'),
-  setSession: (session: ProductExperienceSession) =>
-    sessionStore.set('productExperienceSession', session),
-  clearProduct: clearProductExperienceStorage,
 }

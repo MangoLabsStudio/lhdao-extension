@@ -1,5 +1,4 @@
 import type { MsgRequest, MsgResponse } from '@/types/messages'
-import { WEB_MATCH_PATTERN } from './env'
 
 /**
  * Content script / popup 端发消息给 background SW。
@@ -42,20 +41,14 @@ export function onMessage(
  * 不等待响应,失败仅 console.warn — 没活的 tab 是常态。
  */
 export function broadcastToContent(
-  msg: Extract<
-    MsgRequest,
-    { type: 'product-experience-state-changed' | 'tasks-updated' }
-  >,
+  msg: Extract<MsgRequest, { type: 'tasks-updated' }>,
 ) {
-  const urls =
-    msg.type === 'product-experience-state-changed'
-      ? [WEB_MATCH_PATTERN]
-      : [
-          '*://x.com/*',
-          '*://twitter.com/*',
-          'https://www.binance.com/*/square/*',
-          'https://www.binance.com/square/*',
-        ]
+  const urls = [
+    '*://x.com/*',
+    '*://twitter.com/*',
+    'https://www.binance.com/*/square/*',
+    'https://www.binance.com/square/*',
+  ]
   chrome.tabs.query({ url: urls }, (tabs) => {
     for (const tab of tabs) {
       if (tab.id === undefined) continue

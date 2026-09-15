@@ -23,16 +23,6 @@ import { GqlError, gql } from '@/lib/gql'
 import { withBackoffJitter } from '@/lib/gql-backoff'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
-  controllerStateToPublicSource,
-  ProductExperienceController,
-  type ProductExperienceRuntimeSender,
-} from '@/lib/product-experience-controller'
-import { signProductExperienceProof } from '@/lib/product-experience-proof'
-import {
-  parseProductRuleRetry,
-  projectPublicProductExperienceState,
-} from '@/lib/product-experience-task-bridge'
-import {
   buildProofCanonical,
   hmacSignProof,
   randomProofNonce,
@@ -59,45 +49,24 @@ import {
   type MeResult,
   MINT_ENGAGEMENT_TICKET_MUTATION,
   type MintEngagementTicketResult,
-  MintProductExperienceTestTicketOperationName,
-  type MintProductExperienceTestTicketVariables,
-  MintProductExperienceTicketOperationName,
-  type MintProductExperienceTicketVariables,
   MY_RESERVED_ENGAGEMENTS_QUERY,
   type MyReservedEngagementsResult,
   POLL_EXTENSION_PAIRING_QUERY,
   type PollExtensionPairingResult,
   PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
-  PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-  PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
   PROMOTE_TWEET_MUTATION,
   type PreviewPromoteTweetPricingResult,
   type PreviewPromoteTweetPricingVars,
-  ProductZkTlsRuleProgressOperationName,
-  type ProductZkTlsRuleProgressVariables,
   type PromoteTweetPricingQuote,
   type PromoteTweetResult,
   type PromoteTweetVars,
-  parseMintProductExperienceTestTicketResult,
-  parseMintProductExperienceTicketResult,
-  parseProductIntegrationStatusResult,
-  parseProductZkTlsRuleProgressResult,
-  parseStartProductZkTlsProofResult,
-  parseStartProductZkTlsTestProofResult,
-  parseSubmitProductExperienceProofResult,
   RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
   RESERVE_SLOT_MUTATION,
   type ReportEngagementCaptureResult,
   type ReserveSlotResult,
-  StartProductZkTlsProofOperationName,
-  type StartProductZkTlsProofVariables,
-  StartProductZkTlsTestProofOperationName,
-  type StartProductZkTlsTestProofVariables,
   SUBMIT_ENGAGEMENT_PROOF_MUTATION,
   type SubmitEngagementProofResult,
-  SubmitProductExperienceProofOperationName,
-  type SubmitProductExperienceProofVariables,
   VERIFY_ENGAGEMENT_MUTATION,
   type VerifyEngagementResult,
 } from '@/lib/queries'
@@ -112,21 +81,11 @@ import {
   type CampaignTaskCache,
   type LighthouseSelectedStatus,
   localStore,
-  productExperienceStore,
   type RawCapturedAction,
   sessionStore,
   type TweetCampaignSummary,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
-import { PRODUCT_DISCOVERY_UPLOAD_DOCUMENT } from '@/lib/zktls/discovery/sample-uploader'
-import { DiscoverySessionManager } from '@/lib/zktls/discovery/session-manager'
-import { ZKTLS_PROFILE } from '@/lib/zktls/profile'
-import { ProductProofReview } from '@/lib/zktls/review-channel'
-import {
-  handleZkTlsProof,
-  proveZkTlsSession,
-  registerZkTlsRuntime,
-} from '@/lib/zktls/runtime'
 import type {
   MsgRequest,
   MsgResponse,
@@ -344,167 +303,6 @@ function maskToken(token: string): string {
   return `${prefix}••••••••${suffix}`
 }
 
-function productRuntimeSender(
-  sender: chrome.runtime.MessageSender,
-): ProductExperienceRuntimeSender {
-  let origin = sender.origin
-  if (!origin && sender.url) {
-    try {
-      origin = new URL(sender.url).origin
-    } catch {
-      origin = undefined
-    }
-  }
-  return {
-    extensionId: sender.id,
-    tabId: sender.tab?.id,
-    frameId: sender.frameId,
-    origin,
-  }
-}
-
-export function productZkTlsStartGqlOptions(
-  operationName:
-    | typeof StartProductZkTlsProofOperationName
-    | typeof StartProductZkTlsTestProofOperationName,
-) {
-  return { operationName, timeoutMs: 30_000 } as const
-}
-
-function createProductExperienceController(
-  review: ProductProofReview,
-): ProductExperienceController {
-  return new ProductExperienceController({
-    diagnosticsEnabled: ZKTLS_PROFILE.debug,
-    storage: productExperienceStore,
-    async getActiveTab() {
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      })
-      return tab?.id != null && typeof tab.url === 'string'
-        ? { id: tab.id, url: tab.url }
-        : null
-    },
-    async inject(tabId) {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['content-scripts/product-experience.js'],
-      })
-    },
-    async mintParticipant(campaignId) {
-      const result = await gql<unknown, MintProductExperienceTicketVariables>(
-        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-        { campaignId },
-        { operationName: MintProductExperienceTicketOperationName },
-      )
-      return parseMintProductExperienceTicketResult(result)
-        .mintProductExperienceTicket
-    },
-    async mintTest(campaignId) {
-      const result = await gql<
-        unknown,
-        MintProductExperienceTestTicketVariables
-      >(
-        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-        { campaignId },
-        { operationName: MintProductExperienceTestTicketOperationName },
-      )
-      return parseMintProductExperienceTestTicketResult(result)
-        .mintProductExperienceTestTicket
-    },
-    async submit(input: SubmitProductExperienceProofVariables) {
-      const result = await gql<unknown, SubmitProductExperienceProofVariables>(
-        PRODUCT_EXPERIENCE_GRAPHQL_DOCUMENT,
-        input,
-        { operationName: SubmitProductExperienceProofOperationName },
-      )
-      return parseSubmitProductExperienceProofResult(result)
-    },
-    async startZkTls({ campaignId, ruleId, ticketKind }) {
-      if (ticketKind === 'TEST') {
-        const result = await gql<unknown, StartProductZkTlsTestProofVariables>(
-          PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-          { campaignId, ruleId },
-          productZkTlsStartGqlOptions(StartProductZkTlsTestProofOperationName),
-        )
-        return parseStartProductZkTlsTestProofResult(result)
-          .startProductZkTlsTestProof
-      }
-      const result = await gql<unknown, StartProductZkTlsProofVariables>(
-        PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-        { campaignId, ruleId },
-        productZkTlsStartGqlOptions(StartProductZkTlsProofOperationName),
-      )
-      return parseStartProductZkTlsProofResult(result).startProductZkTlsProof
-    },
-    async proveZkTls(request) {
-      const token = await localStore.get('apiToken')
-      return review.run(request, proveZkTlsSession, async () => {
-        const context = request.reviewContext
-        const session = await productExperienceStore.getSession()
-        const task = await productExperienceStore.getTask()
-        if (
-          !context ||
-          !token ||
-          token !== (await localStore.get('apiToken')) ||
-          !session ||
-          !task ||
-          task.campaignId !== session.campaignId ||
-          task.configVersion !== session.configVersion ||
-          task.ticketKind !== session.ticketKind ||
-          !Number.isFinite(Date.parse(session.expiresAt)) ||
-          Date.parse(session.expiresAt) <= Date.now() ||
-          session.status === 'reauthorize' ||
-          !session.currentOriginAllowed ||
-          session.authorizedOrigin !== session.currentOrigin ||
-          session.sessionId !== context.ownerSessionId ||
-          session.configVersion !== context.configVersion ||
-          session.tabId !== context.tabId ||
-          !session.zkTlsQueue.some(
-            (item) =>
-              item.sessionId === request.sessionId &&
-              item.connectorId === request.connectorId &&
-              item.status === 'proving',
-          )
-        )
-          throw new Error('REVIEW_OWNER_CHANGED')
-      })
-    },
-    async readZkTlsProgress(campaignId) {
-      const result = await gql<unknown, ProductZkTlsRuleProgressVariables>(
-        PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-        { campaignId },
-        { operationName: ProductZkTlsRuleProgressOperationName },
-      )
-      return parseProductZkTlsRuleProgressResult(result)
-        .productZkTlsRuleProgress
-    },
-    async readIntegration(campaignId) {
-      return parseProductIntegrationStatusResult(
-        await gql<unknown, { campaignId: string }>(
-          PRODUCT_EXPERIENCE_EXECUTION_DOCUMENT,
-          { campaignId },
-          { operationName: 'ProductTrackerIntegrationStatus' },
-        ),
-      )
-    },
-    now: () => Date.now(),
-    randomNonce: randomProofNonce,
-    randomSessionId: () => crypto.randomUUID(),
-    runtimeId: () => chrome.runtime.id,
-    sign: signProductExperienceProof,
-    notifyStateChanged: async () => {
-      broadcastToContent({ type: 'product-experience-state-changed' })
-      await chrome.runtime
-        .sendMessage({ type: 'product-experience-state-changed' })
-        .catch(() => {
-          // Popup and Lighthouse pages are usually closed.
-        })
-    },
-  })
-}
-
 /**
  * Background service worker.
  *
@@ -515,38 +313,6 @@ function createProductExperienceController(
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
-  const review = new ProductProofReview(() => {
-    void chrome.runtime
-      .sendMessage({ type: 'product-proof-review-changed' })
-      .catch(() => {})
-  })
-  const productExperienceController = createProductExperienceController(review)
-  const discovery = new DiscoverySessionManager(
-    new URL(WEB_ENDPOINT).origin,
-    async (variables) => {
-      const result = await gql<{
-        uploadProductDiscoveryBatch: {
-          sessionId: string
-          batchId: string
-          pageOrigin: string
-        }
-      }>(PRODUCT_DISCOVERY_UPLOAD_DOCUMENT, variables)
-      return result.uploadProductDiscoveryBatch
-    },
-  )
-  registerZkTlsRuntime()
-  void productExperienceController.resumePendingSubmit()
-
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    void productExperienceController.handleTabUpdated(tabId, {
-      status: changeInfo.status,
-      url: changeInfo.url ?? tab.url,
-    })
-  })
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    void productExperienceController.handleTabRemoved(tabId)
-  })
-
   // 启动立刻 sync 一次,然后每 60s
   void syncTasks()
   chrome.alarms.create(ALARM_NAME, {
@@ -556,150 +322,10 @@ export default defineBackground(() => {
     if (a.name === ALARM_NAME) void syncTasks()
   })
 
-  onMessage(async (req, sender): Promise<MsgResponse> => {
-    if (
-      req.type === 'get-product-proof-review' ||
-      req.type === 'confirm-product-proof-review' ||
-      req.type === 'reread-product-proof'
-    ) {
-      if (!review.isPopup(sender)) return { type: 'ack' }
-      await review.checkOwner()
-      if (req.type === 'confirm-product-proof-review')
-        review.confirm(req.reviewId)
-      if (req.type === 'reread-product-proof') review.cancel(true)
-      return { type: 'product-proof-review-result', state: review.state() }
-    }
-    if (
-      req.type === 'start-discovery' ||
-      req.type === 'open-discovery' ||
-      req.type === 'stop-discovery' ||
-      req.type === 'get-discovery-snapshot' ||
-      req.type === 'retry-discovery-upload'
-    ) {
-      return discovery.handle(req, sender)
-    }
-    if (req.type === 'zktls-prove') {
-      return (await handleZkTlsProof(req, sender)) as MsgResponse
-    }
+  onMessage(async (req): Promise<MsgResponse> => {
     const binanceProbeResponse = await handleBinanceProbeRequest(req)
     if (binanceProbeResponse) return binanceProbeResponse
 
-    if (req.type === 'save-product-experience-task') {
-      review.cancel()
-      const result = await productExperienceController.saveTask(req.task)
-      if (!result.saved) {
-        return {
-          type: 'save-product-experience-task-result',
-          ok: false,
-          correlationId: req.correlationId,
-          error: 'SUBMISSION_PENDING',
-          state: result.state,
-        }
-      }
-      return {
-        type: 'save-product-experience-task-result',
-        ok: true,
-        correlationId: req.correlationId,
-        state: result.state,
-      }
-    }
-    if (req.type === 'get-product-experience-state') {
-      return {
-        type: 'product-experience-state-result',
-        state: await productExperienceController.getState(),
-      }
-    }
-    if (req.type === 'get-public-product-experience-state') {
-      const state = await productExperienceController.getState()
-      return {
-        type: 'public-product-experience-state-result',
-        correlationId: req.correlationId,
-        state: projectPublicProductExperienceState(
-          req.campaignId,
-          controllerStateToPublicSource(state),
-          chrome.runtime.getManifest().version,
-        ),
-      }
-    }
-    if (req.type === 'start-product-experience') {
-      review.cancel()
-      return {
-        type: 'product-experience-state-result',
-        state: await productExperienceController.start({ executePlan: true }),
-      }
-    }
-    if (req.type === 'retry-product-experience-rule') {
-      const parsed = parseProductRuleRetry(req)
-      const trustedUi =
-        sender.id === chrome.runtime.id &&
-        sender.url?.startsWith(chrome.runtime.getURL('')) &&
-        sender.tab === undefined
-      const trustedPage =
-        sender.id === chrome.runtime.id &&
-        sender.frameId === 0 &&
-        productRuntimeSender(sender).origin === new URL(WEB_ENDPOINT).origin
-      if (!parsed || (!trustedUi && !trustedPage)) return { type: 'ack' }
-      const state = await productExperienceController.retryRule(
-        parsed.campaignId,
-        parsed.ruleId,
-      )
-      return req.correlationId
-        ? {
-            type: 'public-product-experience-state-result',
-            correlationId: req.correlationId,
-            state: projectPublicProductExperienceState(
-              req.campaignId,
-              controllerStateToPublicSource(state),
-              chrome.runtime.getManifest().version,
-            ),
-          }
-        : { type: 'product-experience-state-result', state }
-    }
-    if (req.type === 'product-experience-bootstrap') {
-      const response = await productExperienceController.bootstrap(
-        productRuntimeSender(sender),
-      )
-      return { type: 'product-experience-bootstrap-result', ...response }
-    }
-    if (req.type === 'product-experience-ready') {
-      await productExperienceController.ready(
-        productRuntimeSender(sender),
-        req.sessionId,
-      )
-      return { type: 'product-experience-ack' }
-    }
-    if (req.type === 'product-experience-diagnostic') {
-      await productExperienceController.handleDiagnostic(
-        productRuntimeSender(sender),
-        req.sessionId,
-        req.event,
-      )
-      return { type: 'product-experience-ack' }
-    }
-    if (req.type === 'product-experience-proof-diagnostic') {
-      if (
-        sender.id === chrome.runtime.id &&
-        sender.url === chrome.runtime.getURL('zktls-offscreen.html')
-      )
-        await productExperienceController.handleProofDiagnostic(
-          req.sessionId,
-          req.connectorId,
-          req.correlationId,
-          req.event,
-        )
-      return { type: 'product-experience-ack' }
-    }
-    if (req.type === 'product-experience-evidence') {
-      await productExperienceController.handleEvidence(
-        productRuntimeSender(sender),
-        req.sessionId,
-        req.matches,
-      )
-      return { type: 'product-experience-ack' }
-    }
-    if (req.type === 'product-experience-state-changed') {
-      return { type: 'product-experience-ack' }
-    }
     if (req.type === 'get-tasks-for-tweet') {
       const snapshot = await readTasksSnapshot()
       return { type: 'tasks', tasks: snapshot.byTweet[req.tweetId] ?? [] }
@@ -866,15 +492,8 @@ export default defineBackground(() => {
   // 不必等下一个 60s alarm 才看到任务)
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && 'apiToken' in changes) {
-      review.cancel()
       void handleTaskTokenChange()
     }
-    if (
-      area === 'session' &&
-      ('productExperienceSession' in changes ||
-        'activeProductExperienceTask' in changes)
-    )
-      void review.checkOwner()
   })
 })
 

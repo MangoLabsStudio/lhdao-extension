@@ -84,7 +84,7 @@ describe('release workflow contract', () => {
         new RegExp(`unzip[^\\n]*\\$\\{?[^\\n]*${browser}[^\\n]*\\}?`, 'i'),
       )
     }
-    expect(workflow).toContain('node scripts/verify-product-manifests.mjs')
+    expect(workflow).toContain('node scripts/verify-manifests.mjs')
     expect(workflow).toMatch(/--chrome-dir[^\n]+/)
     expect(workflow).toMatch(/--edge-dir[^\n]+/)
     expect(workflow).toMatch(/--firefox-dir[^\n]+/)

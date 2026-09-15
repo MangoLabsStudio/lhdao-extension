@@ -6,7 +6,7 @@ import { describe, test } from 'vitest'
 
 let verifier = {}
 try {
-  verifier = await import('./verify-product-manifests.mjs')
+  verifier = await import('./verify-manifests.mjs')
 } catch (error) {
   if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error
 }
@@ -40,21 +40,9 @@ function validManifest(overrides = {}) {
     manifest_version: 3,
     name: 'Lighthouse',
     version: '0.3.0',
-    minimum_chrome_version: '118',
-    permissions: [
-      'storage',
-      'alarms',
-      'activeTab',
-      'scripting',
-      'offscreen',
-      'webRequest',
-      'debugger',
-    ],
+    permissions: ['storage', 'alarms'],
     host_permissions: PRODUCTION_HOSTS,
-    optional_host_permissions: ['https://*/*'],
-    content_security_policy: {
-      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
-    },
+    optional_host_permissions: [],
     content_scripts: [
       {
         matches: ['https://x.com/*', 'https://twitter.com/*'],
@@ -76,27 +64,12 @@ function validManifest(overrides = {}) {
   }
 }
 
-async function manifestDirectory(manifest = validManifest(), withRuntime = true) {
+async function manifestDirectory(manifest = validManifest()) {
   const directory = await mkdtemp(join(tmpdir(), 'lhdao-manifest-'))
   await writeFile(
     join(directory, 'manifest.json'),
     `${JSON.stringify(manifest, null, 2)}\n`,
   )
-  if (withRuntime) {
-    const contentScripts = join(directory, 'content-scripts')
-    await mkdir(contentScripts, { recursive: true })
-    await writeFile(
-      join(contentScripts, 'product-experience.js'),
-      '/* runtime evaluator */\n',
-    )
-    if (withRuntime === 'firefox') return directory
-    await writeFile(join(directory, 'tlsn_wasm.js'), '/* wasm loader */\n')
-    await writeFile(join(directory, 'tlsn_wasm_bg.wasm'), 'wasm')
-    await writeFile(join(directory, 'spawn.js'), '/* spawn */\n')
-    const snippet = join(directory, 'snippets', 'web-spawn-05868593a72e2d44', 'js')
-    await mkdir(snippet, { recursive: true })
-    await writeFile(join(snippet, 'spawn.js'), '/* spawn */\n')
-  }
   return directory
 }
 
@@ -141,40 +114,28 @@ test('uses the three MV3 browser output directories by default', () => {
   )
 })
 
-test('accepts an exact production MV3 manifest with a runtime evaluator', async () => {
+test('accepts an exact production MV3 manifest', async () => {
   const verify = productionManifestVerifier()
   const directory = await manifestDirectory()
 
   await assert.doesNotReject(verify(directory))
 })
 
-test.each(['chrome', 'edge'])('requires the native discovery contract on %s', async (browser) => {
+test.each(['chrome', 'edge', 'firefox'])('rejects product permissions and assets on %s', async (browser) => {
   const verify = productionManifestVerifier()
   await assert.doesNotReject(verify(await manifestDirectory(), { browser }))
-  await assert.doesNotReject(verify(await manifestDirectory(validManifest({ minimum_chrome_version: '119' })), { browser }))
-  for (const minimum_chrome_version of [undefined, '117', 'invalid']) {
+  for (const permission of ['activeTab', 'scripting', 'offscreen', 'webRequest', 'debugger']) {
     await assert.rejects(
-      verify(await manifestDirectory(validManifest({ minimum_chrome_version })), { browser }),
-      /minimum_chrome_version.*118/i,
+      verify(await manifestDirectory(validManifest({ permissions: ['storage', 'alarms', permission] })), { browser }),
+      /permissions.*unexpected/i,
     )
   }
+  const directory = await manifestDirectory()
+  await writeFile(join(directory, 'tlsn_wasm.js'), 'removed')
   await assert.rejects(
-    verify(await manifestDirectory(validManifest({ permissions: validManifest().permissions.filter(value => value !== 'debugger') })), { browser }),
-    /permissions.*debugger/i,
+    verify(directory, { browser }),
+    /Removed product artifact/,
   )
-})
-
-test('keeps native discovery permission out of Firefox', async () => {
-  const verify = productionManifestVerifier()
-  const manifest = validManifest({
-    permissions: ['storage', 'alarms', 'activeTab', 'scripting'],
-    optional_host_permissions: [],
-    minimum_chrome_version: undefined,
-    content_security_policy: undefined,
-  })
-  await assert.doesNotReject(verify(await manifestDirectory(manifest, 'firefox'), { browser: 'firefox' }))
-  manifest.permissions.push('debugger')
-  await assert.rejects(verify(await manifestDirectory(manifest, 'firefox'), { browser: 'firefox' }), /permissions.*debugger/i)
 })
 
 test('accepts the exact beta endpoint pair and manifest surfaces', async () => {
@@ -235,7 +196,7 @@ describe('requires exact version, permissions, and host permissions', () => {
     [
       'permissions',
       { permissions: ['storage', 'alarms', 'activeTab', 'scripting'] },
-      /permissions.*offscreen/i,
+      /permissions.*activeTab/i,
     ],
     [
       'host permissions',
@@ -383,32 +344,6 @@ describe('rejects fixed customer domains outside the release allowlist', () => {
       await assert.rejects(verify(directory), expected)
     })
   }
-})
-
-test('keeps the product evaluator out of static content scripts', async () => {
-  const verify = productionManifestVerifier()
-  const directory = await manifestDirectory(
-    validManifest({
-      content_scripts: [
-        {
-          matches: ['https://app.lhdao.top/*'],
-          js: ['content-scripts/product-experience.js'],
-        },
-      ],
-    }),
-  )
-
-  await assert.rejects(verify(directory), /runtime.*static|static.*runtime/i)
-})
-
-test('requires the runtime evaluator artifact in every output', async () => {
-  const verify = productionManifestVerifier()
-  const directory = await manifestDirectory(validManifest(), false)
-
-  await assert.rejects(
-    verify(directory),
-    /content-scripts\/product-experience\.js/i,
-  )
 })
 
 test('never lets an unknown endpoint environment expand the release allowlist', async () => {

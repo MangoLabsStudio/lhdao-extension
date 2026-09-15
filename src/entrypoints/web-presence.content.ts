@@ -11,17 +11,6 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { WEB_ENDPOINT, WEB_MATCH_PATTERN } from '@/lib/env'
-import {
-  PRODUCT_EXPERIENCE_CAPABILITIES,
-  PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-  parseProductExperiencePageRequest,
-} from '@/lib/product-experience-task-bridge'
-import { parseDiscoveryResponse } from '@/lib/zktls/discovery/response-contract'
-import {
-  parseZkTlsPageRequest,
-  ZKTLS_PAGE_CHANNEL,
-} from '@/lib/zktls/page-bridge'
-import type { MsgResponse } from '@/types/messages'
 
 const MARK_ATTR = 'data-lhdao-ext'
 const LIGHTHOUSE_ORIGIN = new URL(WEB_ENDPOINT).origin
@@ -55,7 +44,7 @@ export default defineContentScript({
           {
             __lhdaoExtPong__: true,
             version,
-            capabilities: [...PRODUCT_EXPERIENCE_CAPABILITIES],
+            capabilities: [],
           },
           window.location.origin,
         )
@@ -63,188 +52,8 @@ export default defineContentScript({
         // ignore
       }
     }
-    const postProductError = (
-      correlationId: string,
-      requestType: string,
-    ): void => {
-      window.postMessage(
-        {
-          channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-          type: 'product-experience-error',
-          requestType,
-          correlationId,
-          error: 'EXTENSION_ERROR',
-        },
-        LIGHTHOUSE_ORIGIN,
-      )
-    }
-
-    const forwardProductRequest = (e: MessageEvent): boolean => {
-      const request = parseProductExperiencePageRequest(
-        e,
-        window,
-        LIGHTHOUSE_ORIGIN,
-      )
-      if (!request) return false
-
-      if (request.type === 'save-product-experience-task') {
-        void chrome.runtime
-          .sendMessage({
-            type: request.type,
-            task: request.task,
-            correlationId: request.correlationId,
-          })
-          .then((response: MsgResponse) => {
-            if (
-              response.type !== 'save-product-experience-task-result' ||
-              response.correlationId !== request.correlationId ||
-              !response.ok
-            ) {
-              postProductError(request.correlationId, request.type)
-              return
-            }
-            window.postMessage(
-              {
-                channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-                type: 'save-product-experience-task-result',
-                correlationId: request.correlationId,
-                ok: true,
-              },
-              LIGHTHOUSE_ORIGIN,
-            )
-          })
-          .catch(() => postProductError(request.correlationId, request.type))
-        return true
-      }
-
-      if (
-        request.type === 'start-discovery' ||
-        request.type === 'open-discovery' ||
-        request.type === 'stop-discovery' ||
-        request.type === 'get-discovery-snapshot' ||
-        request.type === 'retry-discovery-upload'
-      ) {
-        const { channel: _channel, ...runtimeRequest } = request
-        void chrome.runtime
-          .sendMessage(runtimeRequest)
-          .then((input: unknown) => {
-            const response = parseDiscoveryResponse(input, runtimeRequest)
-            if (!response) {
-              postProductError(request.correlationId, request.type)
-              return
-            }
-            window.postMessage(
-              {
-                channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-                ...response,
-              },
-              LIGHTHOUSE_ORIGIN,
-            )
-          })
-          .catch(() => postProductError(request.correlationId, request.type))
-        return true
-      }
-
-      void chrome.runtime
-        .sendMessage({
-          type: request.type,
-          campaignId: request.campaignId,
-          correlationId: request.correlationId,
-          ...(request.type === 'retry-product-experience-rule'
-            ? { ruleId: request.ruleId }
-            : {}),
-        })
-        .then((response: MsgResponse) => {
-          if (
-            response.type !== 'public-product-experience-state-result' ||
-            response.correlationId !== request.correlationId
-          ) {
-            postProductError(request.correlationId, request.type)
-            return
-          }
-          const state = response.state
-          window.postMessage(
-            {
-              channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-              type: 'public-product-experience-state-result',
-              correlationId: request.correlationId,
-              state: {
-                campaignId: state.campaignId,
-                status: state.status,
-                matchedRuleIds: [...state.matchedRuleIds],
-                totalRuleCount: state.totalRuleCount,
-                authorizationRequired: state.authorizationRequired,
-                currentOriginAllowed: state.currentOriginAllowed,
-                ...(state.conditions
-                  ? {
-                      conditions: state.conditions,
-                      finished: state.finished,
-                      testPassed: state.testPassed,
-                    }
-                  : {}),
-                version: state.version,
-                capabilities: [...state.capabilities],
-                error: state.error,
-              },
-            },
-            LIGHTHOUSE_ORIGIN,
-          )
-        })
-        .catch(() => postProductError(request.correlationId, request.type))
-      return true
-    }
-
-    const forwardZkTlsRequest = (e: MessageEvent): boolean => {
-      const request = parseZkTlsPageRequest(
-        e,
-        window,
-        LIGHTHOUSE_ORIGIN,
-        window.location.pathname,
-      )
-      if (!request) return false
-      void chrome.runtime
-        .sendMessage({
-          type: 'zktls-prove',
-          correlationId: request.correlationId,
-          sessionId: request.sessionId,
-          connectorId: request.connectorId,
-        })
-        .then((response: MsgResponse) => {
-          const result =
-            response.type === 'zktls-prove-result' &&
-            response.correlationId === request.correlationId
-              ? response
-              : { status: 'error' as const, code: 'EXTENSION_ERROR' }
-          window.postMessage(
-            {
-              channel: ZKTLS_PAGE_CHANNEL,
-              type: 'prove-result',
-              correlationId: request.correlationId,
-              status: result.status,
-              ...(result.code ? { code: result.code } : {}),
-            },
-            LIGHTHOUSE_ORIGIN,
-          )
-        })
-        .catch(() => {
-          window.postMessage(
-            {
-              channel: ZKTLS_PAGE_CHANNEL,
-              type: 'prove-result',
-              correlationId: request.correlationId,
-              status: 'error',
-              code: 'EXTENSION_ERROR',
-            },
-            LIGHTHOUSE_ORIGIN,
-          )
-        })
-      return true
-    }
-
     const onWindowMessage = (e: MessageEvent): void => {
       if (e.source !== window || e.origin !== LIGHTHOUSE_ORIGIN) return
-      if (forwardZkTlsRequest(e)) return
-      if (forwardProductRequest(e)) return
       const d = e.data as
         | {
             __lhdaoExtPing__?: boolean
@@ -338,46 +147,9 @@ export default defineContentScript({
     }
     window.addEventListener('message', onWindowMessage)
 
-    const onRuntimeMessage = (
-      message: unknown,
-      sender: chrome.runtime.MessageSender,
-    ): void => {
-      if (
-        sender.id === chrome.runtime.id &&
-        typeof message === 'object' &&
-        message !== null &&
-        (message as { type?: unknown }).type === 'discovery-snapshot-changed'
-      ) {
-        window.postMessage(
-          {
-            channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-            type: 'discovery-snapshot-changed',
-          },
-          LIGHTHOUSE_ORIGIN,
-        )
-        return
-      }
-      if (
-        typeof message !== 'object' ||
-        message === null ||
-        (message as { type?: unknown }).type !==
-          'product-experience-state-changed'
-      ) {
-        return
-      }
-      window.postMessage(
-        {
-          channel: PRODUCT_EXPERIENCE_PAGE_CHANNEL,
-          type: 'product-experience-state-changed',
-        },
-        LIGHTHOUSE_ORIGIN,
-      )
-    }
-    chrome.runtime.onMessage.addListener(onRuntimeMessage)
     ctx.onInvalidated(() => {
       window.removeEventListener('message', onWindowMessage)
       document.removeEventListener('DOMContentLoaded', mark)
-      chrome.runtime.onMessage.removeListener(onRuntimeMessage)
     })
     pong()
   },

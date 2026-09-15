@@ -1,9 +1,7 @@
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'wxt'
 // @ts-expect-error -- Node ESM release helper intentionally has no TS surface.
-import { resolveEndpointPolicy } from './scripts/verify-product-manifests.mjs'
-// @ts-expect-error -- Node ESM build profile helper intentionally has no TS surface.
-import { buildZkTlsProfile } from './scripts/zktls-profile.mjs'
+import { resolveEndpointPolicy } from './scripts/verify-manifests.mjs'
 
 // ── env resolution ───────────────────────────────────────────────────
 //
@@ -28,30 +26,16 @@ const WEB_ENDPOINT = endpointPolicy.webEndpoint
 const API_HOST_PATTERN = endpointPolicy.apiHostPattern
 const WEB_HOST_PATTERN = endpointPolicy.webHostPattern
 
-const ZKTLS_PROFILE = buildZkTlsProfile({
-  env: process.env,
-  endpointPolicy,
-  existingApiEndpoint: API_ENDPOINT,
-})
-
 // See https://wxt.dev/api/config.html
 export default defineConfig({
-  modules: ['@wxt-dev/module-react', './modules/tlsn-wasm.mjs'],
+  modules: ['@wxt-dev/module-react'],
   srcDir: 'src',
   outDir: '.output',
 
-  manifest: ({ browser }) => ({
+  manifest: () => ({
     name: 'Lighthouse',
-    description: 'Complete Lighthouse engagement and product-experience tasks',
-    ...(browser === 'firefox' ? {} : { minimum_chrome_version: '118' }),
-    permissions: [
-      'storage',
-      'alarms',
-      'activeTab',
-      'scripting',
-      ...(browser === 'firefox' ? [] : ['offscreen', 'webRequest', 'debugger']),
-    ],
-    optional_host_permissions: browser === 'firefox' ? [] : ['https://*/*'],
+    description: 'Complete Lighthouse engagement tasks',
+    permissions: ['storage', 'alarms'],
     host_permissions: [
       'https://x.com/*',
       'https://twitter.com/*',
@@ -71,14 +55,6 @@ export default defineConfig({
         matches: ['*://x.com/*', '*://twitter.com/*'],
       },
     ],
-    ...(browser === 'firefox'
-      ? {}
-      : {
-          content_security_policy: {
-            extension_pages:
-              "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
-          },
-        }),
   }),
 
   vite: () => ({
@@ -87,7 +63,6 @@ export default defineConfig({
       __API_ENDPOINT__: JSON.stringify(API_ENDPOINT),
       __WEB_ENDPOINT__: JSON.stringify(WEB_ENDPOINT),
       __WEB_MATCH_PATTERN__: JSON.stringify(WEB_HOST_PATTERN),
-      __ZKTLS_PROFILE__: JSON.stringify(ZKTLS_PROFILE),
     },
   }),
 })

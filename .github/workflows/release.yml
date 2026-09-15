@@ -80,7 +80,7 @@ jobs:
           unzip -q ".output/lhdao-extension-${PACKAGE_VERSION}-chrome.zip" -d release/unpacked/chrome
           unzip -q ".output/lhdao-extension-${PACKAGE_VERSION}-edge.zip" -d release/unpacked/edge
           unzip -q ".output/lhdao-extension-${PACKAGE_VERSION}-firefox.zip" -d release/unpacked/firefox
-          node scripts/verify-product-manifests.mjs \
+          node scripts/verify-manifests.mjs \
             --chrome-dir release/unpacked/chrome \
             --edge-dir release/unpacked/edge \
             --firefox-dir release/unpacked/firefox

@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const EXPECTED_EXTENSION_VERSION = '0.3.0'
-const BASE_PERMISSIONS = ['storage', 'alarms', 'activeTab', 'scripting']
+const BASE_PERMISSIONS = ['storage', 'alarms']
 const FIXED_HOST_PERMISSIONS = [
   'https://x.com/*',
   'https://twitter.com/*',
@@ -29,7 +29,6 @@ const FIXED_PAGE_MATCHES = [
   'https://www.binance.com/square/*',
 ]
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
-const RUNTIME_EVALUATOR_PATH = 'content-scripts/product-experience.js'
 
 export const DEFAULT_OUTPUT_DIRECTORIES = [
   '.output/chrome-mv3',
@@ -217,21 +216,6 @@ function assertSafeMatchPatterns(manifest) {
   }
 }
 
-function assertRuntimeOnlyEvaluator(manifest) {
-  for (const contentScript of manifest.content_scripts ?? []) {
-    for (const script of contentScript?.js ?? []) {
-      if (
-        typeof script === 'string' &&
-        script.replaceAll('\\', '/').endsWith(RUNTIME_EVALUATOR_PATH)
-      ) {
-        throw new Error(
-          'The runtime product evaluator must not be registered as a static content script',
-        )
-      }
-    }
-  }
-}
-
 function assertApprovedPageMatches(label, matches, approvedPageMatches) {
   if (!Array.isArray(matches)) {
     throw new Error(`${label} must be an array of approved match patterns`)
@@ -274,26 +258,6 @@ function assertApprovedPageSurfaces(manifest, approvedPageMatches) {
   }
 }
 
-async function assertRuntimeEvaluatorArtifact(directory) {
-  const artifactPath = resolve(directory, RUNTIME_EVALUATOR_PATH)
-  let artifact
-  try {
-    artifact = await stat(artifactPath)
-  } catch {
-    throw new Error(`Missing runtime evaluator artifact: ${artifactPath}`)
-  }
-  if (!artifact.isFile() || artifact.size === 0) {
-    throw new Error(`Invalid runtime evaluator artifact: ${artifactPath}`)
-  }
-}
-
-async function assertTlsnAssets(directory) {
-  for (const name of ['tlsn_wasm.js', 'tlsn_wasm_bg.wasm', 'spawn.js', 'snippets/web-spawn-05868593a72e2d44/js/spawn.js']) {
-    const asset = await stat(resolve(directory, name))
-    if (!asset.isFile() || asset.size === 0) throw new Error(`Missing TLSNotary asset: ${name}`)
-  }
-}
-
 export async function verifyManifestDirectory(directory, options = {}) {
   const browser = typeof options === 'string' ? options : options.browser ?? 'chrome'
   const environment =
@@ -320,7 +284,6 @@ export async function verifyManifestDirectory(directory, options = {}) {
   }
 
   assertSafeMatchPatterns(manifest)
-  assertRuntimeOnlyEvaluator(manifest)
 
   if (manifest.manifest_version !== 3) {
     throw new Error(
@@ -333,18 +296,9 @@ export async function verifyManifestDirectory(directory, options = {}) {
     )
   }
 
-  const chromium = browser === 'chrome' || browser === 'edge'
   assertExactStringSet('permissions', manifest.permissions, [
     ...BASE_PERMISSIONS,
-    ...(chromium ? ['offscreen', 'webRequest', 'debugger'] : []),
   ])
-  if (chromium && (
-    typeof manifest.minimum_chrome_version !== 'string' ||
-    !/^\d+(?:\.\d+){0,3}$/.test(manifest.minimum_chrome_version) ||
-    Number(manifest.minimum_chrome_version.split('.')[0]) < 118
-  )) {
-    throw new Error('minimum_chrome_version must be at least 118 for native discovery.')
-  }
   assertExactStringSet('optional_permissions', manifest.optional_permissions ?? [], [])
   assertExactStringSet(
     'host_permissions',
@@ -354,31 +308,18 @@ export async function verifyManifestDirectory(directory, options = {}) {
   assertExactStringSet(
     'optional_host_permissions',
     manifest.optional_host_permissions ?? [],
-    chromium ? ['https://*/*'] : [],
+    [],
   )
-  await assertRuntimeEvaluatorArtifact(absoluteDirectory)
-  if (chromium) {
-    if (manifest.content_security_policy?.extension_pages !== "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';") {
-      throw new Error('Chromium manifest must include the TLSNotary WASM CSP.')
-    }
-    await assertTlsnAssets(absoluteDirectory)
-  } else if (manifest.content_security_policy) {
-    throw new Error('Firefox must not receive Chromium zkTLS CSP.')
-  } else {
-    for (const name of ['tlsn_wasm.js', 'tlsn_wasm_bg.wasm', 'spawn.js', 'zktls-offscreen.html', 'zktls-permission.html']) {
-      try {
-        await stat(resolve(absoluteDirectory, name))
-        throw new Error(`Firefox must not package Chromium zkTLS asset: ${name}`)
-      } catch (error) {
-        if (String(error).includes('Firefox must not')) throw error
-      }
-    }
+  if (manifest.content_security_policy) throw new Error('Unexpected custom CSP')
+  for (const name of ['content-scripts/product-experience.js', 'tlsn_wasm.js', 'tlsn_wasm_bg.wasm', 'spawn.js', 'zktls-offscreen.html', 'zktls-permission.html']) {
+    const exists = await stat(resolve(absoluteDirectory, name)).then(() => true, () => false)
+    if (exists) throw new Error(`Removed product artifact packaged: ${name}`)
   }
   assertApprovedPageSurfaces(manifest, approvedPageMatches)
   return { directory: absoluteDirectory, manifestPath }
 }
 
-export async function verifyProductManifests(
+export async function verifyManifests(
   directories = DEFAULT_OUTPUT_DIRECTORIES,
 ) {
   const results = []
@@ -414,7 +355,7 @@ export async function verifyPackageScripts(
 async function main() {
   const directories = resolveRequestedDirectories(process.argv.slice(2))
   await verifyPackageScripts()
-  await verifyProductManifests(directories)
+  await verifyManifests(directories)
 }
 
 const invokedPath = process.argv[1]
