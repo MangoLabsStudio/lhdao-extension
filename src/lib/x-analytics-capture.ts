@@ -158,6 +158,10 @@ function accessibleText(node: Node, visited = new Set<Node>()): string {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
   if (node.nodeType !== Node.ELEMENT_NODE) return ''
   const element = node as Element
+  if (element.localName === 'number-flow-react') {
+    const value = numberFlowText(element)
+    if (value) return value
+  }
   const labelledBy = element.getAttribute('aria-labelledby')
   if (labelledBy) {
     const document = element.ownerDocument
@@ -173,6 +177,29 @@ function accessibleText(node: Node, visited = new Set<Node>()): string {
   return Array.from(element.childNodes)
     .map((child) => accessibleText(child, visited))
     .join(' ')
+}
+
+function numberFlowText(element: Element): string {
+  const shadowRoot = element.shadowRoot
+  if (!shadowRoot) return ''
+
+  const read = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
+    if (node.nodeType !== Node.ELEMENT_NODE) return ''
+    const child = node as Element
+    if (child.tagName === 'STYLE') return ''
+    if (child.classList.contains('digit')) {
+      return (
+        child
+          .getAttribute('style')
+          ?.match(/(?:^|;)\s*--current:\s*([0-9])\s*(?:;|$)/)?.[1] ?? ''
+      )
+    }
+    if (child.classList.contains('symbol')) return child.textContent ?? ''
+    return Array.from(child.childNodes).map(read).join('')
+  }
+
+  return Array.from(shadowRoot.childNodes).map(read).join('')
 }
 
 function parsePercent(value: string): number | null {
