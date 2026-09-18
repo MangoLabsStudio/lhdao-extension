@@ -30,8 +30,6 @@ const INITIAL: SidebarData = {
   tokenConfigured: false,
 }
 
-const VISIBLE_TASK_LIMIT = 5
-
 export function SidebarCard() {
   const [data, setData] = React.useState<SidebarData>(INITIAL)
   const [loading, setLoading] = React.useState(true)
@@ -72,6 +70,9 @@ export function SidebarCard() {
     <section className="lh-card">
       <BrandBar lastSyncAt={lastSyncAt} />
       <IdentityCard profile={data.profile} />
+      {/* 当前任务卡已改为内联到推文详情页动作栏下方(content.ts mountArticle),
+          不再嵌在右栏卡里 —— 避免右栏被其它扩展/X 布局挤位。右栏卡现只留身份 +
+          指标 + 发布任务入口。 */}
       <FooterStats profile={data.profile} taskCount={campaigns.length} />
       <CtaRow />
     </section>
@@ -125,8 +126,7 @@ function IdentityCard({ profile }: { profile: UserProfile | null }) {
         <span className="lh-balance-unit">LUX</span>
         {today != null && today > 0 && (
           <span className="lh-today-delta">
-            <UpIcon />
-            +{formatToday(today)} today
+            <UpIcon />+{formatToday(today)} today
           </span>
         )}
       </div>
@@ -160,45 +160,6 @@ function UserAvatar({ src, alt }: { src: string | null; alt: string }) {
       referrerPolicy="no-referrer"
       onError={() => setErrored(true)}
     />
-  )
-}
-
-// ── ③ Section header ────────────────────────────────────────────────
-
-function SectionHeader({ count }: { count: number }) {
-  return (
-    <div className="lh-section">
-      <span className="lh-section-label">LIVE TASKS</span>
-      <span className="lh-section-meta">
-        {count} matching · auto-refresh 60s
-      </span>
-    </div>
-  )
-}
-
-// ── ④ Task row ──────────────────────────────────────────────────────
-
-function TaskRow({ task }: { task: TweetCampaignSummary }) {
-  const href = task.targetUrl ?? `${WEB_ENDPOINT}/campaigns/${task.campaignId}`
-
-  return (
-    <li>
-      <a className="lh-task" href={href} target="_blank" rel="noreferrer">
-        <span className="lh-task-icon lh-task-icon-tweet">
-          <TweetIcon />
-        </span>
-        <div className="lh-task-mid">
-          <div className="lh-task-author">
-            {task.projectName ?? '灯塔任务'}
-          </div>
-          <div className="lh-task-sub">{task.brief ?? '查看详情'}</div>
-        </div>
-        <div className="lh-task-reward">
-          +{formatReward(task.rewardLux)}
-          <span className="lh-task-reward-unit">LUX</span>
-        </div>
-      </a>
-    </li>
   )
 }
 
@@ -247,18 +208,6 @@ function CtaRow() {
         <PlusIcon />
         发布任务
       </a>
-    </div>
-  )
-}
-
-// ── Empty state ─────────────────────────────────────────────────────
-
-function EmptyState() {
-  return (
-    <div className="lh-empty">
-      <span className="lh-empty-dot" aria-hidden="true" />
-      <p className="lh-empty-title">暂无可抢推文任务</p>
-      <p className="lh-empty-hint">新机会出现时会自动显示在这里</p>
     </div>
   )
 }
@@ -361,18 +310,6 @@ function BurstIcon({ size = 20 }: { size?: number }) {
   )
 }
 
-function TweetIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-      <title>tweet</title>
-      <path
-        d="M22 5.79c-.74.33-1.54.55-2.36.65a4.12 4.12 0 0 0 1.81-2.27 8.18 8.18 0 0 1-2.6.99 4.1 4.1 0 0 0-7.08 3.74A11.65 11.65 0 0 1 3.4 4.59a4.1 4.1 0 0 0 1.27 5.48A4.07 4.07 0 0 1 2.8 9.6v.05a4.1 4.1 0 0 0 3.29 4.02 4.13 4.13 0 0 1-1.85.07A4.1 4.1 0 0 0 8.07 16.6 8.23 8.23 0 0 1 2 18.29a11.62 11.62 0 0 0 6.29 1.84c7.55 0 11.68-6.25 11.68-11.68 0-.18 0-.36-.01-.53A8.34 8.34 0 0 0 22 5.79z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
 function UpIcon() {
   return (
     <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true">
@@ -432,12 +369,6 @@ function formatToday(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '0'
   if (Number.isInteger(n)) return n.toLocaleString('en-US')
   return Number(n.toFixed(1)).toLocaleString('en-US')
-}
-
-function formatReward(n: number): string {
-  if (!Number.isFinite(n)) return '0'
-  if (Number.isInteger(n)) return String(n)
-  return Number(n.toFixed(1)).toString()
 }
 
 function formatSyncAgo(diffMs: number): string {

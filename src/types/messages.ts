@@ -7,10 +7,15 @@
  *   - 单向广播(BG → CS)用 `tasks-updated`,响应永远是 `ack`
  */
 
+import type { ProductExperienceRuleMatch } from '@/lib/product-experience'
 import type { LighthouseMember } from '@/lib/queries'
 import type {
   ActiveCampaignSummary,
   CampaignTaskCache,
+  ProductExperiencePublicError,
+  ProductExperiencePublicStatus,
+  ProductExperienceTaskCache,
+  ProductExperienceTicketKind,
   TweetCampaignSummary,
   UserProfile,
 } from '@/lib/storage'
@@ -34,6 +39,9 @@ export type MsgRequest =
    * 带来的肉眼可见延迟。
    */
   | { type: 'get-tasks-snapshot' }
+  /** [网页 gate] 查某 campaign 已捕获到的动作类型(网页验证前预检:没捕获
+   *  就直接判「未检测到动作」失败,不走异步)。tweetId 作别名兜底。 */
+  | { type: 'get-captured-actions'; campaignId: string; tweetId?: string }
   /** 抢单第一步:仅占席位 (reserveEngagementSlot)。confirmCascade 让用户
    *  在收到 cascadeWarning 后点重抢时确认降档接受 */
   | { type: 'reserve-task'; campaignId: string; confirmCascade?: boolean }
@@ -59,6 +67,16 @@ export type MsgRequest =
   | { type: 'has-token' }
   /** popup 触发立即同步 — 不等 60s alarm,等 sync 跑完再返回结果 */
   | { type: 'force-sync' }
+  /**
+   * [B3] 验证成功后:新开一个任务广场标签页并切过去(不跳转当前 X 页)。
+   * 内容脚本不能直接开标签页,委托后台 chrome.tabs.create。返回 ack。
+   */
+  | { type: 'open-task-hall' }
+  /**
+   * [profile 关注卡] 验证成功后跳回 lhdao 某 campaign 详情页(任务观察界面):
+   * 复用已开的 lhdao 标签(有则聚焦并导航,无则新建)。返回 ack。
+   */
+  | { type: 'open-campaign'; campaignId: string }
   /**
    * content script 上报推文详情页停留时长 (anti-cheat 信号)。
    *
@@ -117,6 +135,32 @@ export type MsgRequest =
   | { type: 'cancel-pairing' }
   /** UI 重新打开时查询当前 pairing state,避免 popup close 期间错过广播 */
   | { type: 'get-pairing-status' }
+  /** Product Report L2:网页询问插件当前公开状态(不暴露 ticket/macKey/rules)。 */
+  | { type: 'get-product-experience-public-state'; campaignId: string }
+  /**
+   * Product Report L2:网页保存一个体验任务引用。BG 会 mint 短期 ticket,
+   * 再把完整规则只存在 extension storage 内。
+   */
+  | {
+      type: 'save-product-experience-task'
+      task: {
+        campaignId: string
+        ticketKind: ProductExperienceTicketKind
+        configVersion: number
+        title: string
+        savedAt: number
+      }
+    }
+  /** Product Report L2:目标产品站 content script 按 URL 请求可执行规则。 */
+  | { type: 'get-product-experience-task-for-url'; href: string }
+  /** Product Report L2:目标产品站检测到所有规则后提交 rule matches 给 BG 签名上报。 */
+  | {
+      type: 'submit-product-experience-matches'
+      campaignId: string
+      ruleMatches: ProductExperienceRuleMatch[]
+    }
+  /** BG → app content script:Product Experience 状态变化,转成 window postMessage。 */
+  | { type: 'product-experience-state-changed'; campaignId: string }
   /**
    * Content script 批查"这些 handles 哪些是灯塔成员"。
    *
@@ -148,7 +192,14 @@ export type MsgResponse =
       type: 'tasks-snapshot'
       byTweet: Record<string, CampaignTaskCache[]>
       byAuthor: Record<string, CampaignTaskCache[]>
+      // BG 是否至少成功同步过一次(lastSyncAt != null)。冷启动尚未同步时
+      // 为 false —— 消费方据此区分「已同步但该推文无任务」(空 = 真无任务)
+      // 与「还没同步完」(空 = 不确定,应保持加载/重试),避免把冷启空快照
+      // 误判为无任务。可选字段,老消费方忽略即可,向后兼容。
+      ready?: boolean
     }
+  /** [网页 gate] 某 campaign 已捕获的动作类型列表(get-captured-actions 的响应)。 */
+  | { type: 'captured-actions'; actions: string[] }
   | { type: 'reserve-result'; ok: true; cooldownSeconds?: number }
   | {
       type: 'reserve-result'
@@ -221,6 +272,40 @@ export type MsgResponse =
     }
   /** get-pairing-status 响应:返回当前 state */
   | { type: 'pairing-status-result'; state: PairingState }
+  | {
+      type: 'product-experience-public-state'
+      state: {
+        campaignId: string
+        status: ProductExperiencePublicStatus
+        matchedRuleIds: string[]
+        totalRuleCount: number
+        authorizationRequired: boolean
+        currentOriginAllowed: boolean
+        version: string
+        capabilities: string[]
+        error: ProductExperiencePublicError | null
+      }
+    }
+  | { type: 'product-experience-save-result'; ok: true }
+  | {
+      type: 'product-experience-task-for-url'
+      task: Pick<
+        ProductExperienceTaskCache,
+        | 'campaignId'
+        | 'ticketKind'
+        | 'configVersion'
+        | 'ruleSetVersion'
+        | 'allowedOrigins'
+        | 'completionMode'
+        | 'rules'
+      > | null
+    }
+  | {
+      type: 'product-experience-submit-result'
+      ok: boolean
+      code?: string
+      accepted?: boolean
+    }
   /**
    * check-lighthouse-members 响应。
    *

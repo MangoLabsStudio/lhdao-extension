@@ -64,10 +64,10 @@ export interface MeResult {
 //
 // 字段来自 backend src/modules/unified-campaign/dto/campaign.model.ts:
 //   - UnifiedCampaignModel.keywords: string[]   ← 评论关键字 (campaign 级)
+//   - expectedReward / myExpectedReward:后端按当前用户可用 tier / 已预约
+//     rewardTier 计算出的预期奖励。插件展示必须优先 myExpectedReward,避免
+//     回落到 action.baseReward(高档/默认值)导致金额偏高。
 //   - UnifiedCampaignActionModel.{actionType,baseReward,targetCount}
-//
-// 没有 effectiveTier / commentGuide(我之前 queries 拍脑袋写的)。
-// 真实的 user-tier 奖励数额会在 verifyEngagement 完成后由后端返回。
 
 export const AVAILABLE_ENGAGEMENTS_QUERY = `
   query AvailableEngagements {
@@ -84,7 +84,9 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       targetUsername
       keywords
       expectedReward
+      myExpectedReward
       effectiveTier
+      myEffectiveTier
       actions {
         actionType
         baseReward
@@ -120,8 +122,12 @@ export interface AvailableEngagement {
   keywords: string[]
   /** 用户级联后实际能拿到的总奖励 (LUX),后端 listAvailableCampaigns 计算 */
   expectedReward: number | null
+  /** 当前用户 tier / 已预约 rewardTier 下的精确预期奖励;展示优先用它。 */
+  myExpectedReward: number | null
   /** 用户实际能进的 tier 桶,如果级联了会跟 userTier 不同 */
   effectiveTier: string | null
+  /** 当前用户实际奖励 tier;展示/诊断优先用它。 */
+  myEffectiveTier: string | null
   actions: Array<{
     actionType: EngagementActionType
     baseReward: number
@@ -131,6 +137,41 @@ export interface AvailableEngagement {
 
 export interface AvailableEngagementsResult {
   availableEngagements: AvailableEngagement[]
+}
+
+// ── 我已预约的互动任务 ────────────────────────────────────────────────
+// availableEngagements 会把已参与(含 RESERVED)的过滤掉,但卡片「当前任务」段
+// 需要"已预约"的单(打开推文=已预约,直接检测/验证)。同 AvailableEngagement
+// 形状,syncTasks 里和 available 合并进 tasksByTweetId。后端 @AllowPluginToken。
+export const MY_RESERVED_ENGAGEMENTS_QUERY = `
+  query MyReservedEngagements {
+    myReservedEngagements {
+      id
+      type
+      mode
+      targetUrl
+      tweetId
+      tweetText
+      tweetAuthorName
+      tweetAuthorHandle
+      tweetAuthorAvatar
+      targetUsername
+      keywords
+      expectedReward
+      myExpectedReward
+      effectiveTier
+      myEffectiveTier
+      actions {
+        actionType
+        baseReward
+        targetCount
+      }
+    }
+  }
+`
+
+export interface MyReservedEngagementsResult {
+  myReservedEngagements: AvailableEngagement[]
 }
 
 // ── 拉可参与的 TWEET 类型任务(创作类:原创推文 / 引用转推) ────────
@@ -242,6 +283,154 @@ export interface VerifyEngagementResult {
   verifyEngagement: { actualReward: number }
 }
 
+// ── [B3 插件专用验证] 票据签发 + 证明提交(取代对 plugin token 403 的 verifyEngagement)──
+// 预约仍在网页;插件先 mint 票据(要求已 RESERVED),再带票据 + 捕获结果 + HMAC 签名
+// 提交证明。发奖仍在后端 worker(Phase3 Twitter 权威 / Phase4 插件权威),故 submit
+// 只返回 accepted/status,不返 reward。
+
+export const MINT_ENGAGEMENT_TICKET_MUTATION = `
+  mutation MintEngagementTicket($campaignId: String!) {
+    mintEngagementTicket(campaignId: $campaignId) {
+      ticket
+      macKey
+      expiresAt
+    }
+  }
+`
+
+export interface MintEngagementTicketResult {
+  mintEngagementTicket: {
+    ticket: string
+    macKey: string
+    expiresAt: string
+  }
+}
+
+export const SUBMIT_ENGAGEMENT_PROOF_MUTATION = `
+  mutation SubmitEngagementProof($input: SubmitEngagementProofInput!) {
+    submitEngagementProof(input: $input) {
+      accepted
+      status
+      reason
+    }
+  }
+`
+
+export interface SubmitEngagementProofResult {
+  submitEngagementProof: {
+    accepted: boolean
+    status: string
+    reason?: string | null
+  }
+}
+
+// ── Product Report L2:产品体验插件证明 ───────────────────────────────
+
+export const MINT_PRODUCT_EXPERIENCE_TICKET_MUTATION = `
+  mutation MintProductExperienceTicket($campaignId: String!) {
+    mintProductExperienceTicket(campaignId: $campaignId) {
+      ticket
+      macKey
+      expiresAt
+      ruleSetVersion
+      allowedOrigins
+      completionMode
+      rules {
+        id
+        title
+        urlPattern
+        selector
+        condition {
+          type
+          expected
+          attributeName
+          minimumCount
+        }
+      }
+    }
+  }
+`
+
+export const MINT_PRODUCT_EXPERIENCE_TEST_TICKET_MUTATION = `
+  mutation MintProductExperienceTestTicket($campaignId: String!) {
+    mintProductExperienceTestTicket(campaignId: $campaignId) {
+      ticket
+      macKey
+      expiresAt
+      ruleSetVersion
+      allowedOrigins
+      completionMode
+      rules {
+        id
+        title
+        urlPattern
+        selector
+        condition {
+          type
+          expected
+          attributeName
+          minimumCount
+        }
+      }
+    }
+  }
+`
+
+export interface ProductExperienceTicketRule {
+  id: string
+  title: string
+  urlPattern: string
+  selector: string
+  condition: {
+    type: string
+    expected?: string | null
+    attributeName?: string | null
+    minimumCount?: number | null
+  }
+}
+
+export interface ProductExperienceTicketPayload {
+  ticket: string
+  macKey: string
+  expiresAt: string
+  ruleSetVersion: number
+  allowedOrigins: string[]
+  completionMode: 'ALL'
+  rules: ProductExperienceTicketRule[]
+}
+
+export interface MintProductExperienceTicketResult {
+  mintProductExperienceTicket: ProductExperienceTicketPayload
+}
+
+export interface MintProductExperienceTestTicketResult {
+  mintProductExperienceTestTicket: ProductExperienceTicketPayload
+}
+
+export const SUBMIT_PRODUCT_EXPERIENCE_PROOF_MUTATION = `
+  mutation SubmitProductExperienceProof($input: SubmitProductExperienceProofInput!) {
+    submitProductExperienceProof(input: $input) {
+      accepted
+      code
+      campaignId
+      configVersion
+      verificationKind
+      verifiedAt
+    }
+  }
+`
+
+export interface SubmitProductExperienceProofResult {
+  submitProductExperienceProof: {
+    accepted: boolean
+    code: string
+    campaignId: string
+    configVersion: number | null
+    verificationKind: string
+    verifiedAt: string | null
+  }
+}
+
 // ── [shadow 捕获] 上报插件捕获到的互动动作(非资金,供一致率影子对比) ──────
 // 后端 @AllowPluginToken,不发奖、不动钱;background 累积某 campaign 已捕获动作
 // 后调用,返回 Boolean。input 见后端 ReportEngagementCaptureInput。
@@ -254,7 +443,12 @@ export const REPORT_ENGAGEMENT_CAPTURE_MUTATION = `
 export interface ReportEngagementCaptureVars {
   input: {
     campaignId: string
-    actions: { actionType: string; tweetId?: string; capturedAt?: string }[]
+    actions: {
+      actionType: string
+      tweetId?: string
+      handle?: string
+      capturedAt?: string
+    }[]
     commentText?: string
     dwellMs?: number
   }
@@ -306,17 +500,58 @@ export interface LighthouseMembersResult {
 // 流程见 kol-dao-service 后端 ExtensionPairingService doc。
 //
 // 扩展端只调 2 个 endpoint:
-//   - createExtensionPairing(code) — 占 code slot,扩展 BG 调,@IsPublic
+//   - createExtensionPairing(code, deviceId, publicKeyJwk)
+//       占 code slot,扩展 BG 调,@IsPublic
 //   - pollExtensionPairing(code)    — polling 拿 token,@IsPublic
 //
 // completeExtensionPairing 是主站调的(用户在 connect 页点 Allow),扩展
 // 不调,所以不在这里。
 
 export const CREATE_EXTENSION_PAIRING_MUTATION = `
+  mutation CreateExtensionPairing($code: String!, $deviceId: String!, $publicKeyJwk: JSON!) {
+    createExtensionPairing(code: $code, deviceId: $deviceId, publicKeyJwk: $publicKeyJwk)
+  }
+`
+
+export const CREATE_EXTENSION_PAIRING_LEGACY_MUTATION = `
   mutation CreateExtensionPairing($code: String!) {
     createExtensionPairing(code: $code)
   }
 `
+
+export interface CreateExtensionPairingVars {
+  code: string
+  deviceId: string
+  publicKeyJwk: JsonWebKey
+}
+
+export interface CreateExtensionPairingLegacyVars {
+  code: string
+}
+
+export function createExtensionPairingVariables(
+  code: string,
+  deviceId: string,
+  publicKeyJwk: JsonWebKey,
+): CreateExtensionPairingVars {
+  return { code, deviceId, publicKeyJwk }
+}
+
+export function createExtensionPairingLegacyVariables(
+  code: string,
+): CreateExtensionPairingLegacyVars {
+  return { code }
+}
+
+export function isCreateExtensionPairingDeviceBindingUnsupported(
+  error: unknown,
+): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return (
+    /Unknown argument ["'](?:deviceId|publicKeyJwk)["']/i.test(message) &&
+    /createExtensionPairing/i.test(message)
+  )
+}
 
 export interface CreateExtensionPairingResult {
   createExtensionPairing: boolean

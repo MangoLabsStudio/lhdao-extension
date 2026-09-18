@@ -177,6 +177,37 @@ article[data-lhdao-active="1"] {
   }
 }
 
+/* [profile 关注卡] 高亮 X 原生「关注」按钮,引导用户点它完成关注任务。
+ * 属性贴在 light-DOM 的按钮上(见 content.ts glowFollowButton),故写在
+ * 注入页面的 highlight.css 里。按钮本身是 pill,box-shadow ring 贴 border-box。 */
+[data-lhdao-follow-glow="1"] {
+  position: relative;
+  animation: lhdao-follow-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes lhdao-follow-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px rgba(20, 184, 166, 0.6),
+      0 0 10px 2px rgba(6, 182, 212, 0.35);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(45, 212, 191, 0.9),
+      0 0 18px 5px rgba(6, 182, 212, 0.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-lhdao-follow-glow="1"] {
+    animation: none;
+    box-shadow:
+      0 0 0 2px rgba(20, 184, 166, 0.75),
+      0 0 10px 2px rgba(6, 182, 212, 0.4);
+  }
+}
+
 /* ── Sensitive content filter — Feature B ───────────────────────────
  *
  * X 自家用 [data-testid] 上含 "sensitive" 的元素标识被自动判断为成人 /

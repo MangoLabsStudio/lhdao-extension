@@ -7,6 +7,5 @@ import { API_ENDPOINT } from './env'
 export const CAPTURE_DEBUG = API_ENDPOINT.includes('lhdaobeta')
 
 export function dbg(...args: unknown[]) {
-  // biome-ignore lint/suspicious/noConsole: beta 调试构建专用,生产自动关
   if (CAPTURE_DEBUG) console.log('[lhcap]', ...args)
 }

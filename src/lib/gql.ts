@@ -1,4 +1,5 @@
 import { API_ENDPOINT } from './env'
+import { maybeAttachPluginSignature } from './plugin-signature'
 import { localStore } from './storage'
 import { getDeviceId, maybeAttachWatermark } from './watermark'
 
@@ -79,12 +80,19 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
 
+  const deviceId = await getDeviceId()
+  headers['x-device-id'] = deviceId
+
+  // —— Signed plugin request(设备私钥签名)——————————————————————
+  // 后端 enforce 模式下,plugin-token 请求与 public pairing 请求都需要这组
+  // headers。query 不在插件 allowlist 时 helper 会跳过,让后端返回明确拒绝。
+  await maybeAttachPluginSignature(headers, query, variables, deviceId)
+
   // —— Watermark(抢单接口防护)————————————————————————————————
   // 给受保护的抢单/验证 mutation 拼上 watermark 头(mint token + reserve 的
   // PoW)。anonymous(pairing 三件套)不带 token、也不在保护名单,跳过。
   // x-device-id 统一在这里设,保证它跟 mint 内部用的是同一个 did。
   if (!opts?.anonymous && token) {
-    headers['x-device-id'] = await getDeviceId()
     await maybeAttachWatermark(headers, query)
   }
 

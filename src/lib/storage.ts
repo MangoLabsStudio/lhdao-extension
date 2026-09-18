@@ -9,6 +9,8 @@
  * 直接 TS 编译期就报错。
  */
 
+import type { ProductExperienceRule } from './product-experience'
+
 // ── Schemas ───────────────────────────────────────────────────────────
 
 interface LocalSchema {
@@ -22,6 +24,16 @@ interface LocalSchema {
    * 才会重生成。详见 src/lib/watermark.ts。
    */
   deviceId: string | null
+  /**
+   * 当前浏览器设备的 ECDSA P-256 公钥。Pairing 时发给后端,用于把新
+   * plugin token 绑定到这个浏览器设备。
+   */
+  devicePublicKeyJwk: JsonWebKey | null
+  /**
+   * 当前浏览器设备的 ECDSA P-256 私钥。只留在本地,绝不发给后端;后续
+   * 请求签名会用它证明"请求来自这个已绑定设备"。
+   */
+  devicePrivateKeyJwk: JsonWebKey | null
   /** 是否同意上报错误日志 (placeholder,后续接 Sentry) */
   optInErrorReport: boolean
   /**
@@ -59,8 +71,23 @@ interface SessionSchema {
    */
   capturedActions: Record<
     string,
-    { actionType: string; tweetId?: string; capturedAt: string }[]
+    {
+      actionType: string
+      tweetId?: string
+      handle?: string
+      commentText?: string
+      capturedAt: string
+    }[]
   >
+  /**
+   * [shadow 捕获] 原始动作短暂暂存区。
+   *
+   * 用户在网页刚预约成功后马上去 X 完成动作时,background 里的任务快照可能
+   * 还没同步到那条 RESERVED campaign。旧逻辑在这种情况下会因为"无匹配任务"
+   * 直接丢弃动作,导致后续验证永远卡在"未检测到动作"。这里先把原始动作存
+   * 10 分钟,等 syncTasks 拉到最新任务快照后再重放映射。
+   */
+  rawCapturedActions: RawCapturedAction[]
   /** 上次 background SW 拉取任务的时间戳 (ms since epoch) */
   lastSyncAt: number
   /** 上次同步的错误信息;成功时为 null */
@@ -73,6 +100,13 @@ interface SessionSchema {
   tweetCampaigns: TweetCampaignSummary[]
   /** [v2] 个人面板数据:余额 / Tier / 今日收益 — sidebar 顶部三件套 */
   userProfile: UserProfile | null
+  /**
+   * Product Report L2 体验验证任务。
+   *
+   * key = campaignId。只放在 session:ticket/macKey 是短期凭证,浏览器会话结束
+   * 即丢弃;用户可在网页重新点击「测试插件」/「开始体验」重新 mint。
+   */
+  productExperienceTasks: Record<string, ProductExperienceTaskCache>
 }
 
 /** Sidebar v2 顶部个人面板用 — 全是 me query 拉来的字段 */
@@ -91,6 +125,57 @@ export interface UserProfile {
   newLux: number | null
   /** 今日新增 newLux — sidebar 小字显示 */
   todayEarnings: number | null
+}
+
+export interface RawCapturedAction {
+  actionType: 'LIKE' | 'RT' | 'COMMENT' | 'FOLLOW'
+  tweetId?: string
+  handle?: string
+  commentText?: string
+  capturedAt: string
+  expiresAt: number
+}
+
+export type ProductExperienceTicketKind = 'PARTICIPANT' | 'TEST'
+
+export type ProductExperiencePublicStatus =
+  | 'idle'
+  | 'ready'
+  | 'authorizing'
+  | 'observing'
+  | 'submitting'
+  | 'verified'
+  | 'expired'
+  | 'origin-mismatch'
+  | 'reauthorize'
+  | 'error'
+
+export type ProductExperiencePublicError =
+  | 'AUTHORIZATION_REQUIRED'
+  | 'EXTENSION_ERROR'
+  | 'ORIGIN_NOT_ALLOWED'
+  | 'SESSION_EXPIRED'
+  | 'VERSION_MISMATCH'
+  | 'VERIFICATION_FAILED'
+
+export interface ProductExperienceTaskCache {
+  campaignId: string
+  ticketKind: ProductExperienceTicketKind
+  title: string
+  configVersion: number
+  savedAt: number
+  ticket: string
+  macKey: string
+  expiresAt: string
+  ruleSetVersion: number
+  allowedOrigins: string[]
+  completionMode: 'ALL'
+  rules: ProductExperienceRule[]
+  status: ProductExperiencePublicStatus
+  matchedRuleIds: string[]
+  lastError: ProductExperiencePublicError | null
+  verifiedAt: string | null
+  submittedAt: number | null
 }
 
 /** Sidebar v2 列表行数据 — TWEET 类型 campaign 精简摘要 */
@@ -155,6 +240,20 @@ export interface CampaignTaskCache {
   commentKeyword?: string | null
   /** FOLLOW 任务的目标账户 handle(小写)。non-FOLLOW 为 null */
   targetUsername?: string | null
+  /**
+   * 目标推文作者显示名(availableEngagements.tweetAuthorName)。
+   * sidebar「当前任务」段的标题用,可能 null(hourly cron 未抓到)。
+   */
+  authorName?: string | null
+  /** 目标推文作者 handle(无 @)。sidebar「当前任务」段副标题 fallback。可能 null。 */
+  authorHandle?: string | null
+  /**
+   * 该 campaign 是否是当前用户**已预约(RESERVED)**的(来自 myReservedEngagements)。
+   * 同一推文挂多个 campaign(评论/转发/点赞各一单)时,「当前任务」必须优先显示
+   * 已预约的那个 —— 否则会显示奖励最高的可参与单,验证时用错 campaignId 触发
+   * NO_ACTIVE_RESERVATION(用户预约了评论、卡片却显示转发)。
+   */
+  reserved?: boolean
 }
 
 // ── Stores ────────────────────────────────────────────────────────────
