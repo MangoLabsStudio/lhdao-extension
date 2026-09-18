@@ -293,6 +293,35 @@ export function CurrentTaskSection({
     }
   }, [campaign, busy, onRewarded])
 
+  // ── [timelineOnly] 领取(预约)任务 —— 仅时间线展示的单必须先经插件签名
+  //    预约口领取,拿到 RESERVED 后才进入检测/验证态。BG reserveOnly 会按缓存
+  //    标记自动选 ReserveTimelineEngagementSlot。 ──
+  const needsClaim = campaign ? campaign.timelineOnly && !campaign.reserved : false
+  const onClaim = React.useCallback(async () => {
+    if (!campaign || busy) return
+    setBusy(true)
+    setErrorMsg(undefined)
+    try {
+      const r = await sendMessage({
+        type: 'reserve-task',
+        campaignId: campaign.campaignId,
+      })
+      if (r.type === 'reserve-result' && r.ok) {
+        // force-sync → tasks-updated 回拉 → groupCampaigns 标 reserved,
+        // 卡片自动从领取态切到检测态。
+        void sendMessage({ type: 'force-sync' }).catch(() => {})
+      } else if (r.type === 'reserve-result') {
+        setErrorMsg(r.message ?? '领取失败,请稍后重试')
+      } else {
+        setErrorMsg('领取失败,请稍后重试')
+      }
+    } catch {
+      setErrorMsg('领取失败,请稍后重试')
+    } finally {
+      setBusy(false)
+    }
+  }, [campaign, busy])
+
   // ── 验证成功 → 新开任务广场标签页并切过去(不动当前 X 页,委托后台开)。
   //    进入 success 后延时自动开,也可点按钮立即开。切走推文(组件卸载)清定时器。
   const goTaskHall = React.useCallback(() => {
@@ -408,18 +437,30 @@ export function CurrentTaskSection({
             </div>
           </div>
           {errorMsg ? <div className="lh-cur-err">{errorMsg}</div> : null}
-          <button
-            type="button"
-            className={`lh-cur-btn${state.canVerify && !busy ? ' on' : ' off'}`}
-            disabled={!state.canVerify || busy}
-            onClick={onVerify}
-          >
-            {busy
-              ? '验证中…'
-              : state.canVerify
-                ? '验证发奖'
-                : '完成上面步骤解锁'}
-          </button>
+          {needsClaim ? (
+            <button
+              type="button"
+              data-testid="timeline-reserve-button"
+              className={`lh-cur-btn${busy ? ' off' : ' on'}`}
+              disabled={busy}
+              onClick={onClaim}
+            >
+              {busy ? '领取中…' : '领取任务'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={`lh-cur-btn${state.canVerify && !busy ? ' on' : ' off'}`}
+              disabled={!state.canVerify || busy}
+              onClick={onVerify}
+            >
+              {busy
+                ? '验证中…'
+                : state.canVerify
+                  ? '验证发奖'
+                  : '完成上面步骤解锁'}
+            </button>
+          )}
         </div>
       </div>
     </section>

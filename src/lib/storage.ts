@@ -254,6 +254,11 @@ export interface CampaignTaskCache {
    * NO_ACTIVE_RESERVATION(用户预约了评论、卡片却显示转发)。
    */
   reserved?: boolean
+  /**
+   * [timelineOnly] 仅插件时间线展示的任务。true 时预约必须走插件专用签名
+   * 入口 ReserveTimelineEngagementSlot(旧 mutation 会被后端按渠道拒绝)。
+   */
+  timelineOnly?: boolean
 }
 
 // ── Stores ────────────────────────────────────────────────────────────
