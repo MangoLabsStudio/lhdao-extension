@@ -87,6 +87,7 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       myExpectedReward
       effectiveTier
       myEffectiveTier
+      timelineOnly
       actions {
         actionType
         baseReward
@@ -128,6 +129,8 @@ export interface AvailableEngagement {
   effectiveTier: string | null
   /** 当前用户实际奖励 tier;展示/诊断优先用它。 */
   myEffectiveTier: string | null
+  /** true = 仅插件时间线展示的任务;预约走 ReserveTimelineEngagementSlot */
+  timelineOnly: boolean
   actions: Array<{
     actionType: EngagementActionType
     baseReward: number
@@ -262,6 +265,39 @@ export interface CascadeWarning {
 
 export interface ReserveSlotResult {
   reserveEngagementSlot: {
+    reserved: boolean
+    reservedTier: string | null
+    cooldownSeconds: number | null
+    releasedSeats: number | null
+    activeReservations: number | null
+    cascadeWarning: CascadeWarning | null
+  }
+}
+
+// ── [timelineOnly] 插件专用预约(签名操作 engagement.reserve.v1)──
+// 网页端 reserveEngagementSlot 对 timelineOnly 任务一律 CAMPAIGN_NOT_CLAIMABLE;
+// 插件侧带 device 签名走这个入口。后端按 documentSha256 逐字节校验本文档,
+// 定稿后不要改动格式(换行/缩进/字段顺序都会让哈希失效)。
+export const RESERVE_TIMELINE_SLOT_MUTATION = `
+  mutation ReserveTimelineEngagementSlot($campaignId: String!, $confirmCascade: Boolean) {
+    reserveTimelineEngagementSlot(campaignId: $campaignId, confirmCascade: $confirmCascade) {
+      reserved
+      reservedTier
+      cooldownSeconds
+      releasedSeats
+      activeReservations
+      cascadeWarning {
+        userTier
+        effectiveTier
+        userTierRewardLux
+        effectiveTierRewardLux
+      }
+    }
+  }
+`
+
+export interface ReserveTimelineSlotResult {
+  reserveTimelineEngagementSlot: {
     reserved: boolean
     reservedTier: string | null
     cooldownSeconds: number | null

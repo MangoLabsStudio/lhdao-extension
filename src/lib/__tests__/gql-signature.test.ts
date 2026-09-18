@@ -11,6 +11,7 @@ import {
   type MeResult,
   MINT_PRODUCT_EXPERIENCE_TEST_TICKET_MUTATION,
   MINT_PRODUCT_EXPERIENCE_TICKET_MUTATION,
+  RESERVE_TIMELINE_SLOT_MUTATION,
   SUBMIT_PRODUCT_EXPERIENCE_PROOF_MUTATION,
 } from '../queries'
 
@@ -115,6 +116,12 @@ describe('gql plugin request signing', () => {
     ],
   ])('allows signing Product Experience operation %s', (query, operationId) => {
     expect(pluginOperationIdFor(query)).toBe(operationId)
+  })
+
+  it('signs ReserveTimelineEngagementSlot as engagement.reserve.v1', () => {
+    expect(pluginOperationIdFor(RESERVE_TIMELINE_SLOT_MUTATION)).toBe(
+      'engagement.reserve.v1',
+    )
   })
 
   it('adds signed plugin security headers for token requests', async () => {

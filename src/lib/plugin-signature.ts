@@ -14,6 +14,7 @@ const OPERATION_IDS: Record<string, string> = {
   ReportEngagementCapture: 'capture.report.v1',
   MintEngagementTicket: 'verify.ticket.v1',
   SubmitEngagementProof: 'verify.proof.v1',
+  ReserveTimelineEngagementSlot: 'engagement.reserve.v1',
   MintProductExperienceTicket: 'verify.product-experience.ticket.v1',
   MintProductExperienceTestTicket: 'verify.product-experience.test-ticket.v1',
   SubmitProductExperienceProof: 'verify.product-experience.proof.v1',
