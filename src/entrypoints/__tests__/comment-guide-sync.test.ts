@@ -40,6 +40,7 @@ const order = (
   targetUsername: null,
   keywords: [],
   commentGuide,
+  timelineOnly: false,
   expectedReward: 1,
   myExpectedReward: 1,
   effectiveTier: null,

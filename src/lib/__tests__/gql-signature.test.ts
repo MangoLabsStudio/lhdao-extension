@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest'
 import { canonicalJson, sha256Hex } from '../canonical-json'
 import { getPluginOperationByDocument } from '../plugin-operations'
 import {
+  AVAILABLE_ENGAGEMENTS_QUERY,
   PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
   PROMOTE_TWEET_MUTATION,
   type PreviewPromoteTweetPricingVars,
   type PromoteTweetVars,
+  RESERVE_TIMELINE_SLOT_MUTATION,
 } from '../queries'
 import { signPluginRequest } from '../request-signing'
 import { releaseSpendActionKey, spendActionKey } from '../spend-idempotency'
@@ -157,5 +159,31 @@ describe('quoted promote operation signatures', () => {
 
     expect(source).not.toMatch(/todayPrice|tomorrowExpectedPrice/u)
     expect(source).not.toMatch(/明日预计|价格日程/u)
+  })
+})
+
+describe('timelineOnly engagement operations', () => {
+  it('pins AvailableEngagements as engagement.available.v5 (timelineOnly)', async () => {
+    expect(await sha256Hex(AVAILABLE_ENGAGEMENTS_QUERY)).toBe(
+      '3967059a45ff7b280ac28d81a08ef55d5e3ebab8142dec8364ec8b37ff2b2e33',
+    )
+    expect(
+      getPluginOperationByDocument(
+        AVAILABLE_ENGAGEMENTS_QUERY,
+        'AvailableEngagements',
+      ),
+    ).toMatchObject({ id: 'engagement.available.v5', permission: 'read' })
+  })
+
+  it('allowlists ReserveTimelineEngagementSlot as engagement.reserve.v1', async () => {
+    expect(await sha256Hex(RESERVE_TIMELINE_SLOT_MUTATION)).toBe(
+      '74866dc6a0da35699c894e43652fd05c5c67551b9c47a83367095a1f42a11d18',
+    )
+    expect(
+      getPluginOperationByDocument(
+        RESERVE_TIMELINE_SLOT_MUTATION,
+        'ReserveTimelineEngagementSlot',
+      ),
+    ).toMatchObject({ id: 'engagement.reserve.v1', permission: 'verify' })
   })
 })

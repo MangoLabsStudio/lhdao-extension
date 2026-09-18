@@ -66,6 +66,7 @@ describe('PLUGIN_OPERATIONS', () => {
       'ReportEngagementCapture',
       'MintEngagementTicket',
       'SubmitEngagementProof',
+      'ReserveTimelineEngagementSlot',
       'CurrentEngagementMarketPrices',
       'PreviewPromoteTweetPricing',
       'PromoteTweet',
@@ -102,7 +103,7 @@ describe('PLUGIN_OPERATIONS', () => {
         AVAILABLE_ENGAGEMENTS_QUERY,
         'AvailableEngagements',
       )?.id,
-    ).toBe('engagement.available.v4')
+    ).toBe('engagement.available.v5')
     expect(
       getPluginOperationByDocument(
         MY_RESERVED_ENGAGEMENTS_QUERY,

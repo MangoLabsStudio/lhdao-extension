@@ -111,6 +111,8 @@ export interface CurrentCampaign {
   targetUsername: string | null
   /** 该 campaign 是否为当前用户已预约(RESERVED)。挑选「当前任务」时已预约的优先。 */
   reserved: boolean
+  /** [timelineOnly] 仅插件时间线展示的单;未预约时卡片显示「领取任务」而非验证。 */
+  timelineOnly?: boolean
   /** Historical participant fact; only true is displayed. */
   lighthouseSelectedAtClaim?: boolean | null
 }
@@ -146,6 +148,7 @@ export function groupCampaigns(tasks: CampaignTaskCache[]): CurrentCampaign[] {
         commentGuideStatus: 'unavailable',
         targetUsername: null,
         reserved: false,
+        timelineOnly: false,
         lighthouseSelectedAtClaim: undefined,
       }
       map.set(t.campaignId, v)
@@ -165,6 +168,7 @@ export function groupCampaigns(tasks: CampaignTaskCache[]): CurrentCampaign[] {
     if (!v.authorName && t.authorName) v.authorName = t.authorName
     if (!v.authorHandle && t.authorHandle) v.authorHandle = t.authorHandle
     if (t.reserved) v.reserved = true
+    if (t.timelineOnly) v.timelineOnly = true
     if (
       v.lighthouseSelectedAtClaim === undefined &&
       t.lighthouseSelectedAtClaim !== undefined

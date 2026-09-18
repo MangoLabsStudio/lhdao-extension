@@ -64,8 +64,10 @@ import {
   RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
   RESERVE_SLOT_MUTATION,
+  RESERVE_TIMELINE_SLOT_MUTATION,
   type ReportEngagementCaptureResult,
   type ReserveSlotResult,
+  type ReserveTimelineSlotResult,
   SAVE_X_ANALYTICS_MUTATION,
   type SaveXAnalyticsResult,
   type SaveXAnalyticsVars,
@@ -1172,6 +1174,8 @@ export function flattenTasks(
         authorName: c.tweetAuthorName ?? null,
         authorHandle: c.tweetAuthorHandle ?? null,
         reserved: reservedIds.has(c.id),
+        // myReservedEngagements 不 select 该字段(运行时为 undefined)→ false
+        timelineOnly: c.timelineOnly === true,
         ...(c.lighthouseSelectedOnly === undefined
           ? {}
           : { lighthouseSelectedOnly: c.lighthouseSelectedOnly }),
@@ -1931,11 +1935,24 @@ async function reserveOnly(
   confirmCascade?: boolean,
 ): Promise<MsgResponse> {
   try {
-    const data = await gql<ReserveSlotResult>(RESERVE_SLOT_MUTATION, {
-      campaignId,
-      confirmCascade: confirmCascade ?? null,
-    })
-    const r = data.reserveEngagementSlot
+    // timelineOnly 任务走插件专用签名预约口;普通任务维持旧 mutation
+    // (旧口对 plugin token 403 是后端既有姿态,普通单预约仍在网页)。
+    const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
+    const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
+    const cachedTask = [...Object.values(byTweet), ...Object.values(byAuthor)]
+      .flat()
+      .find((t) => t.campaignId === campaignId)
+    const mutation = cachedTask?.timelineOnly
+      ? RESERVE_TIMELINE_SLOT_MUTATION
+      : RESERVE_SLOT_MUTATION
+    const data = await gql<ReserveSlotResult & ReserveTimelineSlotResult>(
+      mutation,
+      {
+        campaignId,
+        confirmCascade: confirmCascade ?? null,
+      },
+    )
+    const r = data.reserveEngagementSlot ?? data.reserveTimelineEngagementSlot
 
     if (r?.reserved) {
       return {

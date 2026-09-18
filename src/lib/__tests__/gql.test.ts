@@ -523,7 +523,7 @@ describe('gql transport outcomes', () => {
 
     const operations = [
       {
-        id: 'engagement.available.v4',
+        id: 'engagement.available.v5',
         name: 'AvailableEngagements',
         document: queries.AVAILABLE_ENGAGEMENTS_QUERY,
       },

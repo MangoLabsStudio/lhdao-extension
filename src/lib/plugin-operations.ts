@@ -13,6 +13,7 @@ import {
   PROMOTE_TWEET_MUTATION,
   RECORD_TWEET_DWELL_MUTATION,
   REPORT_ENGAGEMENT_CAPTURE_MUTATION,
+  RESERVE_TIMELINE_SLOT_MUTATION,
   SUBMIT_ENGAGEMENT_PROOF_MUTATION,
 } from './queries'
 
@@ -69,10 +70,10 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'read',
   ),
   operation(
-    'engagement.available.v4',
+    'engagement.available.v5',
     'AvailableEngagements',
     AVAILABLE_ENGAGEMENTS_QUERY,
-    'f8a6ff445a4cb17c035546fae1b3c668eeab5e6e2964f864877e6600770fd02c',
+    '3967059a45ff7b280ac28d81a08ef55d5e3ebab8142dec8364ec8b37ff2b2e33',
     'read',
   ),
   operation(
@@ -122,6 +123,13 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'SubmitEngagementProof',
     SUBMIT_ENGAGEMENT_PROOF_MUTATION,
     '3545cd4cbfbc22c5738fb9c9423d8c0e62a20809e0887183106c40c2ca3814de',
+    'verify',
+  ),
+  operation(
+    'engagement.reserve.v1',
+    'ReserveTimelineEngagementSlot',
+    RESERVE_TIMELINE_SLOT_MUTATION,
+    '74866dc6a0da35699c894e43652fd05c5c67551b9c47a83367095a1f42a11d18',
     'verify',
   ),
   operation(

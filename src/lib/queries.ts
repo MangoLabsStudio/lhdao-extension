@@ -134,6 +134,7 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       myExpectedReward
       effectiveTier
       myEffectiveTier
+      timelineOnly
       actions {
         actionType
         baseReward
@@ -187,6 +188,8 @@ export interface AvailableEngagement {
   effectiveTier: string | null
   /** 当前用户实际奖励 tier;展示/诊断优先用它。 */
   myEffectiveTier: string | null
+  /** true = 仅插件时间线展示的任务;预约走 ReserveTimelineEngagementSlot */
+  timelineOnly: boolean
   actions: Array<{
     actionType: EngagementActionType
     baseReward: number
@@ -342,6 +345,39 @@ export interface ReserveSlotResult {
   }
 }
 
+// ── [timelineOnly] 插件专用预约(签名操作 engagement.reserve.v1)──
+// 网页端 reserveEngagementSlot 对 timelineOnly 任务一律 CAMPAIGN_NOT_CLAIMABLE;
+// 插件侧带 device 签名走这个入口。后端按 documentSha256 逐字节校验本文档,
+// 定稿后不要改动格式(换行/缩进/字段顺序都会让哈希失效)。
+export const RESERVE_TIMELINE_SLOT_MUTATION = `
+  mutation ReserveTimelineEngagementSlot($campaignId: String!, $confirmCascade: Boolean) {
+    reserveTimelineEngagementSlot(campaignId: $campaignId, confirmCascade: $confirmCascade) {
+      reserved
+      reservedTier
+      cooldownSeconds
+      releasedSeats
+      activeReservations
+      cascadeWarning {
+        userTier
+        effectiveTier
+        userTierRewardLux
+        effectiveTierRewardLux
+      }
+    }
+  }
+`
+
+export interface ReserveTimelineSlotResult {
+  reserveTimelineEngagementSlot: {
+    reserved: boolean
+    reservedTier: string | null
+    cooldownSeconds: number | null
+    releasedSeats: number | null
+    activeReservations: number | null
+    cascadeWarning: CascadeWarning | null
+  }
+}
+
 export const VERIFY_ENGAGEMENT_MUTATION = `
   mutation VerifyEngagement($campaignId: String!) {
     verifyEngagement(campaignId: $campaignId) {
@@ -465,7 +501,8 @@ export interface LighthouseMembersResult {
 // 流程见 kol-dao-service 后端 ExtensionPairingService doc。
 //
 // 扩展端只调 2 个 endpoint:
-//   - createExtensionPairing(code) — 占 code slot,扩展 BG 调,@IsPublic
+//   - createExtensionPairing(code, deviceId, publicKeyJwk)
+//       占 code slot,扩展 BG 调,@IsPublic
 //   - pollExtensionPairing(code)    — polling 拿 token,@IsPublic
 //
 // completeExtensionPairing 是主站调的(用户在 connect 页点 Allow),扩展
@@ -476,6 +513,40 @@ export const CREATE_EXTENSION_PAIRING_MUTATION = `
     createExtensionPairing(code: $code, deviceId: $deviceId, publicKeyJwk: $publicKeyJwk)
   }
 `
+
+export interface CreateExtensionPairingVars {
+  code: string
+  deviceId: string
+  publicKeyJwk: JsonWebKey
+}
+
+export interface CreateExtensionPairingLegacyVars {
+  code: string
+}
+
+export function createExtensionPairingVariables(
+  code: string,
+  deviceId: string,
+  publicKeyJwk: JsonWebKey,
+): CreateExtensionPairingVars {
+  return { code, deviceId, publicKeyJwk }
+}
+
+export function createExtensionPairingLegacyVariables(
+  code: string,
+): CreateExtensionPairingLegacyVars {
+  return { code }
+}
+
+export function isCreateExtensionPairingDeviceBindingUnsupported(
+  error: unknown,
+): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return (
+    /Unknown argument ["'](?:deviceId|publicKeyJwk)["']/i.test(message) &&
+    /createExtensionPairing/i.test(message)
+  )
+}
 
 export interface CreateExtensionPairingResult {
   createExtensionPairing: boolean

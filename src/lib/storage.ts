@@ -149,6 +149,7 @@ export interface RawCapturedAction {
   expiresAt: number
 }
 
+
 /** Sidebar v2 列表行数据 — TWEET 类型 campaign 精简摘要 */
 export interface TweetCampaignSummary {
   campaignId: string
@@ -241,6 +242,11 @@ export interface CampaignTaskCache {
   lighthouseSelectedOnly?: boolean
   /** Missing means unavailable; null means a known legacy participant row. */
   lighthouseSelectedAtClaim?: boolean | null
+  /**
+   * [timelineOnly] 仅插件时间线展示的任务。true 时预约必须走插件专用签名
+   * 入口 ReserveTimelineEngagementSlot(旧 mutation 会被后端按渠道拒绝)。
+   */
+  timelineOnly?: boolean
 }
 
 // ── Stores ────────────────────────────────────────────────────────────
