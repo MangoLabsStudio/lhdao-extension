@@ -131,6 +131,39 @@ describe('timelineOnly claim button in current-task panel', () => {
     expect(types).toContain('force-sync')
   })
 
+  it('shows the offered tier and reward, then explicitly confirms that exact tier', async () => {
+    mockSnapshot([timelineTask])
+    const send = vi.mocked(messaging.sendMessage)
+    const original = send.getMockImplementation()!
+    send.mockImplementation(async (req) => {
+      if (req.type === 'reserve-task' && !req.confirmCascade)
+        return {
+          type: 'reserve-result',
+          ok: false,
+          code: 'RESERVE_FAILED',
+          message: '请确认降档',
+          cascadeWarning: {
+            userTier: 'A',
+            effectiveTier: 'B',
+            userTierRewardLux: 20,
+            effectiveTierRewardLux: 13.5,
+          },
+        }
+      return original(req)
+    })
+    await act(async () => scanTimeline())
+    await act(async () => claimButton()?.click())
+    expect(claimButton()?.textContent).toContain('B')
+    expect(panel()?.textContent).toContain('13.5')
+    await act(async () => claimButton()?.click())
+    expect(send).toHaveBeenCalledWith({
+      type: 'reserve-task',
+      campaignId: 'timeline-like',
+      confirmCascade: true,
+      confirmedCascadeTier: 'B',
+    })
+  })
+
   it('shows the verify button (not claim) once the timelineOnly task is reserved', async () => {
     mockSnapshot([reservedTimelineTask])
     await act(async () => scanTimeline())

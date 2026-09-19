@@ -175,15 +175,15 @@ describe('timelineOnly engagement operations', () => {
     ).toMatchObject({ id: 'engagement.available.v5', permission: 'read' })
   })
 
-  it('allowlists ReserveTimelineEngagementSlot as engagement.reserve.v1', async () => {
+  it('allowlists ReserveTimelineEngagementSlot as engagement.reserve.v2', async () => {
     expect(await sha256Hex(RESERVE_TIMELINE_SLOT_MUTATION)).toBe(
-      '74866dc6a0da35699c894e43652fd05c5c67551b9c47a83367095a1f42a11d18',
+      '685a352783b4f11583bdade794f9f4864e95acd62383601fc21c807df57b5752',
     )
     expect(
       getPluginOperationByDocument(
         RESERVE_TIMELINE_SLOT_MUTATION,
         'ReserveTimelineEngagementSlot',
       ),
-    ).toMatchObject({ id: 'engagement.reserve.v1', permission: 'verify' })
+    ).toMatchObject({ id: 'engagement.reserve.v2', permission: 'verify' })
   })
 })

@@ -479,7 +479,11 @@ export default defineBackground(() => {
       return submitTask(req.campaignId)
     }
     if (req.type === 'reserve-task') {
-      return reserveOnly(req.campaignId, req.confirmCascade)
+      return reserveOnly(
+        req.campaignId,
+        req.confirmCascade,
+        req.confirmedCascadeTier,
+      )
     }
     if (req.type === 'verify-task') {
       return verifyOnly(req.campaignId)
@@ -1933,6 +1937,7 @@ async function doHandleEngagementCapture(
 async function reserveOnly(
   campaignId: string,
   confirmCascade?: boolean,
+  confirmedCascadeTier?: string,
 ): Promise<MsgResponse> {
   try {
     // timelineOnly 任务走插件专用签名预约口;普通任务维持旧 mutation
@@ -1950,6 +1955,9 @@ async function reserveOnly(
       {
         campaignId,
         confirmCascade: confirmCascade ?? null,
+        ...(cachedTask?.timelineOnly
+          ? { confirmedCascadeTier: confirmedCascadeTier ?? null }
+          : {}),
       },
     )
     const r = data.reserveEngagementSlot ?? data.reserveTimelineEngagementSlot
@@ -1970,7 +1978,8 @@ async function reserveOnly(
         type: 'reserve-result',
         ok: false,
         code: 'RESERVE_FAILED',
-        message: `本档已满,可降到 ${w.effectiveTier} 档拿 ${w.effectiveTierRewardLux} LUX (原 ${w.userTierRewardLux})。点重抢确认降档。`,
+        message: `可按 ${w.effectiveTier} 档领取，奖励 ${w.effectiveTierRewardLux} LUX，请确认。`,
+        cascadeWarning: w,
       }
     }
 

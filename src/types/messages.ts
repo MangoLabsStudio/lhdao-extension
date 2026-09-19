@@ -1,3 +1,4 @@
+import type { CascadeWarning } from '@/lib/queries'
 /**
  * Content script ↔ Background service worker RPC 协议。
  *
@@ -51,7 +52,12 @@ export type MsgRequest =
   | { type: 'get-tasks-for-author'; authorHandle: string }
   | { type: 'get-tasks-snapshot' }
   | { type: 'get-captured-actions'; campaignId: string; tweetId?: string }
-  | { type: 'reserve-task'; campaignId: string; confirmCascade?: boolean }
+  | {
+      type: 'reserve-task'
+      campaignId: string
+      confirmCascade?: boolean
+      confirmedCascadeTier?: string
+    }
   | { type: 'verify-task'; campaignId: string }
   | { type: 'submit-task'; campaignId: string }
   | {
@@ -148,6 +154,7 @@ export type MsgResponse =
   | { type: 'reserve-result'; ok: true; cooldownSeconds?: number }
   | {
       type: 'reserve-result'
+      cascadeWarning?: CascadeWarning
       ok: false
       code: SubmitErrorCode
       message: string

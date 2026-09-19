@@ -110,8 +110,46 @@ describe('reserveOnly mutation routing', () => {
     expect(gqlMock.mock.calls[0][1]).toEqual({
       campaignId: 'c-tl',
       confirmCascade: null,
+      confirmedCascadeTier: null,
     })
     expect(r).toMatchObject({ type: 'reserve-result', ok: true })
+  })
+
+  it('forwards the exact confirmed tier and returns a structured new offer', async () => {
+    sessionData.tasksByTweetId = {
+      '123': [task({ campaignId: 'c-tl', timelineOnly: true })],
+    }
+    const warning = {
+      userTier: 'A',
+      effectiveTier: 'C',
+      userTierRewardLux: 20,
+      effectiveTierRewardLux: 5,
+    }
+    gqlMock.mockResolvedValue({
+      reserveTimelineEngagementSlot: {
+        reserved: false,
+        cascadeWarning: warning,
+      },
+    })
+    const result = await handler(
+      {
+        type: 'reserve-task',
+        campaignId: 'c-tl',
+        confirmCascade: true,
+        confirmedCascadeTier: 'B',
+      },
+      {} as chrome.runtime.MessageSender,
+    )
+    expect(gqlMock.mock.calls[0][1]).toEqual({
+      campaignId: 'c-tl',
+      confirmCascade: true,
+      confirmedCascadeTier: 'B',
+    })
+    expect(result).toMatchObject({
+      type: 'reserve-result',
+      ok: false,
+      cascadeWarning: warning,
+    })
   })
 
   it('normal task reserves via legacy ReserveEngagementSlot', async () => {

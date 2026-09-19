@@ -1,3 +1,4 @@
+import type { CascadeWarning } from '@/lib/queries'
 import * as React from 'react'
 import { LighthouseSelectedText } from '@/components/lighthouse/LighthouseSelectedText'
 import {
@@ -68,11 +69,16 @@ export function CurrentTaskSection({
   const [dwellMs, setDwellMs] = React.useState(0)
   const [phase, setPhase] = React.useState<Phase>('detecting')
   const [busy, setBusy] = React.useState(false)
+  const [cascadeOffer, setCascadeOffer] = React.useState<{
+    campaignId: string
+    warning: CascadeWarning
+  } | null>(null)
   const [errorMsg, setErrorMsg] = React.useState<string | undefined>(undefined)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: these values define which task owns an in-flight verification.
   React.useEffect(() => {
     setBusy(false)
+    setCascadeOffer(null)
     return () => {
       verificationGeneration.current++
     }
@@ -399,31 +405,56 @@ export function CurrentTaskSection({
   // ── [timelineOnly] 领取(预约)任务 —— 仅时间线展示的单必须先经插件签名
   //    预约口领取,拿到 RESERVED 后才进入检测/验证态。BG reserveOnly 会按缓存
   //    标记自动选 ReserveTimelineEngagementSlot。 ──
-  const needsClaim = campaign ? campaign.timelineOnly && !campaign.reserved : false
+  const needsClaim = campaign
+    ? campaign.timelineOnly && !campaign.reserved
+    : false
+  const cascadeWarning =
+    cascadeOffer?.campaignId === campaign?.campaignId
+      ? cascadeOffer?.warning
+      : undefined
   const onClaim = React.useCallback(async () => {
     if (!campaign || busy) return
+    const generation = verificationGeneration.current
+    const account = accountGeneration.current
+    const isCurrent = () =>
+      generation === verificationGeneration.current &&
+      account === accountGeneration.current &&
+      focalIdFromUrl() === focalId
     setBusy(true)
     setErrorMsg(undefined)
     try {
       const r = await sendMessage({
         type: 'reserve-task',
         campaignId: campaign.campaignId,
+        ...(cascadeWarning
+          ? {
+              confirmCascade: true,
+              confirmedCascadeTier: cascadeWarning.effectiveTier,
+            }
+          : {}),
       })
+      if (!isCurrent()) return
       if (r.type === 'reserve-result' && r.ok) {
+        setCascadeOffer(null)
         // force-sync → tasks-updated 回拉 → groupCampaigns 标 reserved,
         // 卡片自动从领取态切到检测态。
         void sendMessage({ type: 'force-sync' }).catch(() => {})
       } else if (r.type === 'reserve-result') {
+        setCascadeOffer(
+          r.cascadeWarning
+            ? { campaignId: campaign.campaignId, warning: r.cascadeWarning }
+            : null,
+        )
         setErrorMsg(r.message ?? '领取失败,请稍后重试')
       } else {
         setErrorMsg('领取失败,请稍后重试')
       }
     } catch {
-      setErrorMsg('领取失败,请稍后重试')
+      if (isCurrent()) setErrorMsg('领取失败,请稍后重试')
     } finally {
-      setBusy(false)
+      if (isCurrent()) setBusy(false)
     }
-  }, [campaign, busy])
+  }, [campaign, busy, cascadeWarning, focalId])
 
   // ── 验证成功 → 新开任务广场标签页并切过去(不动当前 X 页,委托后台开)。
   //    进入 success 后延时自动开,也可点按钮立即开。切走推文(组件卸载)清定时器。
@@ -596,7 +627,11 @@ export function CurrentTaskSection({
               disabled={busy}
               onClick={onClaim}
             >
-              {busy ? '领取中…' : '领取任务'}
+              {busy
+                ? '领取中…'
+                : cascadeWarning
+                  ? `确认按 ${cascadeWarning.effectiveTier} 档领取 · ${cascadeWarning.effectiveTierRewardLux} LUX`
+                  : '领取任务'}
             </button>
           ) : (
             <button

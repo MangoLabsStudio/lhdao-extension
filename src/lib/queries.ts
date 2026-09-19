@@ -350,8 +350,8 @@ export interface ReserveSlotResult {
 // 插件侧带 device 签名走这个入口。后端按 documentSha256 逐字节校验本文档,
 // 定稿后不要改动格式(换行/缩进/字段顺序都会让哈希失效)。
 export const RESERVE_TIMELINE_SLOT_MUTATION = `
-  mutation ReserveTimelineEngagementSlot($campaignId: String!, $confirmCascade: Boolean) {
-    reserveTimelineEngagementSlot(campaignId: $campaignId, confirmCascade: $confirmCascade) {
+  mutation ReserveTimelineEngagementSlot($campaignId: String!, $confirmCascade: Boolean, $confirmedCascadeTier: PaidEngagementSellerTier) {
+    reserveTimelineEngagementSlot(campaignId: $campaignId, confirmCascade: $confirmCascade, confirmedCascadeTier: $confirmedCascadeTier) {
       reserved
       reservedTier
       cooldownSeconds

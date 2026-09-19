@@ -126,10 +126,10 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'verify',
   ),
   operation(
-    'engagement.reserve.v1',
+    'engagement.reserve.v2',
     'ReserveTimelineEngagementSlot',
     RESERVE_TIMELINE_SLOT_MUTATION,
-    '74866dc6a0da35699c894e43652fd05c5c67551b9c47a83367095a1f42a11d18',
+    '685a352783b4f11583bdade794f9f4864e95acd62383601fc21c807df57b5752',
     'verify',
   ),
   operation(
