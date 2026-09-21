@@ -244,6 +244,7 @@ export default defineContentScript({
 
     const observer = new MutationObserver(scheduleScan)
     observer.observe(document.body, { childList: true, subtree: true })
+    startFocalTaskHostRecovery()
 
     // 启动时立刻拉一次 snapshot + 多次重试兜底 SW 冷启动失败。
     bootstrapSnapshot()
@@ -585,6 +586,49 @@ let focalTaskHost: {
   root: Root
 } | null = null
 
+const TWEET_ACTION_SELECTOR = [
+  '[data-testid="reply"]',
+  '[data-testid="retweet"]',
+  '[data-testid="unretweet"]',
+  '[data-testid="like"]',
+  '[data-testid="unlike"]',
+].join(', ')
+
+function findTweetActionRow(article: Element): Element | null {
+  for (const group of article.querySelectorAll('[role="group"]')) {
+    if (
+      group.closest('article') === article &&
+      group.querySelector(TWEET_ACTION_SELECTOR)
+    ) {
+      return group
+    }
+  }
+
+  const buttons = [...article.querySelectorAll(TWEET_ACTION_SELECTOR)].filter(
+    (button) => button.closest('article') === article,
+  )
+  if (buttons.length === 0) return null
+
+  let row = buttons[0].parentElement
+  while (
+    row &&
+    row !== article &&
+    !buttons.every((button) => row?.contains(button))
+  ) {
+    row = row.parentElement
+  }
+  return row && row !== article ? row : buttons[0].parentElement
+}
+
+export function startFocalTaskHostRecovery(): () => void {
+  const timer = setInterval(() => {
+    if (!contextDead && getFocalTweetId() && !focalTaskHost?.host.isConnected) {
+      scanTimeline()
+    }
+  }, 2_000)
+  return () => clearInterval(timer)
+}
+
 function reconcileFocalTaskHost() {
   const tweetId = getFocalTweetId()
   const candidates = tweetId
@@ -595,7 +639,7 @@ function reconcileFocalTaskHost() {
       )
     : []
   const article = candidates.at(-1)
-  const actionRow = article?.querySelector('[role="group"]')
+  const actionRow = article ? findTweetActionRow(article) : null
   if (focalTaskHost && focalTaskHost.tweetId === tweetId) {
     // Preserve state across X replacing either the controls or the entire
     // article. Keep the panel detached until the new controls are available.

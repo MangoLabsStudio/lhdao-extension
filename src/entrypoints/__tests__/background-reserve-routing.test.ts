@@ -189,7 +189,11 @@ describe('reserveOnly mutation routing', () => {
   it('reads timelineOnly flag from byAuthor cache too', async () => {
     sessionData.tasksByAuthorHandle = {
       someuser: [
-        task({ campaignId: 'c-follow', timelineOnly: true, tweetId: undefined }),
+        task({
+          campaignId: 'c-follow',
+          timelineOnly: true,
+          tweetId: undefined,
+        }),
       ],
     }
     gqlMock.mockResolvedValue({

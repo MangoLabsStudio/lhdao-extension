@@ -147,6 +147,8 @@ export type MsgResponse =
       // 与「还没同步完」(空 = 不确定,应保持加载/重试),避免把冷启空快照
       // 误判为无任务。可选字段,老消费方忽略即可,向后兼容。
       ready?: boolean
+      /** False means no plugin token is configured; task UI should stay hidden. */
+      tokenConfigured?: boolean
       /** A failed source must not be interpreted as an empty guide/task list. */
       syncFailed?: boolean
     }
