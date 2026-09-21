@@ -149,7 +149,6 @@ export interface RawCapturedAction {
   expiresAt: number
 }
 
-
 /** Sidebar v2 列表行数据 — TWEET 类型 campaign 精简摘要 */
 export interface TweetCampaignSummary {
   campaignId: string
