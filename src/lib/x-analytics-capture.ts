@@ -54,12 +54,20 @@ export function findThreeMonthButton(
 
 const selectedDataStates = new Set(['active', 'on', 'selected', 'checked'])
 
+// X 分析页范围选择器不用任何 ARIA/data 属性：选中的范围是实心胶囊
+// （bg-text + border-transparent + text-background），未选中是描边胶囊
+// （bg-transparent）。class 是语义化 design-token，不是哈希名。
+const xSelectedPillClasses = ['bg-text', 'border-transparent', 'text-background']
+
 export function isThreeMonthSelected(button: HTMLButtonElement): boolean {
   if (button.getAttribute('aria-pressed') === 'true') return true
   if (button.getAttribute('aria-selected') === 'true') return true
   if (button.getAttribute('aria-checked') === 'true') return true
   const state = button.getAttribute('data-state')
-  return state !== null && selectedDataStates.has(state)
+  if (state !== null) return selectedDataStates.has(state)
+  const classList = button.classList
+  if (classList.contains('bg-transparent')) return false
+  return xSelectedPillClasses.every((cls) => classList.contains(cls))
 }
 
 export interface ThreeMonthCaptureWait {

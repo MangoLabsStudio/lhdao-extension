@@ -306,6 +306,22 @@ describe('3M range refresh guard', () => {
     expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(false)
   })
 
+  it('detects X filled-pill selection classes on the 3M control', () => {
+    document.body.innerHTML = `
+      <button class="gap-1 inline-flex items-center border border-solid font-bold transition justify-center h-8 min-w-8 px-4 text-subtext1 bg-transparent border-nested-border outline-text text-text rounded-full border-gray-400! shrink-0">7D</button>
+      <button class="gap-1 inline-flex items-center border border-solid font-bold transition justify-center h-8 min-w-8 px-4 text-subtext1 bg-text border-transparent outline-text text-background rounded-full shrink-0">3M</button>
+      <button class="gap-1 inline-flex items-center border border-solid font-bold transition justify-center h-8 min-w-8 px-4 text-subtext1 bg-transparent border-nested-border outline-text text-text rounded-full border-gray-400! shrink-0">1Y</button>
+    `
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(true)
+  })
+
+  it('rejects X outline-pill classes when 3M is not selected', () => {
+    document.body.innerHTML = `
+      <button class="gap-1 inline-flex items-center border border-solid font-bold transition justify-center h-8 min-w-8 px-4 text-subtext1 bg-transparent border-nested-border outline-text text-text rounded-full border-gray-400! shrink-0">3M</button>
+    `
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(false)
+  })
+
   it('rejects complete metrics while the 3M range stays unselected', async () => {
     renderAnalyticsPage(false)
     const previous = captureXAnalyticsPage(document)
