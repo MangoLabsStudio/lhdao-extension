@@ -250,6 +250,9 @@ describe('current-task comment guide', () => {
 
     expect(container.textContent).toContain('未同步到已接任务')
     expect(container.textContent).toContain('重新同步')
+
+    await act(async () => updated({ type: 'tasks-updated' }))
+    expect(container.textContent).toContain('未同步到已接任务')
   })
 
   it('clears content on account change and rejects the previous snapshot response', async () => {

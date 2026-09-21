@@ -143,6 +143,7 @@ export function CurrentTaskSection({
     // 从快照消失,或 verify 成功后 force-sync 触发的 tasks-updated 回拉)不再
     // 把它清成 null —— 否则会把「进行中卡 / 成功庆祝」误清掉(自身引入的回归)。
     let gotTask = false
+    let arrivalExpired = false
     let forceSyncFailed = false
     const showReadFailure = () => {
       if (cancelled || generation !== accountGeneration.current) return
@@ -246,8 +247,9 @@ export function CurrentTaskSection({
         }
         // 预约写入和插件查询之间可能存在短暂延迟。成功的空快照不能立即
         // 判定“无任务”,否则面板会静默消失。保留加载态直到最后一次同步。
+        if (finalAttempt) arrivalExpired = true
         setCampaign(null)
-        setStatus(finalAttempt ? 'missing' : 'loading')
+        setStatus(arrivalExpired ? 'missing' : 'loading')
       } catch {
         if (sequence === loadSequence) showReadFailure()
       }
