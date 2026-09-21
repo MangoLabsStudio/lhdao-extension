@@ -13,7 +13,9 @@ import * as messaging from '@/lib/messaging'
 import type { CampaignTaskCache } from '@/lib/storage'
 
 let scanTimeline: typeof import('../content').scanTimeline
+let startFocalTaskHostRecovery: typeof import('../content').startFocalTaskHostRecovery
 let unmountAll: typeof import('../content').unmountAll
+let stopRecovery: (() => void) | undefined
 
 vi.mock('@/lib/dwell-tracker', () => ({
   initDwellTracker: () => {},
@@ -33,7 +35,9 @@ beforeAll(async () => {
     chrome: fakeBrowser,
     defineContentScript: <T>(config: T) => config,
   })
-  ;({ scanTimeline, unmountAll } = await import('../content'))
+  ;({ scanTimeline, startFocalTaskHostRecovery, unmountAll } = await import(
+    '../content'
+  ))
 })
 
 function renderTweet(): void {
@@ -73,9 +77,12 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  stopRecovery?.()
+  stopRecovery = undefined
   await act(async () => unmountAll())
   document.body.innerHTML = ''
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 describe('focused tweet verification panel host', () => {
@@ -114,6 +121,28 @@ describe('focused tweet verification panel host', () => {
     await act(async () => scanTimeline())
 
     expect(panel()?.textContent).toContain('评论')
+  })
+
+  it('mounts beside X action buttons when role=group is absent', async () => {
+    document.body.innerHTML =
+      '<article><a href="/user/status/123456"><time>Now</time></a><div data-controls><button data-testid="reply">Reply</button><button data-testid="like">Like</button></div></article>'
+
+    await act(async () => scanTimeline())
+
+    expect(panel()?.textContent).toContain('评论')
+  })
+
+  it('restores a detached host while the focused route stays open', async () => {
+    vi.useFakeTimers()
+    await act(async () => scanTimeline())
+    const host = document.querySelector('.lhdao-inline-task')
+    expect(host).not.toBeNull()
+    host?.remove()
+
+    stopRecovery = startFocalTaskHostRecovery()
+    await act(async () => vi.advanceTimersByTime(2_000))
+
+    expect(document.querySelector('.lhdao-inline-task')).toBe(host)
   })
 
   it('removes the panel after leaving the tweet detail route', async () => {
