@@ -52,6 +52,59 @@ export function findThreeMonthButton(
   )
 }
 
+const selectedDataStates = new Set(['active', 'on', 'selected', 'checked'])
+
+export function isThreeMonthSelected(button: HTMLButtonElement): boolean {
+  if (button.getAttribute('aria-pressed') === 'true') return true
+  if (button.getAttribute('aria-selected') === 'true') return true
+  if (button.getAttribute('aria-checked') === 'true') return true
+  const state = button.getAttribute('data-state')
+  return state !== null && selectedDataStates.has(state)
+}
+
+export interface ThreeMonthCaptureWait {
+  root: ParentNode
+  previousMetrics: Record<string, number> | null
+  wasSelected: boolean
+  timeoutMs?: number
+  intervalMs?: number
+  now?: () => number
+  sleep?: (ms: number) => Promise<void>
+}
+
+export interface ThreeMonthCaptureResult extends XAnalyticsPageDiagnostic {
+  refreshed: boolean
+}
+
+export async function waitForThreeMonthCapture({
+  root,
+  previousMetrics,
+  wasSelected,
+  timeoutMs = 8_000,
+  intervalMs = 250,
+  now = () => Date.now(),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+}: ThreeMonthCaptureWait): Promise<ThreeMonthCaptureResult> {
+  const before = previousMetrics ? metricsFingerprint(previousMetrics) : null
+  const deadline = now() + timeoutMs
+  for (;;) {
+    const diagnostic = diagnoseXAnalyticsPage(root)
+    const range = findThreeMonthButton(root)
+    if (range && isThreeMonthSelected(range) && diagnostic.capture) {
+      const after = metricsFingerprint(diagnostic.capture.metrics)
+      if (wasSelected || after !== before) {
+        return { ...diagnostic, refreshed: true }
+      }
+    }
+    if (now() >= deadline) return { ...diagnostic, refreshed: false }
+    await sleep(intervalMs)
+  }
+}
+
+function metricsFingerprint(metrics: Record<string, number>): string {
+  return requiredMetrics.map((key) => metrics[key] ?? '').join('|')
+}
+
 export function captureXAnalyticsPage(
   root: ParentNode,
 ): XAnalyticsPageCapture | null {

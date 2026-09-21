@@ -1,8 +1,10 @@
 import { sendMessage } from '@/lib/messaging'
 import {
-  diagnoseXAnalyticsPage,
+  captureXAnalyticsPage,
   findThreeMonthButton,
+  isThreeMonthSelected,
   rollingNinetyDayPeriod,
+  waitForThreeMonthCapture,
 } from '@/lib/x-analytics-capture'
 
 const HOST_ID = 'lhdao-x-analytics-capture'
@@ -74,14 +76,21 @@ async function saveCapture(
   try {
     const range = findThreeMonthButton(document)
     if (!range) return fail(status, 'X 分析页尚未加载完整，请稍后重试。')
+    const previousMetrics = captureXAnalyticsPage(document)?.metrics ?? null
+    const wasSelected = isThreeMonthSelected(range)
     range.click()
-    const diagnostic = await waitForCompleteCapture()
-    if (!diagnostic.capture)
+    const result = await waitForThreeMonthCapture({
+      root: document,
+      previousMetrics,
+      wasSelected,
+    })
+    if (!result.refreshed) return fail(status, '3M 数据尚未刷新，请稍后重试。')
+    if (!result.capture)
       return fail(
         status,
-        `汇总数据不完整（未识别：${diagnostic.missing.join(', ')}）。`,
+        `汇总数据不完整（未识别：${result.missing.join(', ')}）。`,
       )
-    const page = diagnostic.capture
+    const page = result.capture
 
     const account = await sendMessage({ type: 'get-x-analytics-status' })
     if (account.type !== 'x-analytics-status')
@@ -124,18 +133,6 @@ async function saveCapture(
   } finally {
     button.disabled = false
   }
-}
-
-async function waitForCompleteCapture(): Promise<
-  ReturnType<typeof diagnoseXAnalyticsPage>
-> {
-  const deadline = Date.now() + 8_000
-  while (Date.now() < deadline) {
-    const diagnostic = diagnoseXAnalyticsPage(document)
-    if (diagnostic.capture) return diagnostic
-    await new Promise((resolve) => setTimeout(resolve, 250))
-  }
-  return diagnoseXAnalyticsPage(document)
 }
 
 function fail(status: HTMLElement, message: string): void {

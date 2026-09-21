@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   captureXAnalyticsPage,
   diagnoseXAnalyticsPage,
+  findThreeMonthButton,
+  isThreeMonthSelected,
   rollingNinetyDayPeriod,
+  waitForThreeMonthCapture,
 } from '../x-analytics-capture'
 
 describe('X account analytics capture', () => {
@@ -245,5 +248,151 @@ describe('X account analytics capture', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('3M range refresh guard', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  const renderAnalyticsPage = (
+    threeMonthPressed: boolean,
+    impressions = '11.7K',
+  ) => {
+    document.body.innerHTML = `
+      <button data-testid="SideNav_AccountSwitcher_Button"><span>@wang_jl80536</span></button>
+      <button aria-pressed="${!threeMonthPressed}">28D</button>
+      <button aria-pressed="${threeMonthPressed}">3M</button>
+      <button>Verified followers 598 / 2.2K</button>
+      <button>Active followers 1.5K / 2.2K</button>
+      <button>Impressions ${impressions}</button>
+      <button>Engagement rate 1.3%</button>
+      <button>Engagements 158</button>
+      <button>Profile visits 23</button>
+      <button>Replies 74</button>
+      <button>Likes 46</button>
+      <button>Reposts 2</button>
+      <button>Bookmarks 13</button>
+      <button>Shares 0</button>
+    `
+  }
+
+  const fakeClock = () => {
+    let tick = 0
+    return {
+      now: () => tick,
+      sleep: (ms: number) => {
+        tick += ms
+        return Promise.resolve()
+      },
+    }
+  }
+
+  it('detects aria-pressed, aria-selected and data-state selection markers', () => {
+    renderAnalyticsPage(true)
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(true)
+
+    renderAnalyticsPage(false)
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(false)
+
+    document.body.innerHTML = '<button aria-selected="true">3M</button>'
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(true)
+
+    document.body.innerHTML = '<button data-state="active">3M</button>'
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(true)
+
+    document.body.innerHTML = '<button data-state="inactive">3M</button>'
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(false)
+  })
+
+  it('rejects complete metrics while the 3M range stays unselected', async () => {
+    renderAnalyticsPage(false)
+    const previous = captureXAnalyticsPage(document)
+    const clock = fakeClock()
+
+    const result = await waitForThreeMonthCapture({
+      root: document,
+      previousMetrics: previous?.metrics ?? null,
+      wasSelected: false,
+      timeoutMs: 2_000,
+      intervalMs: 250,
+      now: clock.now,
+      sleep: clock.sleep,
+    })
+
+    expect(result.refreshed).toBe(false)
+  })
+
+  it('accepts the capture once 3M is selected and the metrics change', async () => {
+    renderAnalyticsPage(false)
+    const previous = captureXAnalyticsPage(document)
+    let tick = 0
+
+    const result = await waitForThreeMonthCapture({
+      root: document,
+      previousMetrics: previous?.metrics ?? null,
+      wasSelected: false,
+      timeoutMs: 2_000,
+      intervalMs: 250,
+      now: () => tick,
+      sleep: (ms) => {
+        tick += ms
+        if (tick === 500) {
+          findThreeMonthButton(document)!.setAttribute('aria-pressed', 'true')
+          const card = Array.from(document.querySelectorAll('button')).find(
+            (button) => button.textContent?.startsWith('Impressions'),
+          )!
+          card.textContent = 'Impressions 42K'
+        }
+        return Promise.resolve()
+      },
+    })
+
+    expect(result.refreshed).toBe(true)
+    expect(result.capture?.metrics.impressions).toBe(42_000)
+  })
+
+  it('accepts unchanged metrics when 3M was already selected before the click', async () => {
+    renderAnalyticsPage(true)
+    const previous = captureXAnalyticsPage(document)
+    const clock = fakeClock()
+
+    const result = await waitForThreeMonthCapture({
+      root: document,
+      previousMetrics: previous?.metrics ?? null,
+      wasSelected: true,
+      timeoutMs: 2_000,
+      intervalMs: 250,
+      now: clock.now,
+      sleep: clock.sleep,
+    })
+
+    expect(result.refreshed).toBe(true)
+    expect(result.capture?.metrics.impressions).toBe(11_700)
+  })
+
+  it('keeps waiting when 3M becomes selected but the metrics are still stale', async () => {
+    renderAnalyticsPage(false)
+    const previous = captureXAnalyticsPage(document)
+    let tick = 0
+
+    const result = await waitForThreeMonthCapture({
+      root: document,
+      previousMetrics: previous?.metrics ?? null,
+      wasSelected: false,
+      timeoutMs: 1_000,
+      intervalMs: 250,
+      now: () => tick,
+      sleep: (ms) => {
+        tick += ms
+        if (tick === 250) {
+          findThreeMonthButton(document)!.setAttribute('aria-pressed', 'true')
+        }
+        return Promise.resolve()
+      },
+    })
+
+    expect(result.refreshed).toBe(false)
   })
 })
