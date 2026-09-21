@@ -25,6 +25,8 @@ const FIXED_PAGE_MATCHES = [
   'https://twitter.com/*',
   '*://x.com/*',
   '*://twitter.com/*',
+  'https://x.com/i/account_analytics*',
+  'https://twitter.com/i/account_analytics*',
   'https://www.binance.com/*/square/*',
   'https://www.binance.com/square/*',
 ]
