@@ -225,6 +225,33 @@ describe('current-task comment guide', () => {
     await act(async () => window.dispatchEvent(new Event('pageshow')))
     expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
   })
+
+  it('keeps syncing until a reserved task arrives after the old retry window', async () => {
+    vi.useFakeTimers()
+    const reservedTask = { ...rows[0], reserved: true }
+    rows = []
+
+    await render()
+    await act(async () => vi.advanceTimersByTimeAsync(7_000))
+    expect(container.textContent).toContain('正在同步已接任务')
+
+    rows = [reservedTask]
+    await act(async () => vi.advanceTimersByTimeAsync(8_000))
+
+    expect(container.textContent).toContain('评论')
+  })
+
+  it('shows a retry action after the reserved task arrival window expires', async () => {
+    vi.useFakeTimers()
+    rows = []
+
+    await render()
+    await act(async () => vi.advanceTimersByTimeAsync(15_000))
+
+    expect(container.textContent).toContain('未同步到已接任务')
+    expect(container.textContent).toContain('重新同步')
+  })
+
   it('clears content on account change and rejects the previous snapshot response', async () => {
     await render()
     let resolveOld!: (response: MsgResponse) => void

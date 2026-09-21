@@ -747,6 +747,7 @@ export async function readTasksSnapshot(): Promise<
       byTweet: {},
       byAuthor: {},
       ready: !snapshot.token,
+      tokenConfigured: !!snapshot.token,
     }
   }
   return {
@@ -754,6 +755,7 @@ export async function readTasksSnapshot(): Promise<
     byTweet: snapshot.value.byTweet ?? {},
     byAuthor: snapshot.value.byAuthor ?? {},
     ready: snapshot.value.lastSyncAt != null,
+    tokenConfigured: true,
     syncFailed: snapshot.value.lastSyncError != null,
   }
 }

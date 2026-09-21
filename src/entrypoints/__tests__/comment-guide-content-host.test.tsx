@@ -12,6 +12,7 @@ vi.mock('@/lib/dwell-tracker', () => ({
 
 let rows: CampaignTaskCache[]
 let syncFailed: boolean
+let tokenConfigured: boolean
 beforeEach(() => {
   fakeBrowser.reset()
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -24,6 +25,7 @@ beforeEach(() => {
   } as DOMRect)
   rows = []
   syncFailed = false
+  tokenConfigured = true
   vi.spyOn(messaging, 'sendMessage').mockImplementation(async (req) => {
     if (req.type === 'get-tasks-snapshot')
       return {
@@ -32,6 +34,7 @@ beforeEach(() => {
         byAuthor: {},
         ready: !syncFailed,
         syncFailed,
+        tokenConfigured,
       }
     if (req.type === 'get-captured-actions')
       return { type: 'captured-actions', actions: [] }
@@ -109,7 +112,7 @@ describe('content script focal task host', () => {
     replacement.querySelector('a')!.setAttribute('href', '/user/status/654321')
     await act(async () => scanTimeline())
     expect(document.querySelector('.lhdao-inline-task')).not.toBe(host)
-    expect(panel()).toBeNull()
+    expect(panel()?.textContent).toContain('正在同步已接任务')
   })
 
   it('waits for late action controls and recovers after they disappear temporarily', async () => {
@@ -182,9 +185,18 @@ describe('content script focal task host', () => {
     expect(document.querySelector('.lhdao-inline-task')).toBeNull()
   })
 
-  it('keeps confirmed empty or signed-out task UI hidden', async () => {
+  it('keeps a confirmed empty snapshot visible during the reservation arrival window', async () => {
     await act(async () => scanTimeline())
     expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
+    expect(panel()?.textContent).toContain('正在同步已接任务')
+    expect(
+      document.querySelector('article')?.hasAttribute('data-lhdao-active'),
+    ).toBe(false)
+  })
+
+  it('keeps signed-out task UI hidden', async () => {
+    tokenConfigured = false
+    await act(async () => scanTimeline())
     expect(panel()).toBeNull()
     expect(
       document.querySelector('article')?.hasAttribute('data-lhdao-active'),

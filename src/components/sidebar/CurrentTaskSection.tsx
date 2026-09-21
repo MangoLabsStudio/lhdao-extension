@@ -1,4 +1,3 @@
-import type { CascadeWarning } from '@/lib/queries'
 import * as React from 'react'
 import { LighthouseSelectedText } from '@/components/lighthouse/LighthouseSelectedText'
 import {
@@ -7,6 +6,7 @@ import {
   groupCampaigns,
 } from '@/lib/guide-state'
 import { sendMessage } from '@/lib/messaging'
+import type { CascadeWarning } from '@/lib/queries'
 import type { CampaignTaskCache } from '@/lib/storage'
 
 /**
@@ -62,9 +62,9 @@ export function CurrentTaskSection({
   // 显式加载态:'loading' = 正在为当前焦点推文拉/归并任务(显骨架);
   // 'ready' = 已尘埃落定(拿到任务 or 确认无任务)。此前用 campaign===null
   // 兼表两义 → 拉取窗口整段空白(「偶发性不显示加载」)。
-  const [status, setStatus] = React.useState<'loading' | 'ready' | 'error'>(
-    'loading',
-  )
+  const [status, setStatus] = React.useState<
+    'loading' | 'ready' | 'error' | 'missing'
+  >('loading')
   const [detected, setDetected] = React.useState<Set<string>>(() => new Set())
   const [dwellMs, setDwellMs] = React.useState(0)
   const [phase, setPhase] = React.useState<Phase>('detecting')
@@ -185,7 +185,10 @@ export function CurrentTaskSection({
       }
     }
     // 拉快照 + 归并当前推文任务。
-    const load = async (afterSync = false): Promise<void> => {
+    const load = async (
+      afterSync = false,
+      finalAttempt = false,
+    ): Promise<void> => {
       const sequence = ++loadSequence
       try {
         const snap = await sendMessage({ type: 'get-tasks-snapshot' })
@@ -197,6 +200,11 @@ export function CurrentTaskSection({
           return
         if (snap.type !== 'tasks-snapshot') {
           showReadFailure()
+          return
+        }
+        if (snap.tokenConfigured === false) {
+          setCampaign(null)
+          setStatus('ready')
           return
         }
         // Only a completed background refresh can clear a failed sync RPC;
@@ -236,19 +244,16 @@ export function CurrentTaskSection({
           setStatus('error')
           return
         }
-        // 从没拿到:BG 已同步(ready≠false)→ 该推确实无任务,收尾 ready(→ null);
-        // 冷启未同步(ready=false / 老 BG 无此字段)→ 保持 loading 骨架,靠下面的
-        // backoff / tasks-updated 广播再拉,避免把冷启空快照误判成「无任务」。
-        if (snap.ready !== false) {
-          setCampaign(null)
-          setStatus('ready')
-        }
+        // 预约写入和插件查询之间可能存在短暂延迟。成功的空快照不能立即
+        // 判定“无任务”,否则面板会静默消失。保留加载态直到最后一次同步。
+        setCampaign(null)
+        setStatus(finalAttempt ? 'missing' : 'loading')
       } catch {
         if (sequence === loadSequence) showReadFailure()
       }
     }
 
-    const refresh = () => {
+    const refresh = (finalAttempt = false) => {
       void sendMessage({ type: 'force-sync' })
         .then((response) => {
           if (cancelled || generation !== accountGeneration.current) return
@@ -258,7 +263,7 @@ export function CurrentTaskSection({
             return
           }
           forceSyncFailed = false
-          return load()
+          return load(true, finalAttempt)
         })
         .catch(() => {
           forceSyncFailed = true
@@ -268,18 +273,19 @@ export function CurrentTaskSection({
     const onVisible = () => {
       if (document.visibilityState === 'visible') refresh()
     }
+    const onResume = () => refresh()
     void load()
     refresh()
-    window.addEventListener('online', refresh)
-    window.addEventListener('pageshow', refresh)
-    window.addEventListener('focus', refresh)
+    window.addEventListener('online', onResume)
+    window.addEventListener('pageshow', onResume)
+    window.addEventListener('focus', onResume)
     document.addEventListener('visibilitychange', onVisible)
-    // 冷启 backoff:BG 首次 syncTasks 可能还没落库,空快照不能当「无任务」。
-    // 逐次重试;命中 ready 后再跑也只是 no-op。
-    const timers = [400, 1200, 2600].map((d) =>
+    // 预约数据到达窗口:每次都要求 BG 刷新,即使 tasks-updated 广播丢失也能
+    // 自愈。15 秒仍为空才显示可重试提示,不再静默隐藏整个面板。
+    const timers = [1_000, 3_000, 7_000, 15_000].map((delay) =>
       setTimeout(() => {
-        if (!cancelled) void load()
-      }, d),
+        if (!cancelled && !gotTask) refresh(delay === 15_000)
+      }, delay),
     )
     // BG 每次 syncTasks 完成广播 tasks-updated(如刚在网页预约完 → 同步 → 任务
     // 出现)。收到就对当前焦点重新归并,让卡片适时浮现 / 更新。
@@ -300,9 +306,9 @@ export function CurrentTaskSection({
     }
     return () => {
       cancelled = true
-      window.removeEventListener('online', refresh)
-      window.removeEventListener('pageshow', refresh)
-      window.removeEventListener('focus', refresh)
+      window.removeEventListener('online', onResume)
+      window.removeEventListener('pageshow', onResume)
+      window.removeEventListener('focus', onResume)
       document.removeEventListener('visibilitychange', onVisible)
       for (const t of timers) clearTimeout(t)
       try {
@@ -487,6 +493,24 @@ export function CurrentTaskSection({
         </div>
       </section>
     )
+  if (status === 'missing')
+    return (
+      <section className="lh-cur-sec">
+        <div className="lh-cur-head">
+          <span className="lh-cur-eyebrow">当前任务</span>
+        </div>
+        <div className="lh-cur-card lh-cur-guide" role="status">
+          未同步到已接任务
+          <button
+            type="button"
+            className="lh-cur-btn on"
+            onClick={() => setReloadVersion((version) => version + 1)}
+          >
+            重新同步
+          </button>
+        </div>
+      </section>
+    )
   // 已确认该推文无任务 → 整段隐藏,卡片回到原样。
   if (!campaign) return null
 
@@ -665,7 +689,7 @@ function CurrentTaskSkeleton() {
   return (
     <section className="lh-cur-sec lh-task-sk">
       <div className="lh-cur-head">
-        <span className="lh-cur-eyebrow">当前任务</span>
+        <span className="lh-cur-eyebrow">正在同步已接任务</span>
         <span className="lh-sk lh-sk-tier" />
       </div>
       <div className="lh-cur-card">
