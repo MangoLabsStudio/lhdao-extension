@@ -1,0 +1,457 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { BinanceProbeObservation } from '@/lib/binance-square-probe'
+import {
+  appendBinanceProbeObservation,
+  handleBinanceProbeRequest,
+  liveBinanceProbeObservations,
+} from '../background'
+
+const NOW = Date.parse('2026-08-04T00:00:00.000Z')
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+function observation(
+  overrides: Partial<BinanceProbeObservation> = {},
+): BinanceProbeObservation {
+  return {
+    id: '123e4567-e89b-42d3-a456-426614174000',
+    method: 'POST',
+    path: '/bapi/example',
+    status: 200,
+    target: { kind: 'CONTENT', id: '335389698745313' },
+    requestShape: { postId: '<target:CONTENT>' },
+    responseShape: { code: '<digits:1>' },
+    capturedAt: new Date(NOW - 1_000).toISOString(),
+    ...overrides,
+  }
+}
+
+function storageHarness(initial: Record<string, unknown> = {}) {
+  const stored = { ...initial }
+  const get = vi.fn(async (key: string) => ({ [key]: stored[key] }))
+  const set = vi.fn(async (value: Record<string, unknown>) => {
+    Object.assign(stored, value)
+  })
+  vi.stubGlobal('chrome', { storage: { session: { get, set } } })
+  return { stored, get, set }
+}
+
+describe('Binance Square probe background store', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('does no storage work when beta capture is disabled', async () => {
+    const { get, set } = storageHarness()
+
+    await expect(
+      liveBinanceProbeObservations({ now: NOW, enabled: false }),
+    ).resolves.toEqual([])
+    await appendBinanceProbeObservation(observation(), {
+      now: NOW,
+      enabled: false,
+    })
+
+    expect(get).not.toHaveBeenCalled()
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('keeps every probe RPC storage-free when beta capture is disabled', async () => {
+    const { get, set } = storageHarness()
+    const requests = [
+      { type: 'get-binance-probe-targets' },
+      {
+        type: 'report-binance-probe-observation',
+        observation: observation(),
+      },
+      { type: 'export-binance-probe-observations' },
+      { type: 'clear-binance-probe-observations' },
+    ] as const
+
+    for (const request of requests) {
+      await handleBinanceProbeRequest(request, { now: NOW, enabled: false })
+    }
+
+    expect(get).not.toHaveBeenCalled()
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('drops invalid and expired observations and compacts storage', async () => {
+    const live = observation()
+    const expired = observation({
+      id: '123e4567-e89b-42d3-a456-426614174001',
+      capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000 - 1).toISOString(),
+    })
+    const { stored, set } = storageHarness({
+      binanceSquareProbeObservations: [
+        expired,
+        { ...live, method: 'GET' },
+        live,
+      ],
+    })
+
+    await expect(
+      liveBinanceProbeObservations({ now: NOW, enabled: true }),
+    ).resolves.toEqual([live])
+    expect(stored.binanceSquareProbeObservations).toEqual([live])
+    expect(set).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not rewrite an already canonical live fixture list', async () => {
+    const value = observation()
+    const { set } = storageHarness({
+      binanceSquareProbeObservations: [value],
+    })
+
+    await expect(
+      liveBinanceProbeObservations({ now: NOW, enabled: true }),
+    ).resolves.toEqual([value])
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('filters future poisoning while preserving exact time boundaries', async () => {
+    const ttlBoundary = observation({
+      id: '123e4567-e89b-42d3-a456-426614174010',
+      status: 210,
+      capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000).toISOString(),
+    })
+    const skewBoundary = observation({
+      id: '123e4567-e89b-42d3-a456-426614174011',
+      status: 211,
+      capturedAt: new Date(NOW + 5 * 60 * 1_000).toISOString(),
+    })
+    const futurePoison = Array.from({ length: 100 }, (_, index) =>
+      observation({
+        id: `123e4567-e89b-42d3-a456-${String(index).padStart(12, '0')}`,
+        status: 300 + index,
+        capturedAt: `9999-12-${String((index % 28) + 1).padStart(2, '0')}T00:00:00.000Z`,
+      }),
+    )
+    const { stored } = storageHarness({
+      binanceSquareProbeObservations: [
+        observation({
+          id: '123e4567-e89b-42d3-a456-426614174012',
+          status: 212,
+          capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000 - 1).toISOString(),
+        }),
+        ttlBoundary,
+        skewBoundary,
+        observation({
+          id: '123e4567-e89b-42d3-a456-426614174013',
+          status: 213,
+          capturedAt: new Date(NOW + 5 * 60 * 1_000 + 1).toISOString(),
+        }),
+        ...futurePoison,
+      ],
+    })
+
+    await expect(
+      liveBinanceProbeObservations({ now: NOW, enabled: true }),
+    ).resolves.toEqual([ttlBoundary, skewBoundary])
+    expect(stored.binanceSquareProbeObservations).toEqual([
+      ttlBoundary,
+      skewBoundary,
+    ])
+  })
+
+  it('rejects out-of-window appends at one millisecond past each boundary', async () => {
+    const ttlBoundary = observation({
+      id: '123e4567-e89b-42d3-a456-426614174020',
+      status: 220,
+      capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000).toISOString(),
+    })
+    const skewBoundary = observation({
+      id: '123e4567-e89b-42d3-a456-426614174021',
+      status: 221,
+      capturedAt: new Date(NOW + 5 * 60 * 1_000).toISOString(),
+    })
+    const { stored } = storageHarness({
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [{ reserved: true }],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [],
+    })
+
+    for (const value of [
+      observation({
+        id: '123e4567-e89b-42d3-a456-426614174022',
+        status: 222,
+        capturedAt: new Date(NOW - 24 * 60 * 60 * 1_000 - 1).toISOString(),
+      }),
+      ttlBoundary,
+      skewBoundary,
+      observation({
+        id: '123e4567-e89b-42d3-a456-426614174023',
+        status: 223,
+        capturedAt: new Date(NOW + 5 * 60 * 1_000 + 1).toISOString(),
+      }),
+    ]) {
+      await appendBinanceProbeObservation(value, { now: NOW, enabled: true })
+    }
+
+    expect(stored.binanceSquareProbeObservations).toEqual([
+      ttlBoundary,
+      skewBoundary,
+    ])
+  })
+
+  it('authorizes only current reserved targets', async () => {
+    const allowed = observation()
+    const unauthorized = observation({
+      id: '123e4567-e89b-42d3-a456-426614174001',
+      target: { kind: 'CONTENT', id: '999999' },
+    })
+    const { stored } = storageHarness({
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [
+            {
+              campaignId: 'reserved',
+              actionType: 'LIKE',
+              targetUrl:
+                'https://www.binance.com/en/square/post/335389698745313',
+              targetContentId: '335389698745313',
+              reserved: true,
+            },
+          ],
+          '999999': [
+            {
+              campaignId: 'available',
+              actionType: 'LIKE',
+              targetUrl: 'https://www.binance.com/en/square/post/999999',
+              targetContentId: '999999',
+              reserved: false,
+            },
+          ],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [],
+    })
+
+    await appendBinanceProbeObservation(unauthorized, {
+      now: NOW,
+      enabled: true,
+    })
+    await appendBinanceProbeObservation(allowed, {
+      now: NOW,
+      enabled: true,
+    })
+
+    expect(stored.binanceSquareProbeObservations).toEqual([allowed])
+  })
+
+  it('deduplicates by sanitized shape and retains the newest capture', async () => {
+    const newer = observation({
+      id: '123e4567-e89b-42d3-a456-426614174001',
+      capturedAt: new Date(NOW - 500).toISOString(),
+    })
+    const older = observation({
+      id: '123e4567-e89b-42d3-a456-426614174002',
+      capturedAt: new Date(NOW - 2_000).toISOString(),
+    })
+    const newest = observation({
+      id: '123e4567-e89b-42d3-a456-426614174003',
+      capturedAt: new Date(NOW).toISOString(),
+    })
+    const harness = storageHarness({
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [{ reserved: true }],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [newer],
+    })
+
+    await appendBinanceProbeObservation(older, { now: NOW, enabled: true })
+    expect(harness.stored.binanceSquareProbeObservations).toEqual([newer])
+
+    await appendBinanceProbeObservation(newest, { now: NOW, enabled: true })
+    expect(harness.stored.binanceSquareProbeObservations).toEqual([newest])
+  })
+
+  it('serializes concurrent appends so neither observation is lost', async () => {
+    const firstReadStarted = deferred()
+    const releaseFirstRead = deferred()
+    const stored: Record<string, unknown> = {
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [{ reserved: true }],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [],
+    }
+    let blockFirstRead = true
+    const get = vi.fn(async (key: string) => {
+      const snapshot = stored[key]
+      if (key === 'binanceSquareProbeObservations' && blockFirstRead) {
+        blockFirstRead = false
+        firstReadStarted.resolve()
+        await releaseFirstRead.promise
+      }
+      return { [key]: snapshot }
+    })
+    const set = vi.fn(async (value: Record<string, unknown>) => {
+      Object.assign(stored, value)
+    })
+    vi.stubGlobal('chrome', { storage: { session: { get, set } } })
+    const first = observation({
+      id: '123e4567-e89b-42d3-a456-426614174001',
+      status: 201,
+      capturedAt: new Date(NOW - 2_000).toISOString(),
+    })
+    const second = observation({
+      id: '123e4567-e89b-42d3-a456-426614174002',
+      status: 202,
+      capturedAt: new Date(NOW - 1_000).toISOString(),
+    })
+
+    const firstAppend = appendBinanceProbeObservation(first, {
+      now: NOW,
+      enabled: true,
+    })
+    await firstReadStarted.promise
+    const secondAppend = appendBinanceProbeObservation(second, {
+      now: NOW,
+      enabled: true,
+    })
+    await Promise.resolve()
+    releaseFirstRead.resolve()
+    await Promise.all([firstAppend, secondAppend])
+
+    expect(stored.binanceSquareProbeObservations).toEqual([first, second])
+  })
+
+  it('orders export and clear after an earlier append mutation', async () => {
+    const taskReadStarted = deferred()
+    const releaseTaskRead = deferred()
+    const stored: Record<string, unknown> = {
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [{ reserved: true }],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [],
+    }
+    let blockTaskRead = true
+    const get = vi.fn(async (key: string) => {
+      const snapshot = stored[key]
+      if (key === 'binanceSquareTasks' && blockTaskRead) {
+        blockTaskRead = false
+        taskReadStarted.resolve()
+        await releaseTaskRead.promise
+      }
+      return { [key]: snapshot }
+    })
+    const set = vi.fn(async (value: Record<string, unknown>) => {
+      Object.assign(stored, value)
+    })
+    vi.stubGlobal('chrome', { storage: { session: { get, set } } })
+    const value = observation()
+
+    const append = appendBinanceProbeObservation(value, {
+      now: NOW,
+      enabled: true,
+    })
+    await taskReadStarted.promise
+    const exported = handleBinanceProbeRequest(
+      { type: 'export-binance-probe-observations' },
+      { now: NOW, enabled: true },
+    )
+    const cleared = handleBinanceProbeRequest(
+      { type: 'clear-binance-probe-observations' },
+      { now: NOW, enabled: true },
+    )
+    releaseTaskRead.resolve()
+
+    await expect(exported).resolves.toEqual({
+      type: 'binance-probe-observations',
+      observations: [value],
+    })
+    await expect(Promise.all([append, cleared])).resolves.toBeDefined()
+    expect(stored.binanceSquareProbeObservations).toEqual([])
+  })
+
+  it('keeps only the newest 100 live observations', async () => {
+    const values = Array.from({ length: 101 }, (_, index) =>
+      observation({
+        id: `123e4567-e89b-42d3-a456-${String(index).padStart(12, '0')}`,
+        status: index,
+        capturedAt: new Date(NOW - 101 + index).toISOString(),
+      }),
+    )
+    const { stored } = storageHarness({
+      binanceSquareProbeObservations: values,
+    })
+
+    const result = await liveBinanceProbeObservations({
+      now: NOW,
+      enabled: true,
+    })
+
+    expect(result).toHaveLength(100)
+    expect(result[0].status).toBe(1)
+    expect(stored.binanceSquareProbeObservations).toEqual(result)
+  })
+
+  it('implements target, report, export, and clear without GraphQL', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const value = observation()
+    const { stored } = storageHarness({
+      binanceSquareTasks: {
+        byContentId: {
+          '335389698745313': [{ reserved: true }],
+        },
+        byAuthorId: {},
+      },
+      binanceSquareProbeObservations: [],
+    })
+
+    await expect(
+      handleBinanceProbeRequest(
+        { type: 'get-binance-probe-targets' },
+        { now: NOW, enabled: true },
+      ),
+    ).resolves.toEqual({
+      type: 'binance-probe-targets',
+      targets: [{ kind: 'CONTENT', id: '335389698745313' }],
+    })
+    await expect(
+      handleBinanceProbeRequest(
+        { type: 'report-binance-probe-observation', observation: value },
+        { now: NOW, enabled: true },
+      ),
+    ).resolves.toEqual({ type: 'ack' })
+    await expect(
+      handleBinanceProbeRequest(
+        { type: 'export-binance-probe-observations' },
+        { now: NOW, enabled: true },
+      ),
+    ).resolves.toEqual({
+      type: 'binance-probe-observations',
+      observations: [value],
+    })
+    await expect(
+      handleBinanceProbeRequest(
+        { type: 'clear-binance-probe-observations' },
+        { now: NOW, enabled: true },
+      ),
+    ).resolves.toEqual({ type: 'ack' })
+    expect(stored.binanceSquareProbeObservations).toEqual([])
+    expect(fetch).not.toHaveBeenCalled()
+  })
+})

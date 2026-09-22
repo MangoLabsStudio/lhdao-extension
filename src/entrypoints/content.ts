@@ -7,8 +7,14 @@ import { createRoot, type Root } from 'react-dom/client'
 import chipCss from '@/components/chip/chip.css?inline'
 import highlightCss from '@/components/chip/highlight.css?inline'
 import { MetadataBadge } from '@/components/chip/MetadataBadge'
-import { SubmitButton } from '@/components/chip/SubmitButton'
-import { SidebarCard } from '@/components/sidebar/SidebarCard'
+import { ProfileFollowCard } from '@/components/profile/ProfileFollowCard'
+import {
+  PromoteButton,
+  PromoteDialog,
+  promoteButtonCss,
+  promoteDialogCss,
+} from '@/components/promote/PromoteDialog'
+import { CurrentTaskSection } from '@/components/sidebar/CurrentTaskSection'
 import sidebarCss from '@/components/sidebar/sidebar.css?inline'
 import { initDwellTracker, onDwellUrlChange } from '@/lib/dwell-tracker'
 import { sendMessage } from '@/lib/messaging'
@@ -23,14 +29,13 @@ import {
 /**
  * Content script — 在 X (Twitter) timeline / 详情页"织入"灯塔任务的视觉信号。
  *
- * 4 个注入点(per article):
+ * 3 个注入点(per article):
  *   ① article 本身 → data-lhdao-active="1" 触发 highlight.css 的背景+ring
  *   ② <time> 旁 → MetadataBadge (Shadow DOM, "🗼 +N LUX")
  *   ③ 匹配任务的 Twitter action button → data-lhdao-glow 触发 halo
- *   ④ role="group" 动作按钮行末尾 → SubmitButton (Shadow DOM, 状态机)
  *
  * 1, 3 不用 React — 文档级 CSS 选择器命中即可。
- * 2, 4 用 Shadow DOM 隔离我们的 Tailwind 样式不污染 Twitter。
+ * 2 用 Shadow DOM 隔离我们的 Tailwind 样式不污染 Twitter。
  */
 
 // ── selectors ───────────────────────────────────────────────────────
@@ -63,30 +68,15 @@ interface MountedArticle {
   roots: Root[]
   glowedButtons: Element[]
   /** 挂载时这条 article 是否是焦点推文(URL 在 /status/<id> 上)。
-   *  用于 scanTimeline 在 SPA 导航后做 focal reconcile —— focal 状态
-   *  变了的 article 需要 unmount 重挂(添加/移除 SubmitButton)。 */
+   *  用于 scanTimeline 在 SPA 导航后做 focal reconcile。 */
   isFocal: boolean
   /** 头像 ring 视觉的目标 <a>(已贴 data-lhdao-follow-ring)。unmount 时清属性 */
   ringedAvatars: Element[]
-  /** 这条 article 是否承担"该 FOLLOW campaign 的 claim 入口"角色 */
-  followClaimCampaignIds: string[]
 }
 
 const mounted = new Map<string, MountedArticle>() // key = tweetId or `follow:<handle>`
 /** tweetId 的 get-tasks RPC await 期间的占位,防止 race 导致双挂载 */
 const inFlight = new Set<string>()
-
-/**
- * 跨 article 的 FOLLOW campaign 去重:某条 follow campaign 的 claim 按钮
- * 仅挂在 timeline 上**第一次扫到**(`mounted` 里第一次出现)的 article。
- * 后续同作者的 article 只挂头像 ring,不再挂 claim,避免视觉刷屏。
- *
- * 注意 trade-off:如果该首条 article 因虚拟化滚动被 Twitter 回收,我们
- * 通过 scanTimeline 的 stale cleanup 把它从 mounted Map 移除并 release
- * 这里对应的 campaignId,下一帧扫到下一条同作者 article 时会重新成为
- * "首条",claim 按钮顺势挪过去。
- */
-const followClaimMountedFor = new Map<string, Element>() // campaignId → article element
 
 /**
  * Content-side 本地任务快照,scanTimeline 同步查 — 避免 per-article
@@ -143,14 +133,6 @@ function bootstrapSnapshot() {
     }, delay)
   }
 }
-
-/** Sidebar 卡片单例挂载状态 (Twitter 任何页面只有一个右侧 sidebar) */
-interface SidebarMountedState {
-  host: HTMLElement
-  root: Root
-  anchor: Element
-}
-let sidebarMounted: SidebarMountedState | null = null
 
 /**
  * 扩展被 reload 后, content script 跟 BG SW 的连接断了 — chrome.runtime
@@ -262,13 +244,14 @@ export default defineContentScript({
 
     const observer = new MutationObserver(scheduleScan)
     observer.observe(document.body, { childList: true, subtree: true })
+    startFocalTaskHostRecovery()
 
     // 启动时立刻拉一次 snapshot + 多次重试兜底 SW 冷启动失败。
     bootstrapSnapshot()
     scheduleScan()
 
     // SPA 导航监听:Twitter 用 pushState 切换路由,焦点 tweet id 会变,
-    // 已挂载的 SubmitButton 需要重新计算 isFocal。
+    // 已挂载的 article 需要重算 focal —— 把 badge 挪到当前焦点 article。
     //
     // 关键 timing bug:pushState 触发的瞬间,Twitter 尚未渲染新 article DOM,
     // 单次 rAF scan 命中不了新页面的推文。MutationObserver 理论上能捕到
@@ -285,10 +268,9 @@ export default defineContentScript({
         getFocalAuthorHandle(),
       )
       // 不再 unmountAll() — 那会让所有 article 闪一下再挂回来。
-      // 让 scanTimeline 里的 focal-reconcile 自己处理:
-      //   - 旧焦点 article 的 state.isFocal=true 但当前 URL 焦点变了
-      //     → reconcile 检测到不一致,unmount 它(去掉 SubmitButton)
-      //   - 新焦点 article 同理,unmount 然后下一帧 scan 重挂(加 button)
+      // 让 scanTimeline 里的 focal-reconcile 自己处理:focal 状态变了的
+      // article 会被 unmount,下一帧 scan 在当前焦点(detail 页)的 article
+      // 节点上重挂 badge/glow/ring。
       // 4 次延时 scan 留着,detail 页 article DOM 渲染晚需要重试。
       scheduleScan()
       setTimeout(scheduleScan, 100)
@@ -345,11 +327,95 @@ function scheduleScan() {
   requestAnimationFrame(() => {
     rafScheduled = false
     scanTimeline()
-    scanSidebar()
-    void scanMembers()
     void scanProfilePage()
+    scanProfileFollowTask()
     scanSensitive()
+    scanPromoteButtons()
+    void scanMemberLogos()
   })
+}
+
+// ── 灯塔成员 logo(时间线作者 handle 后;评论区/回复区不展示)────────
+const MEMBER_LOGO_FLAG = 'data-lhdao-member-logo'
+const MEMBER_LOGO_BUSY = 'data-lhdao-member-logo-busy'
+
+/**
+ * 是否「评论区」article(切记不展示 logo)。
+ * 详情页(URL 带 /status/<focal>)里非焦点 article = 回复/评论 → 评论区。
+ * 非详情页(home / profile / search / list)= 时间线 → false。
+ */
+function isCommentArticle(article: Element): boolean {
+  const focal = getFocalTweetId()
+  if (!focal) return false
+  const tid = extractTweetIdFromArticle(article)
+  return !!tid && tid !== focal
+}
+
+async function scanMemberLogos(): Promise<void> {
+  if (contextDead) return
+  const byHandle = new Map<string, Element[]>()
+  for (const article of document.querySelectorAll('article')) {
+    if (article.getAttribute(MEMBER_LOGO_FLAG)) continue
+    if (article.getAttribute(MEMBER_LOGO_BUSY)) continue
+    if (!isArticleRenderable(article)) continue
+    if (article.parentElement?.closest('article')) continue // 跳过嵌套引用推
+    if (isCommentArticle(article)) continue // 评论区不展示
+    const handle = extractAuthorHandleFromArticle(article)
+    if (!handle) continue
+    if (!byHandle.has(handle)) byHandle.set(handle, [])
+    byHandle.get(handle)?.push(article)
+  }
+  if (byHandle.size === 0) return
+
+  for (const arts of byHandle.values())
+    for (const a of arts) a.setAttribute(MEMBER_LOGO_BUSY, '1')
+
+  try {
+    const r = await sendMessage({
+      type: 'check-lighthouse-members',
+      handles: Array.from(byHandle.keys()),
+    })
+    if (r.type !== 'lighthouse-members-result') return
+    for (const [handle, arts] of byHandle.entries()) {
+      const isMember = !!r.members[handle]
+      for (const art of arts) {
+        art.removeAttribute(MEMBER_LOGO_BUSY)
+        art.setAttribute(MEMBER_LOGO_FLAG, isMember ? 'yes' : 'no')
+        if (isMember) attachMemberLogo(art)
+      }
+    }
+  } catch (e) {
+    for (const arts of byHandle.values())
+      for (const a of arts) a.removeAttribute(MEMBER_LOGO_BUSY)
+    if (handleContextError(e)) return
+  }
+}
+
+/** 在作者 @handle 后插入灯塔 logo(Shadow DOM 隔离)。 */
+function attachMemberLogo(article: Element): void {
+  const userName = article.querySelector('[data-testid="User-Name"]')
+  if (!userName) return
+  if (userName.querySelector('[data-lhdao-member-logo-host]')) return
+
+  // 放在蓝 V(verified badge)后面;没有蓝 V 的成员则放在名字后面
+  // (两种都在 @handle 之前)。
+  const anchor =
+    userName.querySelector(
+      '[data-testid="icon-verified"], svg[aria-label*="认证"], svg[aria-label*="Verified"]',
+    ) ?? userName.querySelector('a[role="link"]')
+
+  const host = document.createElement('span')
+  host.setAttribute('data-lhdao-member-logo-host', '')
+  host.style.display = 'inline-flex'
+  host.style.alignItems = 'center'
+  host.style.verticalAlign = 'middle'
+  host.style.margin = '0 3px'
+  const iconUrl = chrome.runtime.getURL('icon/128.png')
+  const shadow = host.attachShadow({ mode: 'open' })
+  shadow.innerHTML = `<style>:host{all:initial}img{width:15px;height:15px;border-radius:50%;display:block}</style><img src="${iconUrl}" alt="灯塔成员" title="灯塔成员" />`
+
+  if (anchor) anchor.insertAdjacentElement('afterend', host)
+  else userName.appendChild(host)
 }
 
 /**
@@ -396,7 +462,8 @@ function logScanDiag(articleCount: number, matchedCount: number) {
   )
 }
 
-function scanTimeline() {
+export function scanTimeline() {
+  reconcileFocalTaskHost()
   // 没拿到任务快照前不扫(refreshTasksSnapshot 拉完会自动 scheduleScan)
   if (!tasksSnapshot) {
     // 第一次没 snapshot 时 log 一次,后续重复跳过(只在状态转变到非空时再 log)
@@ -414,14 +481,10 @@ function scanTimeline() {
   //   a) Twitter SPA 把同 tweetId 的 article DOM 换了节点(timeline 卡
   //      → 详情页 article)。旧的 article.isConnected === false。
   //   b) URL 焦点切了(/status/<a> → /status/<b> 或退到 /home),
-  //      旧焦点 article 需要去掉 SubmitButton,新焦点需要补上
-  //      SubmitButton。用 state.isFocal !== 当前 isFocal 判定。
+  //      badge 需要从旧焦点 article 节点挪到新焦点 article 节点。
+  //      用 state.isFocal !== 当前 isFocal 判定。
   //   c) 旧的 mounted article 不再可见(SPA 隐藏 timeline article),
   //      需要 unmount 让 scan 重新选可见的同 tweetId article 挂。
-  //
-  // FOLLOW 额外清理:从 mounted 移除时,顺带释放 followClaimMountedFor
-  // 里属于这条 article 的 campaignId,让下次 scan 时下一个还活着的同
-  // 作者 article 接过 claim 角色。
   const currentFocal = getFocalTweetId()
 
   // —— Dwell metadata 升级 ——
@@ -437,7 +500,6 @@ function scanTimeline() {
     const focalChanged = state.isFocal !== (currentFocal === tweetId)
     const hidden = !stale && !isArticleRenderable(state.article)
     if (stale || focalChanged || hidden) {
-      releaseFollowClaim(state)
       unmountArticle(state)
       mounted.delete(tweetId)
     }
@@ -516,6 +578,101 @@ function scanTimeline() {
   logScanDiag(articleByTweetId.size, matchedCount)
 }
 
+// The focal panel owns its loading lifecycle, independently of cached task matches.
+let focalTaskHost: {
+  article: Element
+  tweetId: string
+  host: HTMLElement
+  root: Root
+} | null = null
+
+const TWEET_ACTION_SELECTOR = [
+  '[data-testid="reply"]',
+  '[data-testid="retweet"]',
+  '[data-testid="unretweet"]',
+  '[data-testid="like"]',
+  '[data-testid="unlike"]',
+].join(', ')
+
+function findTweetActionRow(article: Element): Element | null {
+  for (const group of article.querySelectorAll('[role="group"]')) {
+    if (
+      group.closest('article') === article &&
+      group.querySelector(TWEET_ACTION_SELECTOR)
+    ) {
+      return group
+    }
+  }
+
+  const buttons = [...article.querySelectorAll(TWEET_ACTION_SELECTOR)].filter(
+    (button) => button.closest('article') === article,
+  )
+  if (buttons.length === 0) return null
+
+  let row = buttons[0].parentElement
+  while (
+    row &&
+    row !== article &&
+    !buttons.every((button) => row?.contains(button))
+  ) {
+    row = row.parentElement
+  }
+  return row && row !== article ? row : buttons[0].parentElement
+}
+
+export function startFocalTaskHostRecovery(): () => void {
+  const timer = setInterval(() => {
+    if (!contextDead && getFocalTweetId() && !focalTaskHost?.host.isConnected) {
+      scanTimeline()
+    }
+  }, 2_000)
+  return () => clearInterval(timer)
+}
+
+function reconcileFocalTaskHost() {
+  const tweetId = getFocalTweetId()
+  const candidates = tweetId
+    ? [...document.querySelectorAll('article')].filter(
+        (article) =>
+          extractTweetIdFromArticle(article) === tweetId &&
+          isArticleRenderable(article),
+      )
+    : []
+  const article = candidates.at(-1)
+  const actionRow = article ? findTweetActionRow(article) : null
+  if (focalTaskHost && focalTaskHost.tweetId === tweetId) {
+    // Preserve state across X replacing either the controls or the entire
+    // article. Keep the panel detached until the new controls are available.
+    if (article && actionRow?.parentElement) {
+      if (
+        focalTaskHost.host.parentElement !== actionRow.parentElement ||
+        focalTaskHost.host.previousElementSibling !== actionRow
+      ) {
+        actionRow.parentElement.insertBefore(
+          focalTaskHost.host,
+          actionRow.nextSibling,
+        )
+      }
+      focalTaskHost.article = article
+    } else {
+      focalTaskHost.host.remove()
+    }
+    return
+  }
+  if (focalTaskHost) {
+    focalTaskHost.root.unmount()
+    focalTaskHost.host.remove()
+    focalTaskHost = null
+  }
+  if (!article || !tweetId || !actionRow?.parentElement) return
+  const host = createShadowHost('lhdao-inline-task', 'inline')
+  host.style.display = 'block'
+  host.style.width = '100%'
+  actionRow.parentElement.insertBefore(host, actionRow.nextSibling)
+  const root = renderInto(host, createElement(CurrentTaskSection), sidebarCss)
+  focalTaskHost = { article, tweetId, host, root }
+}
+
 // ── mount / unmount ─────────────────────────────────────────────────
 
 function mountArticle(
@@ -533,38 +690,14 @@ function mountArticle(
     roots: [],
     glowedButtons: [],
     ringedAvatars: [],
-    followClaimCampaignIds: [],
     isFocal,
   }
 
   // —— 拆分任务来源 ——
-  // followTasks 全部都贴 ring(Q2=c:每条同作者 article 都加 ring 视觉)。
-  // 但 claim 按钮 dedup:某 follow campaign 的 claim 已经被别的 article
-  // 占了 → 这条 article 不挂 claim。本 article 是首次承担 claim 的
-  // followCampaigns 进入 ownedFollowTasks。
+  // followTasks → 头像 ring 视觉;nonFollowTasks(LIKE/RT/COMMENT)→ 高亮
+  // Twitter 原生动作按钮。抢单按钮已下线,无 claim/ownedFollow 计算。
   const followTasks = tasks.filter((t) => t.actionType === 'FOLLOW')
-  const ownedFollowTasks: CampaignTaskCache[] = []
-  for (const t of followTasks) {
-    const owner = followClaimMountedFor.get(t.campaignId)
-    if (owner && owner !== article && owner.isConnected) {
-      // 已被别人占,跳过 claim(ring 还会挂)
-      continue
-    }
-    // 占下 claim 角色
-    followClaimMountedFor.set(t.campaignId, article)
-    state.followClaimCampaignIds.push(t.campaignId)
-    ownedFollowTasks.push(t)
-  }
-
   const nonFollowTasks = tasks.filter((t) => t.actionType !== 'FOLLOW')
-
-  // claim 按钮的 tasks 集合:
-  //   - 来源推文上的 LIKE/RT/COMMENT/COMMENT_LIKE:仅在 isFocal (detail 页) 显示
-  //   - FOLLOW 的 ownedFollowTasks:无论 isFocal 都显示(timeline 上头像旁可点)
-  const claimTasks: CampaignTaskCache[] = [
-    ...(isFocal ? nonFollowTasks : []),
-    ...ownedFollowTasks,
-  ]
 
   try {
     // ② Metadata badge — 顶部 caret 旁。展示**总奖励**,所有 tasks 都纳入计算。
@@ -606,48 +739,11 @@ function mountArticle(
       }
     }
 
-    // ④ Submit button — 决定逻辑:
-    //   - isFocal (detail 页): 含所有 LIKE/RT/COMMENT + 本 article 拥有的 FOLLOW
-    //   - timeline (非 isFocal): 仅当本 article 拥有 FOLLOW claim 才挂
-    //
-    // 挂载位置:
-    //   - isFocal 走 action row(reply / RT / like 按钮同行,稳定不会被
-    //     compose 模态卸载,原 LIKE/RT 任务的语境)
-    //   - timeline-FOLLOW 走 action row 同样位置,跟 detail 页保持一致
-    if (claimTasks.length > 0) {
-      const actionRow = findActionRow(article)
-      if (actionRow) {
-        const host = createShadowHost('lhdao-submit', 'inline-flex')
-        host.style.alignItems = 'center'
-        actionRow.appendChild(host)
-        const root = renderInto(
-          host,
-          createElement(SubmitButton, { tasks: claimTasks }),
-        )
-        state.hosts.push(host)
-        state.roots.push(root)
-      }
-    }
-
     return state
   } catch (e) {
     console.warn('[lhdao] mountArticle failed', e)
     // 部分挂载成功也算,后续 unmount 会清干净
     return state.hosts.length > 0 ? state : null
-  }
-}
-
-/**
- * 该 article 被 unmount / 离开 DOM 之前,从全局 follow claim 注册表里
- * 释放它认领过的 campaignId,让下一次 scan 时下一个还活着的同作者 article
- * 接过 claim 角色。
- */
-function releaseFollowClaim(state: MountedArticle) {
-  for (const campaignId of state.followClaimCampaignIds) {
-    const current = followClaimMountedFor.get(campaignId)
-    if (current === state.article) {
-      followClaimMountedFor.delete(campaignId)
-    }
   }
 }
 
@@ -683,28 +779,6 @@ function findTopRightAnchor(article: Element): Element | null {
   return null
 }
 
-/**
- * 找推文底部的 action button 行(包含 reply / RT / like / bookmark / share
- * 的横排 role="group" 容器)。submit/claim 按钮塞到这一行最后,跟原生
- * action 同排。
- */
-function findActionRow(article: Element): Element | null {
-  const groups = article.querySelectorAll('[role="group"]')
-  for (const g of groups) {
-    if (
-      g.querySelector('[data-testid="like"]') ||
-      g.querySelector('[data-testid="reply"]') ||
-      g.querySelector('[data-testid="retweet"]')
-    ) {
-      return g
-    }
-  }
-  const like =
-    article.querySelector('[data-testid="like"]') ??
-    article.querySelector('[data-testid="reply"]')
-  return like?.parentElement?.parentElement ?? null
-}
-
 function unmountArticle(state: MountedArticle) {
   for (const root of state.roots) {
     try {
@@ -725,15 +799,18 @@ function unmountArticle(state: MountedArticle) {
   state.article.removeAttribute(ARTICLE_FLAG)
 }
 
-function unmountAll() {
+export function unmountAll() {
+  if (focalTaskHost) {
+    focalTaskHost.root.unmount()
+    focalTaskHost.host.remove()
+    focalTaskHost = null
+  }
   for (const state of mounted.values()) {
-    releaseFollowClaim(state)
     unmountArticle(state)
   }
   mounted.clear()
   inFlight.clear()
-  followClaimMountedFor.clear()
-  unmountSidebar()
+  unmountFollowCard()
   // 兜底:清理 stale 标记(article 可能已离开 DOM)+ 拖延 host(若有)
   for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
     a.removeAttribute(ARTICLE_FLAG)
@@ -744,107 +821,6 @@ function unmountAll() {
   for (const h of document.querySelectorAll('[data-lhdao-host="1"]')) {
     h.remove()
   }
-}
-
-// ── Sidebar card injection ──────────────────────────────────────────
-
-/**
- * 找 Twitter 右侧 sidebar 的"订阅 Premium"卡片(或 "Subscribe to
- * Premium"英文版),作为 anchor 插我们卡片到它**上方**。
- *
- * 探测策略(任一命中即返回):
- *   1. [data-testid="sidebarColumn"] 内含 "订阅 Premium"/"Premium"/
- *      "Subscribe" 文本的最近 section/div
- *   2. [aria-label*="Premium"] 元素 (升级 banner 自身)
- *   3. 兜底:sidebarColumn 内第一个 section
- */
-function findSidebarPremiumAnchor(): {
-  anchor: Element
-  parent: Element
-} | null {
-  const sidebar = document.querySelector('[data-testid="sidebarColumn"]')
-  if (!sidebar) return null
-
-  // 候选 1: aria-label
-  const premiumByAria = sidebar.querySelector(
-    'aside[aria-label*="Premium" i], section[aria-label*="Premium" i]',
-  )
-  if (premiumByAria?.parentElement) {
-    return { anchor: premiumByAria, parent: premiumByAria.parentElement }
-  }
-
-  // 候选 2: 找 sidebar 内含有"Premium"文本的最外层卡片块
-  // Twitter sidebar 内部结构通常是嵌套 div,卡片之间是 flex column sibling。
-  // 找文本节点再向上爬到 parent of "search box section"
-  const candidates = sidebar.querySelectorAll('section, aside, div')
-  for (const el of candidates) {
-    if (
-      el.children.length > 0 &&
-      el.parentElement &&
-      /订阅\s*Premium|Subscribe to Premium|Subscribe\s*$/i.test(
-        el.textContent?.slice(0, 100) ?? '',
-      )
-    ) {
-      // 向上找到 sidebar 下"卡片级"的容器 — 通常是 sidebar 的孙子级
-      let card: Element = el
-      while (
-        card.parentElement &&
-        card.parentElement !== sidebar &&
-        !card.parentElement.matches('[data-testid="sidebarColumn"] > div')
-      ) {
-        card = card.parentElement
-        // 不向上超过 5 层防越界
-        if (card.parentElement === sidebar) break
-      }
-      if (card.parentElement) {
-        return { anchor: card, parent: card.parentElement }
-      }
-    }
-  }
-
-  // 候选 3 (兜底):sidebar 内第一个 section
-  const firstSection = sidebar.querySelector('section')
-  if (firstSection?.parentElement) {
-    return { anchor: firstSection, parent: firstSection.parentElement }
-  }
-
-  return null
-}
-
-function scanSidebar() {
-  if (contextDead) return
-
-  // 已经挂好且 anchor 仍在 DOM → 不动
-  if (sidebarMounted?.host.isConnected && sidebarMounted?.anchor.isConnected) {
-    return
-  }
-
-  // 老 host 失效 → 拆掉
-  if (sidebarMounted && !sidebarMounted.host.isConnected) {
-    unmountSidebar()
-  }
-
-  // 找新 anchor
-  const found = findSidebarPremiumAnchor()
-  if (!found) return // sidebar 还没渲染出来,下一轮 scan 再来
-
-  const host = createShadowHost('lhdao-sidebar', 'inline')
-  host.style.display = 'block'
-  host.style.width = '100%'
-  found.parent.insertBefore(host, found.anchor)
-  const root = renderInto(host, createElement(SidebarCard), sidebarCss)
-  sidebarMounted = { host, root, anchor: found.anchor }
-}
-
-function unmountSidebar() {
-  if (!sidebarMounted) return
-  try {
-    sidebarMounted.root.unmount()
-  } catch {
-    // ignore
-  }
-  sidebarMounted.host.remove()
-  sidebarMounted = null
 }
 
 // ── shadow DOM helpers ──────────────────────────────────────────────
@@ -934,128 +910,92 @@ function renderInto(
   return root
 }
 
+// ── 一键推广按钮(每条推文动作行注入)──────────────────────────────
+const PROMOTE_FLAG = 'data-lhdao-promote'
+
+function scanPromoteButtons(): void {
+  if (contextDead) return
+  for (const article of document.querySelectorAll('article')) {
+    if (article.getAttribute(PROMOTE_FLAG)) continue
+    if (!isArticleRenderable(article)) continue
+    const tweetId = extractTweetIdFromArticle(article)
+    if (!tweetId) continue
+    const actionRow = article.querySelector('[role="group"]')
+    if (!actionRow) continue
+    article.setAttribute(PROMOTE_FLAG, '1')
+    const handle = extractAuthorHandleFromArticle(article)
+    const tweetUrl = handle
+      ? `https://x.com/${handle}/status/${tweetId}`
+      : `https://x.com/i/status/${tweetId}`
+    const host = createShadowHost('lhdao-promote', 'inline-flex')
+    host.style.alignItems = 'center'
+    actionRow.appendChild(host)
+    renderInto(
+      host,
+      createElement(PromoteButton, {
+        onOpen: () => openPromoteDialog(tweetUrl),
+      }),
+      promoteButtonCss,
+    )
+  }
+}
+
+function openPromoteDialog(tweetUrl: string): void {
+  const host = createShadowHost('lhdao-promote-dialog', 'inline')
+  host.style.position = 'fixed'
+  host.style.inset = '0'
+  host.style.zIndex = '2147483647'
+  document.body.appendChild(host)
+  let root: Root | null = null
+  const onClose = () => {
+    root?.unmount()
+    host.remove()
+  }
+  root = renderInto(
+    host,
+    createElement(PromoteDialog, { tweetUrl, onClose }),
+    promoteDialogCss,
+  )
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // Lighthouse member tagging — Feature A
 // ════════════════════════════════════════════════════════════════════════
 //
-// 两个独立 surface:
-//   1. Timeline:每条 article 的 author handle → 是成员则在 User-Name 旁
-//      注入小 chip "灯塔成员"
-//   2. Profile 页(URL 是 /<handle>):成员则在 bio 下方注入 badge
+// 只在 Profile 页(URL 是 /<handle>):成员则在 bio 下方注入 badge。
 //
-// BG SW 维护 LRU cache(5min TTL),content 这边不缓存 — 简单 set 一个
-// `data-lhdao-member` attribute 标记已扫过的 article,防止重复 RPC。
-
-const MEMBER_FLAG = 'data-lhdao-member'
-const MEMBER_BUSY = 'data-lhdao-member-busy'
+// (timeline / 评论区的逐条 article "灯塔成员" chip 已下线 — 不再在 feed
+//  和评论列表里标注成员。)
+//
+// BG SW 维护 LRU cache(5min TTL),content 这边不缓存。
 
 const RESERVED_TWITTER_PATHS = new Set([
-  'home', 'explore', 'notifications', 'messages', 'bookmarks', 'lists',
-  'profile', 'settings', 'login', 'logout', 'signup', 'search', 'compose',
-  'i', 'about', 'tos', 'privacy', 'jobs', 'help', 'communities', 'topics',
-  'verified-followers', 'connect_people', 'following', 'followers',
+  'home',
+  'explore',
+  'notifications',
+  'messages',
+  'bookmarks',
+  'lists',
+  'profile',
+  'settings',
+  'login',
+  'logout',
+  'signup',
+  'search',
+  'compose',
+  'i',
+  'about',
+  'tos',
+  'privacy',
+  'jobs',
+  'help',
+  'communities',
+  'topics',
+  'verified-followers',
+  'connect_people',
+  'following',
+  'followers',
 ])
-
-async function scanMembers(): Promise<void> {
-  if (contextDead) return
-
-  // 收集 visible article + 未扫过的 author handle
-  const articles = document.querySelectorAll('article')
-  const articleByHandle = new Map<string, Element[]>()
-  for (const article of articles) {
-    if (article.getAttribute(MEMBER_FLAG)) continue
-    if (article.getAttribute(MEMBER_BUSY)) continue
-    if (!isArticleRenderable(article)) continue
-    const handle = extractAuthorHandleFromArticle(article)
-    if (!handle) continue
-    if (!articleByHandle.has(handle)) articleByHandle.set(handle, [])
-    articleByHandle.get(handle)!.push(article)
-  }
-  if (articleByHandle.size === 0) return
-
-  // 占用 BUSY flag 避免并发 rAF 重复发 RPC
-  for (const arts of articleByHandle.values()) {
-    for (const a of arts) a.setAttribute(MEMBER_BUSY, '1')
-  }
-
-  try {
-    const r = await sendMessage({
-      type: 'check-lighthouse-members',
-      handles: Array.from(articleByHandle.keys()),
-    })
-    if (r.type !== 'lighthouse-members-result') return
-
-    for (const [handle, arts] of articleByHandle.entries()) {
-      const member = r.members[handle]
-      for (const art of arts) {
-        art.removeAttribute(MEMBER_BUSY)
-        art.setAttribute(MEMBER_FLAG, member ? 'yes' : 'no')
-        if (member) attachMemberChip(art, member)
-      }
-    }
-  } catch (e) {
-    // 失败 → 清掉 BUSY 让下次 rAF 重试,但不标 FLAG(下次还会再查)
-    for (const arts of articleByHandle.values()) {
-      for (const a of arts) a.removeAttribute(MEMBER_BUSY)
-    }
-    if (handleContextError(e)) return
-  }
-}
-
-function attachMemberChip(article: Element, member: LighthouseMember): void {
-  const userName = article.querySelector('[data-testid="User-Name"]')
-  if (!userName) return
-  if (userName.querySelector('[data-lhdao-member-chip]')) return
-
-  const host = document.createElement('span')
-  host.setAttribute('data-lhdao-member-chip', '')
-  host.style.display = 'inline-flex'
-  host.style.verticalAlign = 'middle'
-  host.style.marginLeft = '4px'
-
-  const shadow = host.attachShadow({ mode: 'open' })
-  const tier = member.tier ? `TIER ${escapeHtml(member.tier)}` : 'member'
-  const iconUrl = chrome.runtime.getURL('icon/128.png')
-  shadow.innerHTML = `
-    <style>${MEMBER_CHIP_CSS}</style>
-    <span class="chip" title="Lighthouse · ${tier} · ${escapeHtml(member.displayName)}">
-      <img class="mark" src="${iconUrl}" alt="" />
-      <span class="label">灯塔成员</span>
-    </span>
-  `
-  userName.appendChild(host)
-}
-
-const MEMBER_CHIP_CSS = `
-  :host { all: initial; }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 1px 7px 1px 5px;
-    background: linear-gradient(135deg, #0D9488 0%, #06B6D4 100%);
-    color: #fff;
-    border-radius: 999px;
-    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    font-size: 10.5px;
-    font-weight: 700;
-    line-height: 16px;
-    letter-spacing: 0.01em;
-    box-shadow:
-      0 1px 0 rgba(255,255,255,0.30) inset,
-      0 2px 6px -1px rgba(13,148,136,0.40);
-    vertical-align: middle;
-    user-select: none;
-    cursor: default;
-  }
-  .mark {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-    border-radius: 50%;
-  }
-  .label { white-space: nowrap; }
-`
 
 // ── Profile page badge ──────────────────────────────────────────────
 
@@ -1111,7 +1051,7 @@ async function scanProfilePage(): Promise<void> {
 
   // 找 bio anchor
   const bio = document.querySelector('[data-testid="UserDescription"]')
-  if (!bio || !bio.parentElement) {
+  if (!bio?.parentElement) {
     // bio 可能还没渲染,下次 rAF 再试
     return
   }
@@ -1130,6 +1070,111 @@ function extractProfileHandleFromUrl(pathname: string): string | null {
   const handle = m[1].toLowerCase()
   if (RESERVED_TWITTER_PATHS.has(handle)) return null
   return handle
+}
+
+// ── [profile 关注任务卡] 被关注目标的主页:高亮原生「关注」按钮 + 注入任务卡 ──
+let followCardState: {
+  host: HTMLElement
+  root: Root
+  handle: string
+} | null = null
+let glowedFollowBtn: Element | null = null
+
+/** 找 profile 头部的原生「关注」按钮(testid 以 -follow 结尾;已关注是 -unfollow)。
+ *  限定在 primaryColumn 内,避开「谁值得关注」侧栏。 */
+function findFollowButton(): HTMLElement | null {
+  const scope =
+    document.querySelector('[data-testid="primaryColumn"]') ?? document
+  return (
+    scope.querySelector<HTMLElement>('[data-testid$="-follow"]') ??
+    scope.querySelector<HTMLElement>('button[aria-label^="Follow @"]') ??
+    scope.querySelector<HTMLElement>('button[aria-label^="关注 @"]')
+  )
+}
+
+/** 给关注按钮贴 glow 属性(CSS 在 highlight.css);换按钮/消失时清旧的。 */
+function glowFollowButton(): boolean {
+  const btn = findFollowButton()
+  if (glowedFollowBtn && glowedFollowBtn !== btn) {
+    glowedFollowBtn.removeAttribute('data-lhdao-follow-glow')
+    glowedFollowBtn = null
+  }
+  if (btn && !btn.hasAttribute('data-lhdao-follow-glow')) {
+    btn.setAttribute('data-lhdao-follow-glow', '1')
+    glowedFollowBtn = btn
+  }
+  return !!btn
+}
+
+function unmountFollowCard(): void {
+  if (glowedFollowBtn) {
+    glowedFollowBtn.removeAttribute('data-lhdao-follow-glow')
+    glowedFollowBtn = null
+  }
+  if (followCardState) {
+    try {
+      followCardState.root.unmount()
+    } catch {
+      // ignore
+    }
+    followCardState.host.remove()
+    followCardState = null
+  }
+  document.querySelectorAll('[data-lhdao-follow-card]').forEach((el) => {
+    el.remove()
+  })
+}
+
+function scanProfileFollowTask(): void {
+  if (contextDead) return
+  const handle = extractProfileHandleFromUrl(location.pathname)
+  const followTask =
+    handle && tasksSnapshot
+      ? (tasksSnapshot.byAuthor[handle] ?? []).find(
+          (t) => t.actionType === 'FOLLOW',
+        )
+      : undefined
+
+  // 不是 profile 页 / 该主页无关注任务 / 换了目标 → 清理旧卡
+  if (!handle || !followTask) {
+    unmountFollowCard()
+    return
+  }
+  if (followCardState && followCardState.handle !== handle) {
+    unmountFollowCard()
+  }
+
+  // 每次 scan 都兜底高亮(X 会重渲染按钮)
+  const btnPresent = glowFollowButton()
+
+  // 已挂且卡还在 DOM 里 → 不重复挂
+  if (followCardState?.host.isConnected) return
+  // 状态残留但节点被 X 重渲染冲掉 → 卸载后重挂
+  if (followCardState) unmountFollowCard()
+
+  // 锚点:UserName 区块(profile 头部,始终存在);未渲染则下轮 rAF 再试
+  const anchor = document.querySelector('[data-testid="UserName"]')
+  if (!anchor?.parentElement) return
+  if (document.querySelector('[data-lhdao-follow-card]')) return
+
+  const host = createShadowHost('lhdao-follow-card', 'inline-block')
+  host.style.display = 'block'
+  host.style.width = '100%'
+  host.setAttribute('data-lhdao-follow-card', '1')
+  anchor.parentElement.insertBefore(host, anchor.nextSibling)
+  const root = renderInto(
+    host,
+    createElement(ProfileFollowCard, {
+      campaignId: followTask.campaignId,
+      targetHandle: handle,
+      reward: followTask.expectedReward,
+      reserved: followTask.reserved === true,
+      followButtonPresent: btnPresent,
+    }),
+    // 隔离页面 CSS 继承(font/color 等),但保 block 让卡片占满宽度
+    ':host{all:initial;display:block}',
+  )
+  followCardState = { host, root, handle }
 }
 
 function attachProfileBadge(bioEl: Element, member: LighthouseMember): void {

@@ -1,8 +1,9 @@
 import * as React from 'react'
+import { CAPTURE_DEBUG } from '@/lib/capture-debug'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
-import { ME_QUERY, type MeResult } from '@/lib/queries'
 import { sendMessage } from '@/lib/messaging'
+import { ME_QUERY, type MeResult } from '@/lib/queries'
 import { localStore } from '@/lib/storage'
 import type { PairingState } from '@/types/messages'
 
@@ -172,6 +173,7 @@ export function App() {
       )}
 
       <SensitiveToggleCard />
+      <BinanceProbePanel />
 
       <footer className="mt-12 border-t border-slate-200 pt-4 text-[11px] text-slate-400 dark:border-slate-800 dark:text-slate-600">
         <p>
@@ -616,7 +618,15 @@ function PrimaryPairCard({
       <section className="mt-8 rounded-2xl border border-rose-200 bg-rose-50 p-6 dark:border-rose-900/40 dark:bg-rose-950/30">
         <div className="flex items-center gap-3">
           <span className="grid h-10 w-10 place-items-center rounded-full bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden
+            >
               <title>error</title>
               <path d="M12 8v5" strokeLinecap="round" />
               <circle cx="12" cy="16.5" r="0.6" fill="currentColor" />
@@ -663,7 +673,17 @@ function PrimaryPairCard({
         className="mt-5 inline-flex items-center gap-2 rounded-lg bg-gradient-to-br from-teal-600 to-cyan-500 px-5 py-2.5 text-[13.5px] font-bold text-white shadow-[0_1px_0_rgba(255,255,255,0.3)_inset,0_4px_10px_-2px_rgba(13,148,136,0.4)] transition hover:brightness-105"
       >
         立即登录
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
           <title>arrow</title>
           <path d="M5 12h14M13 6l6 6-6 6" />
         </svg>
@@ -779,7 +799,11 @@ function SensitiveToggleCard() {
               d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
               strokeLinejoin="round"
             />
-            <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d="M9 12l2 2 4-4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </div>
         <div className="min-w-0 flex-1">
@@ -814,6 +838,142 @@ function SensitiveToggleCard() {
                 : 'absolute left-[3px] top-[3px] block h-5 w-5 rounded-full bg-white shadow transition'
             }
           />
+        </button>
+      </div>
+    </section>
+  )
+}
+
+export function BinanceProbePanel() {
+  const [count, setCount] = React.useState(0)
+  const [copied, setCopied] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+  const [status, setStatus] = React.useState<string | null>(null)
+  const generation = React.useRef(0)
+  const mounted = React.useRef(false)
+
+  React.useEffect(() => {
+    mounted.current = true
+    const current = ++generation.current
+    if (!CAPTURE_DEBUG) {
+      return () => {
+        mounted.current = false
+        generation.current += 1
+      }
+    }
+    void sendMessage({ type: 'export-binance-probe-observations' })
+      .then((response) => {
+        if (
+          mounted.current &&
+          current === generation.current &&
+          response.type === 'binance-probe-observations'
+        ) {
+          setCount(response.observations.length)
+        }
+      })
+      .catch(() => {
+        if (mounted.current && current === generation.current) {
+          setStatus('加载失败')
+        }
+      })
+    return () => {
+      mounted.current = false
+      generation.current += 1
+    }
+  }, [])
+
+  if (!CAPTURE_DEBUG) return null
+
+  const copy = async () => {
+    const current = ++generation.current
+    setBusy(true)
+    setCopied(false)
+    setStatus(null)
+    try {
+      const response = await sendMessage({
+        type: 'export-binance-probe-observations',
+      })
+      if (!mounted.current || current !== generation.current) return
+      if (response.type !== 'binance-probe-observations') {
+        setStatus('复制失败')
+        return
+      }
+      await navigator.clipboard.writeText(
+        JSON.stringify(response.observations, null, 2),
+      )
+      if (!mounted.current || current !== generation.current) return
+      setCount(response.observations.length)
+      setCopied(true)
+    } catch {
+      if (mounted.current && current === generation.current) {
+        setStatus('复制失败')
+      }
+    } finally {
+      if (mounted.current && current === generation.current) {
+        setBusy(false)
+      }
+    }
+  }
+
+  const clear = async () => {
+    const current = ++generation.current
+    setBusy(true)
+    setStatus(null)
+    try {
+      const response = await sendMessage({
+        type: 'clear-binance-probe-observations',
+      })
+      if (!mounted.current || current !== generation.current) return
+      if (response.type !== 'ack') {
+        setStatus('清空失败')
+        return
+      }
+      setCount(0)
+      setCopied(false)
+    } catch {
+      if (mounted.current && current === generation.current) {
+        setStatus('清空失败')
+      }
+    } finally {
+      if (mounted.current && current === generation.current) {
+        setBusy(false)
+      }
+    }
+  }
+
+  return (
+    <section className="mt-6 rounded-2xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-900/60 dark:bg-amber-950/30">
+      <h2 className="text-[14px] font-bold text-amber-950 dark:text-amber-100">
+        Binance Square Beta Probe
+      </h2>
+      <p className="mt-1 text-[12px] leading-relaxed text-amber-800 dark:text-amber-300">
+        已采集 {count} 条脱敏 fixture。数据仅保留在当前浏览器 session
+        24h，不会自动上传。
+      </p>
+      {status && (
+        <p
+          aria-live="polite"
+          className="mt-2 text-[12px] font-semibold text-rose-700 dark:text-rose-300"
+        >
+          {status}
+        </p>
+      )}
+      <div className="mt-4 flex gap-2">
+        <button
+          type="button"
+          onClick={copy}
+          disabled={busy}
+          className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {copied ? '已复制' : '复制脱敏 fixtures'}
+        </button>
+        <button
+          type="button"
+          onClick={clear}
+          disabled={busy}
+          className="rounded-lg border border-amber-300 px-3 py-1.5 text-[12px] font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/50"
+        >
+          清空
         </button>
       </div>
     </section>
