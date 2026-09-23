@@ -54,6 +54,7 @@ export function CurrentTaskSection({
   const [focalId, setFocalId] = React.useState<string | null>(() =>
     focalIdFromUrl(),
   )
+  const [dismissedTask, setDismissedTask] = React.useState<string | null>(null)
   const accountGeneration = React.useRef(0)
   const [accountVersion, setAccountVersion] = React.useState(0)
   const [reloadVersion, setReloadVersion] = React.useState(0)
@@ -283,7 +284,7 @@ export function CurrentTaskSection({
     window.addEventListener('focus', onResume)
     document.addEventListener('visibilitychange', onVisible)
     // 预约数据到达窗口:每次都要求 BG 刷新,即使 tasks-updated 广播丢失也能
-    // 自愈。15 秒仍为空才显示可重试提示,不再静默隐藏整个面板。
+    // 自愈。无匹配任务时保持隐藏，不打扰普通推文浏览。
     const timers = [1_000, 3_000, 7_000, 15_000].map((delay) =>
       setTimeout(() => {
         if (!cancelled && !gotTask) refresh(delay === 15_000)
@@ -470,10 +471,26 @@ export function CurrentTaskSection({
     void sendMessage({ type: 'open-task-hall' })
   }, [])
   React.useEffect(() => {
-    if (phase !== 'success') return
+    if (phase !== 'success' || dismissedTask === `${accountVersion}:${focalId}`)
+      return
     const id = setTimeout(goTaskHall, TASK_HALL_OPEN_MS)
     return () => clearTimeout(id)
-  }, [phase, goTaskHall])
+  }, [phase, goTaskHall, dismissedTask, accountVersion, focalId])
+
+  // Ordinary tweets have no task: keep background recovery invisible.
+  const taskKey = `${accountVersion}:${focalId}`
+  if (!campaign || dismissedTask === taskKey || focalId !== focalIdFromUrl())
+    return null
+  const closeButton = (
+    <button
+      type="button"
+      className="lh-cur-close"
+      aria-label="关闭任务面板"
+      onClick={() => setDismissedTask(taskKey)}
+    >
+      ×
+    </button>
+  )
 
   // 加载中(拉/归并当前推文任务)→ 显骨架,别整段空白。
   if (status === 'loading') return <CurrentTaskSkeleton />
@@ -482,6 +499,7 @@ export function CurrentTaskSection({
       <section className="lh-cur-sec">
         <div className="lh-cur-head">
           <span className="lh-cur-eyebrow">当前任务</span>
+          {closeButton}
         </div>
         <div className="lh-cur-card lh-cur-guide" role="status">
           任务暂时无法加载
@@ -500,6 +518,7 @@ export function CurrentTaskSection({
       <section className="lh-cur-sec">
         <div className="lh-cur-head">
           <span className="lh-cur-eyebrow">当前任务</span>
+          {closeButton}
         </div>
         <div className="lh-cur-card lh-cur-guide" role="status">
           未同步到已接任务
@@ -523,6 +542,7 @@ export function CurrentTaskSection({
       <section className="lh-cur-sec">
         <div className="lh-cur-head">
           <span className="lh-cur-eyebrow">当前任务</span>
+          {closeButton}
           <span className="lh-cur-pill lh-cur-pill-done">已完成</span>
         </div>
         <div className="lh-cur-card">
@@ -569,6 +589,7 @@ export function CurrentTaskSection({
     <section className="lh-cur-sec">
       <div className="lh-cur-head">
         <span className="lh-cur-eyebrow">当前任务</span>
+        {closeButton}
         <span className={`lh-cur-pill ${pill.cls}`}>{pill.text}</span>
       </div>
       <div className="lh-cur-card">

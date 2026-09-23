@@ -111,7 +111,18 @@ describe('current-task comment guide', () => {
     expect(container.textContent).toContain('缓存方向')
     expect(container.textContent).toContain('更新失败')
   })
-  it('shows unavailable instead of an endless skeleton when first synchronization fails', async () => {
+  it('stays closed after task updates until a different tweet is opened', async () => {
+    await render()
+    const close = container.querySelector<HTMLButtonElement>(
+      '[aria-label="关闭任务面板"]',
+    )
+    expect(close).not.toBeNull()
+    await act(async () => close!.click())
+    expect(container.textContent).toBe('')
+    await act(async () => updated({ type: 'tasks-updated' }))
+    expect(container.textContent).toBe('')
+  })
+  it('stays hidden when first synchronization fails without a task', async () => {
     vi.mocked(messaging.sendMessage).mockImplementation(async (req) =>
       req.type === 'get-tasks-snapshot'
         ? {
@@ -124,10 +135,10 @@ describe('current-task comment guide', () => {
         : { type: 'ack' },
     )
     await render()
-    expect(container.textContent).toContain('任务暂时无法加载')
+    expect(container.textContent).toBe('')
   })
 
-  it('shows a retryable task error when force-sync returns a failure result', async () => {
+  it('recovers silently after force-sync fails without a task', async () => {
     const recovered = [{ ...rows[0], actionType: 'LIKE' as const }]
     rows = []
     const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
@@ -147,13 +158,9 @@ describe('current-task comment guide', () => {
       return previous(req)
     })
     await render()
-    expect(container.textContent).toContain('任务暂时无法加载')
-    const retry = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === '重试加载',
-    )!
-    expect(retry).toBeDefined()
+    expect(container.textContent).toBe('')
     failed = false
-    await act(async () => retry.click())
+    await act(async () => window.dispatchEvent(new Event('online')))
     expect(container.textContent).toContain('点赞')
     expect(container.textContent).not.toContain('任务暂时无法加载')
   })
@@ -207,11 +214,11 @@ describe('current-task comment guide', () => {
     })
   }
 
-  it('shows a retryable error instead of an endless skeleton for an invalid snapshot', async () => {
+  it('stays hidden for an invalid snapshot without a known task', async () => {
     vi.mocked(messaging.sendMessage).mockResolvedValue({ type: 'ack' })
     await render()
-    expect(container.textContent).toContain('任务暂时无法加载')
-    expect(container.textContent).toContain('重试加载')
+    expect(container.textContent).toBe('')
+    expect(container.textContent).not.toContain('重试加载')
   })
 
   it('forces synchronization on opening an uncached task, reconnect and wake', async () => {
@@ -233,7 +240,7 @@ describe('current-task comment guide', () => {
 
     await render()
     await act(async () => vi.advanceTimersByTimeAsync(7_000))
-    expect(container.textContent).toContain('正在同步已接任务')
+    expect(container.textContent).toBe('')
 
     rows = [reservedTask]
     await act(async () => vi.advanceTimersByTimeAsync(8_000))
@@ -241,18 +248,18 @@ describe('current-task comment guide', () => {
     expect(container.textContent).toContain('评论')
   })
 
-  it('shows a retry action after the reserved task arrival window expires', async () => {
+  it('stays hidden after the task arrival window expires', async () => {
     vi.useFakeTimers()
     rows = []
 
     await render()
     await act(async () => vi.advanceTimersByTimeAsync(15_000))
 
-    expect(container.textContent).toContain('未同步到已接任务')
-    expect(container.textContent).toContain('重新同步')
+    expect(container.textContent).toBe('')
+    expect(container.textContent).not.toContain('重新同步')
 
     await act(async () => updated({ type: 'tasks-updated' }))
-    expect(container.textContent).toContain('未同步到已接任务')
+    expect(container.textContent).toBe('')
   })
 
   it('clears content on account change and rejects the previous snapshot response', async () => {
@@ -283,7 +290,7 @@ describe('current-task comment guide', () => {
     expect(container.textContent).not.toContain('完整原文')
   })
   for (const requestType of ['get-tasks-snapshot', 'force-sync'] as const) {
-    it(`${requestType} failure without a cache shows unavailable`, async () => {
+    it(`${requestType} failure without a cache stays hidden`, async () => {
       const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
       rows = []
       vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
@@ -291,7 +298,7 @@ describe('current-task comment guide', () => {
         return previous(req)
       })
       await render()
-      expect(container.textContent).toContain('任务暂时无法加载')
+      expect(container.textContent).toBe('')
     })
 
     it(`${requestType} failure retains a cached guide and marks update failure`, async () => {
@@ -322,7 +329,7 @@ describe('current-task comment guide', () => {
           : response
       })
       await act(async () => window.dispatchEvent(new Event('online')))
-      const failureText = hasCache ? '更新失败' : '任务暂时无法加载'
+      const failureText = hasCache ? '更新失败' : ''
       expect(container.textContent).toContain(failureText)
 
       // A partial refresh must not treat a cached snapshot as recovery.
