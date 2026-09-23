@@ -12,14 +12,15 @@ const summaryMetrics = {
 
 const requiredMetrics = [
   'verifiedFollowers',
-  'activeFollowers',
   'followers',
   ...Object.values(summaryMetrics),
 ] as const
 
 export interface XAnalyticsPageCapture {
   twitterUsername: string
-  metrics: Record<(typeof requiredMetrics)[number], number>
+  metrics: Record<(typeof requiredMetrics)[number], number> & {
+    activeFollowers: number | null
+  }
 }
 
 export interface XAnalyticsPageDiagnostic {
@@ -166,7 +167,10 @@ export function diagnoseXAnalyticsPage(
       missing.length === 0
         ? {
             twitterUsername: handle!.toLowerCase(),
-            metrics: metrics as XAnalyticsPageCapture['metrics'],
+            metrics: {
+              ...metrics,
+              activeFollowers: metrics.activeFollowers ?? null,
+            } as XAnalyticsPageCapture['metrics'],
           }
         : null,
     missing,

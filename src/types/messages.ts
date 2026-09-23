@@ -39,7 +39,7 @@ export type MsgRequest =
       periodStart: string
       periodEnd: string
       capturedAt: string
-      metrics: Record<string, number>
+      metrics: Record<string, number | null>
     }
   | { type: 'get-binance-probe-targets' }
   | {

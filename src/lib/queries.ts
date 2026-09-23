@@ -85,7 +85,7 @@ export interface SaveXAnalyticsVars {
     periodStart: string
     periodEnd: string
     capturedAt: string
-    metrics: Record<string, number>
+    metrics: Record<string, number | null>
   }
 }
 
@@ -97,7 +97,7 @@ export interface SaveXAnalyticsResult {
     periodEnd: string
     capturedAt: string
     savedAt: string
-    metrics: Record<string, number>
+    metrics: Record<string, number | null>
   }
 }
 

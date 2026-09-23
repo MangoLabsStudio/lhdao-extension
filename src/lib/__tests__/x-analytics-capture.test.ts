@@ -66,7 +66,6 @@ describe('X account analytics capture', () => {
 
     expect(diagnoseXAnalyticsPage(document).missing).toEqual([
       'verifiedFollowers',
-      'activeFollowers',
       'followers',
       'engagementRate',
       'engagements',
@@ -320,6 +319,17 @@ describe('3M range refresh guard', () => {
       <button class="gap-1 inline-flex items-center border border-solid font-bold transition justify-center h-8 min-w-8 px-4 text-subtext1 bg-transparent border-nested-border outline-text text-text rounded-full border-gray-400! shrink-0">3M</button>
     `
     expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(false)
+  })
+
+  it('captures a page without an active followers card as null', () => {
+    renderAnalyticsPage(true)
+    Array.from(document.querySelectorAll('button'))
+      .find((button) => button.textContent?.startsWith('Active followers'))!
+      .remove()
+    expect(captureXAnalyticsPage(document)?.metrics).toMatchObject({
+      activeFollowers: null,
+      followers: 2200,
+    })
   })
 
   it('rejects complete metrics while the 3M range stays unselected', async () => {
