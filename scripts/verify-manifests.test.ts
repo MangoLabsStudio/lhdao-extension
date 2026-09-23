@@ -22,7 +22,6 @@ const {
 const PRODUCTION_HOSTS = [
   'https://x.com/*',
   'https://twitter.com/*',
-  'https://www.binance.com/*',
   'https://service.lhdao.top/*',
   'https://app.lhdao.top/*',
 ]
@@ -30,7 +29,6 @@ const PRODUCTION_HOSTS = [
 const BETA_HOSTS = [
   'https://x.com/*',
   'https://twitter.com/*',
-  'https://www.binance.com/*',
   'https://service.lhdaobeta.top/*',
   'https://app.lhdaobeta.top/*',
 ]
@@ -51,13 +49,6 @@ function validManifest(overrides = {}) {
       {
         matches: ['https://app.lhdao.top/*'],
         js: ['content-scripts/web-presence.js'],
-      },
-      {
-        matches: [
-          'https://www.binance.com/*/square/*',
-          'https://www.binance.com/square/*',
-        ],
-        js: ['content-scripts/binance-square-probe.js'],
       },
     ],
     ...overrides,
@@ -353,8 +344,7 @@ test('never lets an unknown endpoint environment expand the release allowlist', 
       host_permissions: [
         'https://x.com/*',
         'https://twitter.com/*',
-        'https://www.binance.com/*',
-        'https://evil.example/*',
+              'https://evil.example/*',
         'https://also-evil.example/*',
       ],
     }),
@@ -473,4 +463,17 @@ test('requires every Firefox script to opt into MV3', async () => {
     }),
   )
   await assert.rejects(verify(packagePath), /firefox.*--mv3/i)
+})
+
+
+test('rejects disabled Binance permissions and scripts', async () => {
+  const verify = productionManifestVerifier()
+  const permissionDirectory = await manifestDirectory(validManifest({
+    host_permissions: [...PRODUCTION_HOSTS, 'https://www.binance.com/*'],
+  }))
+  await assert.rejects(verify(permissionDirectory))
+  const scriptDirectory = await manifestDirectory(validManifest({
+    content_scripts: [{ matches: ['https://www.binance.com/square/*'], js: ['content-scripts/binance-square-probe.js'] }],
+  }))
+  await assert.rejects(verify(scriptDirectory))
 })

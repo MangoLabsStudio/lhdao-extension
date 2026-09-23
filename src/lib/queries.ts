@@ -152,7 +152,7 @@ export type EngagementActionType =
   | 'SHARE'
   | 'FOLLOW'
 
-export type EngagementPlatform = 'X' | 'BINANCE_SQUARE'
+export type EngagementPlatform = 'X' // | 'BINANCE_SQUARE' (disabled)
 
 export interface AvailableEngagement {
   id: string

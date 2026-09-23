@@ -9,7 +9,7 @@ const BASE_PERMISSIONS = ['storage', 'alarms']
 const FIXED_HOST_PERMISSIONS = [
   'https://x.com/*',
   'https://twitter.com/*',
-  'https://www.binance.com/*',
+//   'https://www.binance.com/*',
 ]
 const DEFAULT_API_ENDPOINT = 'https://service.lhdao.top/graphql'
 const DEFAULT_WEB_ENDPOINT = 'https://app.lhdao.top'
@@ -27,8 +27,8 @@ const FIXED_PAGE_MATCHES = [
   '*://twitter.com/*',
   'https://x.com/i/account_analytics*',
   'https://twitter.com/i/account_analytics*',
-  'https://www.binance.com/*/square/*',
-  'https://www.binance.com/square/*',
+//   'https://www.binance.com/*/square/*',
+//   'https://www.binance.com/square/*',
 ]
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
 
@@ -313,7 +313,7 @@ export async function verifyManifestDirectory(directory, options = {}) {
     [],
   )
   if (manifest.content_security_policy) throw new Error('Unexpected custom CSP')
-  for (const name of ['content-scripts/product-experience.js', 'tlsn_wasm.js', 'tlsn_wasm_bg.wasm', 'spawn.js', 'zktls-offscreen.html', 'zktls-permission.html']) {
+  for (const name of ['content-scripts/binance-square-probe.js', 'content-scripts/binance-square-bridge.js', 'content-scripts/product-experience.js', 'tlsn_wasm.js', 'tlsn_wasm_bg.wasm', 'spawn.js', 'zktls-offscreen.html', 'zktls-permission.html']) {
     const exists = await stat(resolve(absoluteDirectory, name)).then(() => true, () => false)
     if (exists) throw new Error(`Removed product artifact packaged: ${name}`)
   }

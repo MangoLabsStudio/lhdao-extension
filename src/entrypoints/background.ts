@@ -1,13 +1,13 @@
-import {
-  type BinanceProbeObservation,
-  parseProbeObservation,
-} from '@/lib/binance-square-probe'
-import {
-  indexBinanceSquareTasks,
-  reservedBinanceProbeTargets,
-} from '@/lib/binance-square-tasks'
+// import {
+//   type BinanceProbeObservation,
+//   parseProbeObservation,
+// } from '@/lib/binance-square-probe'
+// import {
+//   indexBinanceSquareTasks,
+//   reservedBinanceProbeTargets,
+// } from '@/lib/binance-square-tasks'
 import { sha256Hex } from '@/lib/canonical-json'
-import { CAPTURE_DEBUG, dbg } from '@/lib/capture-debug'
+import { dbg } from '@/lib/capture-debug'
 import { getOrCreateDeviceIdentity } from '@/lib/device-key'
 import {
   type CapturedAction,
@@ -94,7 +94,7 @@ import {
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import type {
-  MsgRequest,
+  // MsgRequest, // Binance Square handler disabled
   MsgResponse,
   PairingState,
   PromoteAction,
@@ -104,11 +104,11 @@ import type {
 const ALARM_NAME = 'lhdao-sync'
 const RAW_CAPTURE_TTL_MS = 10 * 60 * 1000
 const MAX_RAW_CAPTURES = 80
-const MAX_BINANCE_PROBE_OBSERVATIONS = 100
-const BINANCE_PROBE_TTL_MS = 24 * 60 * 60 * 1_000
-// Page and service-worker clocks may differ briefly, but future fixtures must
-// not remain live forever or crowd real observations out of the bounded store.
-const BINANCE_PROBE_CLOCK_SKEW_MS = 5 * 60 * 1_000
+// const MAX_BINANCE_PROBE_OBSERVATIONS = 100
+// const BINANCE_PROBE_TTL_MS = 24 * 60 * 60 * 1_000
+// // Page and service-worker clocks may differ briefly, but future fixtures must
+// // not remain live forever or crowd real observations out of the bounded store.
+// const BINANCE_PROBE_CLOCK_SKEW_MS = 5 * 60 * 1_000
 const SUPPORTED_ACTIONS = new Set<CampaignTaskCache['actionType']>([
   'LIKE',
   'RT',
@@ -127,167 +127,167 @@ function isSupportedXAction(
   )
 }
 
-type BinanceProbeRuntimeOptions = {
-  now?: number
-  enabled?: boolean
-}
-
-let binanceProbeStorageQueue: Promise<void> = Promise.resolve()
-
-function withBinanceProbeStorage<T>(operation: () => Promise<T>): Promise<T> {
-  const result = binanceProbeStorageQueue.then(operation)
-  binanceProbeStorageQueue = result.then(
-    () => undefined,
-    () => undefined,
-  )
-  return result
-}
-
-function binanceProbeKey(observation: BinanceProbeObservation): string {
-  return JSON.stringify([
-    observation.method,
-    observation.path,
-    observation.status,
-    observation.target,
-    observation.requestShape,
-    observation.responseShape,
-  ])
-}
-
-function isLiveBinanceProbeTimestamp(
-  observation: BinanceProbeObservation,
-  now: number,
-): boolean {
-  const capturedAt = Date.parse(observation.capturedAt)
-  return (
-    capturedAt >= now - BINANCE_PROBE_TTL_MS &&
-    capturedAt <= now + BINANCE_PROBE_CLOCK_SKEW_MS
-  )
-}
-
-async function liveBinanceProbeObservationsUnlocked(
-  now: number,
-): Promise<BinanceProbeObservation[]> {
-  const raw = await sessionStore.get('binanceSquareProbeObservations')
-  const stored = Array.isArray(raw) ? raw : []
-  const parsed = stored.map(parseProbeObservation)
-  const live = parsed
-    .filter((item): item is BinanceProbeObservation => item !== null)
-    .filter((item) => isLiveBinanceProbeTimestamp(item, now))
-    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
-    .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
-  if (
-    !Array.isArray(raw) ||
-    live.length !== stored.length ||
-    live.some((item, index) => {
-      const original = parsed[index]
-      return !original || JSON.stringify(item) !== JSON.stringify(original)
-    })
-  ) {
-    await sessionStore.set('binanceSquareProbeObservations', live)
-  }
-  return live
-}
-
-export async function liveBinanceProbeObservations({
-  now = Date.now(),
-  enabled = CAPTURE_DEBUG,
-}: BinanceProbeRuntimeOptions = {}): Promise<BinanceProbeObservation[]> {
-  if (!enabled) return []
-  return withBinanceProbeStorage(() =>
-    liveBinanceProbeObservationsUnlocked(now),
-  )
-}
-
-export async function appendBinanceProbeObservation(
-  value: unknown,
-  options: BinanceProbeRuntimeOptions = {},
-): Promise<void> {
-  const { now = Date.now(), enabled = CAPTURE_DEBUG } = options
-  if (!enabled) return
-  const observation = parseProbeObservation(value)
-  if (!observation || !isLiveBinanceProbeTimestamp(observation, now)) return
-  await withBinanceProbeStorage(async () => {
-    const index = (await sessionStore.get('binanceSquareTasks')) ?? {
-      byContentId: {},
-      byAuthorId: {},
-    }
-    const allowed = reservedBinanceProbeTargets(index)
-    if (
-      !allowed.some(
-        (target) =>
-          target.kind === observation.target.kind &&
-          target.id === observation.target.id,
-      )
-    ) {
-      return
-    }
-    const existing = await liveBinanceProbeObservationsUnlocked(now)
-    const key = binanceProbeKey(observation)
-    const duplicate = existing.find((item) => binanceProbeKey(item) === key)
-    if (
-      duplicate &&
-      Date.parse(duplicate.capturedAt) >= Date.parse(observation.capturedAt)
-    ) {
-      return
-    }
-    const next = existing
-      .filter((item) => binanceProbeKey(item) !== key)
-      .concat(observation)
-      .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
-      .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
-    await sessionStore.set('binanceSquareProbeObservations', next)
-  })
-}
-
-export async function handleBinanceProbeRequest(
-  req: MsgRequest,
-  options: BinanceProbeRuntimeOptions = {},
-): Promise<MsgResponse | null> {
-  const enabled = options.enabled ?? CAPTURE_DEBUG
-  if (!enabled) {
-    if (req.type === 'get-binance-probe-targets') {
-      return { type: 'binance-probe-targets', targets: [] }
-    }
-    if (req.type === 'export-binance-probe-observations') {
-      return { type: 'binance-probe-observations', observations: [] }
-    }
-    if (
-      req.type === 'report-binance-probe-observation' ||
-      req.type === 'clear-binance-probe-observations'
-    ) {
-      return { type: 'ack' }
-    }
-  }
-  if (req.type === 'get-binance-probe-targets') {
-    const index = (await sessionStore.get('binanceSquareTasks')) ?? {
-      byContentId: {},
-      byAuthorId: {},
-    }
-    return {
-      type: 'binance-probe-targets',
-      targets: reservedBinanceProbeTargets(index),
-    }
-  }
-  if (req.type === 'report-binance-probe-observation') {
-    await appendBinanceProbeObservation(req.observation, options)
-    return { type: 'ack' }
-  }
-  if (req.type === 'export-binance-probe-observations') {
-    return {
-      type: 'binance-probe-observations',
-      observations: await liveBinanceProbeObservations(options),
-    }
-  }
-  if (req.type === 'clear-binance-probe-observations') {
-    await withBinanceProbeStorage(() =>
-      sessionStore.set('binanceSquareProbeObservations', []),
-    )
-    return { type: 'ack' }
-  }
-  return null
-}
-
+// type BinanceProbeRuntimeOptions = {
+//   now?: number
+//   enabled?: boolean
+// }
+//
+// let binanceProbeStorageQueue: Promise<void> = Promise.resolve()
+//
+// function withBinanceProbeStorage<T>(operation: () => Promise<T>): Promise<T> {
+//   const result = binanceProbeStorageQueue.then(operation)
+//   binanceProbeStorageQueue = result.then(
+//     () => undefined,
+//     () => undefined,
+//   )
+//   return result
+// }
+//
+// function binanceProbeKey(observation: BinanceProbeObservation): string {
+//   return JSON.stringify([
+//     observation.method,
+//     observation.path,
+//     observation.status,
+//     observation.target,
+//     observation.requestShape,
+//     observation.responseShape,
+//   ])
+// }
+//
+// function isLiveBinanceProbeTimestamp(
+//   observation: BinanceProbeObservation,
+//   now: number,
+// ): boolean {
+//   const capturedAt = Date.parse(observation.capturedAt)
+//   return (
+//     capturedAt >= now - BINANCE_PROBE_TTL_MS &&
+//     capturedAt <= now + BINANCE_PROBE_CLOCK_SKEW_MS
+//   )
+// }
+//
+// async function liveBinanceProbeObservationsUnlocked(
+//   now: number,
+// ): Promise<BinanceProbeObservation[]> {
+//   const raw = await sessionStore.get('binanceSquareProbeObservations')
+//   const stored = Array.isArray(raw) ? raw : []
+//   const parsed = stored.map(parseProbeObservation)
+//   const live = parsed
+//     .filter((item): item is BinanceProbeObservation => item !== null)
+//     .filter((item) => isLiveBinanceProbeTimestamp(item, now))
+//     .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+//     .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
+//   if (
+//     !Array.isArray(raw) ||
+//     live.length !== stored.length ||
+//     live.some((item, index) => {
+//       const original = parsed[index]
+//       return !original || JSON.stringify(item) !== JSON.stringify(original)
+//     })
+//   ) {
+//     await sessionStore.set('binanceSquareProbeObservations', live)
+//   }
+//   return live
+// }
+//
+// export async function liveBinanceProbeObservations({
+//   now = Date.now(),
+//   enabled = CAPTURE_DEBUG,
+// }: BinanceProbeRuntimeOptions = {}): Promise<BinanceProbeObservation[]> {
+//   if (!enabled) return []
+//   return withBinanceProbeStorage(() =>
+//     liveBinanceProbeObservationsUnlocked(now),
+//   )
+// }
+//
+// export async function appendBinanceProbeObservation(
+//   value: unknown,
+//   options: BinanceProbeRuntimeOptions = {},
+// ): Promise<void> {
+//   const { now = Date.now(), enabled = CAPTURE_DEBUG } = options
+//   if (!enabled) return
+//   const observation = parseProbeObservation(value)
+//   if (!observation || !isLiveBinanceProbeTimestamp(observation, now)) return
+//   await withBinanceProbeStorage(async () => {
+//     const index = (await sessionStore.get('binanceSquareTasks')) ?? {
+//       byContentId: {},
+//       byAuthorId: {},
+//     }
+//     const allowed = reservedBinanceProbeTargets(index)
+//     if (
+//       !allowed.some(
+//         (target) =>
+//           target.kind === observation.target.kind &&
+//           target.id === observation.target.id,
+//       )
+//     ) {
+//       return
+//     }
+//     const existing = await liveBinanceProbeObservationsUnlocked(now)
+//     const key = binanceProbeKey(observation)
+//     const duplicate = existing.find((item) => binanceProbeKey(item) === key)
+//     if (
+//       duplicate &&
+//       Date.parse(duplicate.capturedAt) >= Date.parse(observation.capturedAt)
+//     ) {
+//       return
+//     }
+//     const next = existing
+//       .filter((item) => binanceProbeKey(item) !== key)
+//       .concat(observation)
+//       .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+//       .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
+//     await sessionStore.set('binanceSquareProbeObservations', next)
+//   })
+// }
+//
+// export async function handleBinanceProbeRequest(
+//   req: MsgRequest,
+//   options: BinanceProbeRuntimeOptions = {},
+// ): Promise<MsgResponse | null> {
+//   const enabled = options.enabled ?? CAPTURE_DEBUG
+//   if (!enabled) {
+//     if (req.type === 'get-binance-probe-targets') {
+//       return { type: 'binance-probe-targets', targets: [] }
+//     }
+//     if (req.type === 'export-binance-probe-observations') {
+//       return { type: 'binance-probe-observations', observations: [] }
+//     }
+//     if (
+//       req.type === 'report-binance-probe-observation' ||
+//       req.type === 'clear-binance-probe-observations'
+//     ) {
+//       return { type: 'ack' }
+//     }
+//   }
+//   if (req.type === 'get-binance-probe-targets') {
+//     const index = (await sessionStore.get('binanceSquareTasks')) ?? {
+//       byContentId: {},
+//       byAuthorId: {},
+//     }
+//     return {
+//       type: 'binance-probe-targets',
+//       targets: reservedBinanceProbeTargets(index),
+//     }
+//   }
+//   if (req.type === 'report-binance-probe-observation') {
+//     await appendBinanceProbeObservation(req.observation, options)
+//     return { type: 'ack' }
+//   }
+//   if (req.type === 'export-binance-probe-observations') {
+//     return {
+//       type: 'binance-probe-observations',
+//       observations: await liveBinanceProbeObservations(options),
+//     }
+//   }
+//   if (req.type === 'clear-binance-probe-observations') {
+//     await withBinanceProbeStorage(() =>
+//       sessionStore.set('binanceSquareProbeObservations', []),
+//     )
+//     return { type: 'ack' }
+//   }
+//   return null
+// }
+//
 function engagementReward(c: {
   myExpectedReward?: number | null
   expectedReward?: number | null
@@ -427,8 +427,8 @@ export default defineBackground(() => {
         }
       }
     }
-    const binanceProbeResponse = await handleBinanceProbeRequest(req)
-    if (binanceProbeResponse) return binanceProbeResponse
+    //     const binanceProbeResponse = await handleBinanceProbeRequest(req)
+    //     if (binanceProbeResponse) return binanceProbeResponse
 
     if (req.type === 'get-tasks-for-tweet') {
       const snapshot = await readTasksSnapshot()
@@ -774,7 +774,7 @@ async function clearTaskCache(): Promise<void> {
     engagementSources: null,
     tasksByTweetId: {},
     tasksByAuthorHandle: {},
-    binanceSquareTasks: { byContentId: {}, byAuthorId: {} },
+    //     binanceSquareTasks: { byContentId: {}, byAuthorId: {} },
     activeCampaigns: [],
     tweetCampaigns: [],
     userProfile: null,
@@ -934,7 +934,7 @@ async function performSyncTasks(
     },
     tasksByTweetId: byTweet,
     tasksByAuthorHandle: byAuthor,
-    binanceSquareTasks: indexBinanceSquareTasks(merged, reservedIds),
+    //     binanceSquareTasks: indexBinanceSquareTasks(merged, reservedIds),
     activeCampaigns,
     lastSyncError: failure
       ? reason instanceof Error
