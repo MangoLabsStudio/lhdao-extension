@@ -74,6 +74,110 @@ afterEach(async () => {
 const render = async () => act(async () => root.render(<CurrentTaskSection />))
 
 describe('current-task comment guide', () => {
+  it('shows the reserved comment instead of a higher reward unreserved like', async () => {
+    rows = [
+      {
+        ...rows[0],
+        campaignId: 'like',
+        actionType: 'LIKE',
+        expectedReward: 3,
+        reserved: false,
+      },
+      { ...rows[0], campaignId: 'comment', expectedReward: 1, reserved: true },
+    ]
+    await render()
+    expect(container.textContent).toContain('评论')
+    expect(container.textContent).not.toContain('点赞')
+  })
+
+  it('does not offer verification for an unreserved campaign', async () => {
+    rows = [{ ...rows[0], actionType: 'LIKE', reserved: false }]
+    await render()
+    expect(container.textContent).not.toContain('验证发奖')
+    expect(container.querySelector('.lh-cur-btn')).toBeNull()
+  })
+
+  it('removes the verification card when its reservation disappears', async () => {
+    await render()
+    expect(container.querySelector('.lh-cur-card')).not.toBeNull()
+    rows = [{ ...rows[0], reserved: false }]
+    await act(async () => updated({ type: 'tasks-updated' }))
+    expect(container.querySelector('.lh-cur-card')).toBeNull()
+  })
+
+  it('lets the user choose between two reserved campaigns on one tweet', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    rows = [
+      { ...rows[0], campaignId: 'comment', expectedReward: 3 },
+      {
+        ...rows[0],
+        campaignId: 'like',
+        actionType: 'LIKE',
+        expectedReward: 1,
+        commentGuide: null,
+      },
+    ]
+    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+      if (req.type === 'get-captured-actions')
+        return {
+          type: 'captured-actions',
+          actions: req.campaignId === 'like' ? ['LIKE'] : [],
+        }
+      return previous(req)
+    })
+    await render()
+    const like = container.querySelector<HTMLButtonElement>(
+      '[data-campaign-id="like"]',
+    )
+    expect(like).not.toBeNull()
+    await act(async () => like!.click())
+    expect(like!.getAttribute('aria-pressed')).toBe('true')
+    expect(container.querySelector('.lh-cur-todo')?.textContent).toContain(
+      '点赞',
+    )
+    expect(container.querySelector('.lh-cur-todo')?.textContent).not.toContain(
+      '评论',
+    )
+    await act(async () => vi.advanceTimersByTime(10_000))
+    const verify = container.querySelector<HTMLButtonElement>('.lh-cur-btn')!
+    expect(verify.disabled).toBe(false)
+    await act(async () => verify.click())
+    expect(messaging.sendMessage).toHaveBeenCalledWith({
+      type: 'verify-task',
+      campaignId: 'like',
+    })
+  })
+
+  it('refreshes an invalid reservation and shows actionable feedback', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    rows[0].actionType = 'LIKE'
+    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+      if (req.type === 'get-captured-actions')
+        return { type: 'captured-actions', actions: ['LIKE'] }
+      if (req.type === 'verify-task')
+        return {
+          type: 'verify-result',
+          ok: false,
+          code: 'VERIFY_FAILED',
+          message: 'NO_ACTIVE_RESERVATION: 没有有效预约',
+        }
+      return previous(req)
+    })
+    await render()
+    await act(async () => vi.advanceTimersByTime(10_000))
+    vi.mocked(messaging.sendMessage).mockClear()
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('.lh-cur-btn')!.click(),
+    )
+    expect(container.textContent).toContain('请在任务广场重新领取')
+    expect(container.textContent).not.toContain('NO_ACTIVE_RESERVATION')
+    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
+  })
+
   it('shows claim-time identity only for an explicit true snapshot', async () => {
     rows[0].lighthouseSelectedAtClaim = true
     await render()

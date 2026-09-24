@@ -76,4 +76,24 @@ describe('extractTweetIdFromArticle', () => {
     const article = document.querySelector('article')!
     expect(extractTweetIdFromArticle(article)).toBeNull()
   })
+
+  it('does not assign the detail URL tweet id to another author’s ad', () => {
+    window.history.replaceState({}, '', '/owner/status/123456')
+    document.body.innerHTML = `
+      <article><div data-testid="User-Name"><a role="link" href="/owner">Owner</a></div></article>
+      <article><div data-testid="User-Name"><a role="link" href="/advertiser">Ad</a></div></article>`
+    const [main, ad] = document.querySelectorAll('article')
+    expect(extractTweetIdFromArticle(main)).toBe('123456')
+    expect(extractTweetIdFromArticle(ad)).toBeNull()
+  })
+
+  it('does not use a nested quoted tweet as the outer article identity', () => {
+    window.history.replaceState({}, '', '/owner/status/123456')
+    document.body.innerHTML = `
+      <article id="ad">
+        <div data-testid="User-Name"><a role="link" href="/advertiser">Ad</a></div>
+        <article><a href="/owner/status/123456"><time>Quoted</time></a></article>
+      </article>`
+    expect(extractTweetIdFromArticle(document.querySelector('#ad')!)).toBeNull()
+  })
 })

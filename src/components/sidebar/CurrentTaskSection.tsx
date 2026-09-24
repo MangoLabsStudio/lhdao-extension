@@ -12,11 +12,12 @@ import type { CampaignTaskCache } from '@/lib/storage'
 /**
  * Sidebar 卡片「当前任务」段 — 嵌入 SidebarCard 身份卡与底部指标之间。
  *
- * 打开一条挂任务的推文详情页 → 本段自动出现:显示该推文奖励最高的 campaign、
+ * 打开一条挂已接任务的推文详情页 → 本段自动出现:显示已预约的 campaign、
  * 要完成的动作清单、停留进度;复用 MAIN-world capture 发的 `__lhcap` 自动打勾 +
  * 自计可见停留;全部达标解锁「验证发奖」→ verify 成功显开箱徽章。
  *
- * 没有「预约」步(预约在任务广场/站内已完成,打开即已参与);离开该推文自动重置。
+ * 普通任务在任务广场预约后才能验证;时间线专属任务可在此领取。
+ * 离开该推文自动重置。
  * 不在任务推文页时 return null(整段隐藏,卡片回到原样)。
  *
  * 检测/验证只是前端 UX 预判 —— 最终发奖以后端为权威。
@@ -27,6 +28,12 @@ const FOCAL_POLL_MS = 500
 const DWELL_TICK_MS = 250
 // 验证成功后自动打开任务广场标签页的延时,给用户看一眼"已提交"再开。
 const TASK_HALL_OPEN_MS = 2500
+const ACTION_LABEL = {
+  LIKE: '点赞',
+  RT: '转发',
+  COMMENT: '评论',
+  FOLLOW: '关注',
+} as const
 
 type Phase = 'detecting' | 'success'
 
@@ -59,6 +66,10 @@ export function CurrentTaskSection({
   const [accountVersion, setAccountVersion] = React.useState(0)
   const [reloadVersion, setReloadVersion] = React.useState(0)
   const [campaign, setCampaign] = React.useState<CurrentCampaign | null>(null)
+  const [campaignChoices, setCampaignChoices] = React.useState<
+    CurrentCampaign[]
+  >([])
+  const selectedCampaignId = React.useRef<string | null>(null)
   const verificationGeneration = React.useRef(0)
   // 显式加载态:'loading' = 正在为当前焦点推文拉/归并任务(显骨架);
   // 'ready' = 已尘埃落定(拿到任务 or 确认无任务)。此前用 campaign===null
@@ -69,6 +80,7 @@ export function CurrentTaskSection({
   const [detected, setDetected] = React.useState<Set<string>>(() => new Set())
   const [dwellMs, setDwellMs] = React.useState(0)
   const [phase, setPhase] = React.useState<Phase>('detecting')
+  const phaseRef = React.useRef<Phase>('detecting')
   const [busy, setBusy] = React.useState(false)
   const [cascadeOffer, setCascadeOffer] = React.useState<{
     campaignId: string
@@ -99,8 +111,11 @@ export function CurrentTaskSection({
       if (area !== 'local' || !('apiToken' in changes)) return
       accountGeneration.current++
       setCampaign(null)
+      setCampaignChoices([])
+      selectedCampaignId.current = null
       setDetected(new Set())
       setPhase('detecting')
+      phaseRef.current = 'detecting'
       setAccountVersion(accountGeneration.current)
     }
     chrome.storage.onChanged.addListener(onAccountChange)
@@ -120,9 +135,12 @@ export function CurrentTaskSection({
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadVersion explicitly restarts loading after a user retry.
   React.useEffect(() => {
     setCampaign(null)
+    setCampaignChoices([])
+    selectedCampaignId.current = null
     setDetected(new Set())
     setDwellMs(0)
     setPhase('detecting')
+    phaseRef.current = 'detecting'
     setBusy(false)
     setErrorMsg(undefined)
     setStatus('loading')
@@ -171,6 +189,7 @@ export function CurrentTaskSection({
         if (
           cancelled ||
           generation !== accountGeneration.current ||
+          selectedCampaignId.current !== current.campaignId ||
           r.type !== 'captured-actions'
         )
           return
@@ -221,8 +240,24 @@ export function CurrentTaskSection({
           ...(snap.byTweet[focalId] ?? []),
           ...(author ? (snap.byAuthor[author] ?? []) : []),
         ]
-        const hit = groupCampaigns(tasks)[0] ?? null
+        // The tweet can advertise several actions. Only a RESERVED campaign
+        // can be verified; timeline-only campaigns keep their explicit claim step.
+        const choices = groupCampaigns(tasks).filter(
+          (item) => item.reserved || item.timelineOnly,
+        )
+        const selected = choices.find(
+          (item) => item.campaignId === selectedCampaignId.current,
+        )
+        const hit = (selected?.reserved ? selected : null) ?? choices[0] ?? null
+        setCampaignChoices(choices)
         if (hit) {
+          if (selectedCampaignId.current !== hit.campaignId) {
+            setDetected(new Set())
+            setPhase('detecting')
+            phaseRef.current = 'detecting'
+            setErrorMsg(undefined)
+          }
+          selectedCampaignId.current = hit.campaignId
           setCampaign(
             forceSyncFailed
               ? {
@@ -237,10 +272,19 @@ export function CurrentTaskSection({
           gotTask = true
           return
         }
-        // 已拿到过任务 → 保留,不因空快照清掉(保护进行中卡 / 成功态)。
-        if (gotTask) {
+        // Preserve success and incomplete reads. A complete read without an
+        // active reservation must remove the old verification card.
+        if (
+          gotTask &&
+          (phaseRef.current === 'success' || snap.syncFailed || forceSyncFailed)
+        ) {
           setStatus('ready')
           return
+        }
+        if (gotTask) {
+          gotTask = false
+          selectedCampaignId.current = null
+          setCampaign(null)
         }
         if (snap.syncFailed || forceSyncFailed) {
           setStatus('error')
@@ -382,7 +426,7 @@ export function CurrentTaskSection({
 
   // ── 验证发奖 ──
   const onVerify = React.useCallback(async () => {
-    if (!campaign || busy) return
+    if (!campaign?.reserved || busy) return
     const generation = verificationGeneration.current
     const account = accountGeneration.current
     const isCurrent = () =>
@@ -398,11 +442,17 @@ export function CurrentTaskSection({
       })
       if (!isCurrent()) return
       if (r.type === 'verify-result' && r.ok) {
+        phaseRef.current = 'success'
         setPhase('success')
         void sendMessage({ type: 'force-sync' })
         onRewarded?.()
       } else if (r.type === 'verify-result') {
-        setErrorMsg(r.message)
+        if (/NO_ACTIVE_RESERVATION|无有效预约/.test(r.message)) {
+          setErrorMsg('当前任务的预约已失效，请在任务广场重新领取后同步。')
+          void sendMessage({ type: 'force-sync' }).catch(() => {})
+        } else {
+          setErrorMsg(r.message)
+        }
       }
     } catch {
       if (isCurrent()) setErrorMsg('验证失败,请重试')
@@ -410,6 +460,40 @@ export function CurrentTaskSection({
       if (isCurrent()) setBusy(false)
     }
   }, [campaign, busy, focalId, onRewarded])
+
+  const onChooseCampaign = React.useCallback(
+    (next: CurrentCampaign) => {
+      if (next.campaignId === selectedCampaignId.current || busy) return
+      selectedCampaignId.current = next.campaignId
+      setCampaign(next)
+      setDetected(new Set())
+      setPhase('detecting')
+      phaseRef.current = 'detecting'
+      setErrorMsg(undefined)
+      void sendMessage({
+        type: 'get-captured-actions',
+        campaignId: next.campaignId,
+        tweetId: focalId ?? undefined,
+      })
+        .then((response) => {
+          if (
+            response.type === 'captured-actions' &&
+            selectedCampaignId.current === next.campaignId
+          ) {
+            const required = new Set(next.requiredActions)
+            setDetected(
+              new Set(
+                response.actions.filter((action) =>
+                  required.has(action as (typeof next.requiredActions)[number]),
+                ),
+              ),
+            )
+          }
+        })
+        .catch(() => {})
+    },
+    [busy, focalId],
+  )
 
   // ── [timelineOnly] 领取(预约)任务 —— 仅时间线展示的单必须先经插件签名
   //    预约口领取,拿到 RESERVED 后才进入检测/验证态。BG reserveOnly 会按缓存
@@ -421,6 +505,7 @@ export function CurrentTaskSection({
     cascadeOffer?.campaignId === campaign?.campaignId
       ? cascadeOffer?.warning
       : undefined
+  const reservedChoices = campaignChoices.filter((item) => item.reserved)
   const onClaim = React.useCallback(async () => {
     if (!campaign || busy) return
     const generation = verificationGeneration.current
@@ -593,6 +678,24 @@ export function CurrentTaskSection({
         <span className={`lh-cur-pill ${pill.cls}`}>{pill.text}</span>
       </div>
       <div className="lh-cur-card">
+        {reservedChoices.length > 1 ? (
+          <fieldset className="lh-cur-choices" aria-label="选择已接任务">
+            {reservedChoices.map((item) => (
+              <button
+                key={item.campaignId}
+                type="button"
+                data-campaign-id={item.campaignId}
+                aria-pressed={item.campaignId === campaign.campaignId}
+                disabled={busy}
+                onClick={() => onChooseCampaign(item)}
+              >
+                {item.requiredActions
+                  .map((action) => ACTION_LABEL[action])
+                  .join(' + ')}
+              </button>
+            ))}
+          </fieldset>
+        ) : null}
         <div className="lh-cur-top">
           <span className="lh-cur-ic">
             <EngageIcon />

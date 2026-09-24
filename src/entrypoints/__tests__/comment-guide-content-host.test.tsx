@@ -85,6 +85,26 @@ describe('content script focal task host', () => {
     expect(document.querySelectorAll('.lhdao-inline-task')).toHaveLength(1)
   })
 
+  it('keeps the task panel below the main tweet when an ad follows it', async () => {
+    rows = [
+      {
+        campaignId: 'reserved-like',
+        tweetId: '123456',
+        actionType: 'LIKE',
+        expectedReward: 1,
+        reserved: true,
+      },
+    ]
+    document.body.innerHTML = `
+      <article id="main"><div data-testid="User-Name"><a role="link" href="/user">User</a></div><div role="group"><button data-testid="like">Like</button></div></article>
+      <article id="ad"><div data-testid="User-Name"><a role="link" href="/advertiser">Advertiser</a></div><div role="group"><button data-testid="like">Like</button></div></article>`
+    await act(async () => scanTimeline())
+    const host = document.querySelector('.lhdao-inline-task')
+    expect(host).not.toBeNull()
+    expect(document.querySelector('#main')?.contains(host)).toBe(true)
+    expect(document.querySelector('#ad')?.contains(host)).toBe(false)
+  })
+
   it('preserves the panel across a temporary missing article and full DOM replacement', async () => {
     rows = [
       {

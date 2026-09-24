@@ -172,11 +172,11 @@ describe('timelineOnly claim button in current-task panel', () => {
     expect(panel()?.textContent).toContain('完成上面步骤解锁')
   })
 
-  it('does not render claim button for a normal task', async () => {
+  it('does not render a verification panel for an unreserved normal task', async () => {
     mockSnapshot([normalTask])
     await act(async () => scanTimeline())
 
     expect(claimButton()).toBeNull()
-    expect(panel()?.textContent).toContain('完成上面步骤解锁')
+    expect(panel() ?? null).toBeNull()
   })
 })

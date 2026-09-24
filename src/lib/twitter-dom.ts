@@ -30,16 +30,16 @@ const STATUS_PATH_REGEX = /\/status\/(\d+)/
  *   1. <time> 元素的最近 a[href*="/status/"]:Twitter 把时间戳套在通向
  *      该推文自己 /status/<id> 的链接里,**这是该 article 自己的 id**,
  *      不会跑偏到引用的推文。
- *   2. 直接子级 a[href*="/status/"](排除嵌套 article 内的链接):
+ *   2. 详情页 URL,仅当本 article 作者与 URL 作者一致。
+ *   3. 直接归属本 article 的 a[href*="/status/"](排除嵌套 article 内的链接):
  *      用 closest('article') 反查归属。
- *   3. 兜底:第一个 a[href*="/status/"](维持向后兼容)。
  *
- * @returns tweet id 字符串,或 null(article 内无 /status/ 链接)
+ * @returns tweet id 字符串,或 null(无法确认 article 自身的推文身份)
  */
 export function extractTweetIdFromArticle(article: Element): string | null {
   // 策略 1:time 元素锚点(最可靠,timeline 卡片 + 回复区 article 都走这里)
-  const timeEl = article.querySelector('time')
-  if (timeEl) {
+  for (const timeEl of article.querySelectorAll('time')) {
+    if (timeEl.closest('article') !== article) continue
     const timeLink = timeEl.closest('a[href*="/status/"]')
     if (timeLink) {
       const href = timeLink.getAttribute('href') ?? ''
@@ -48,20 +48,25 @@ export function extractTweetIdFromArticle(article: Element): string | null {
     }
   }
 
-  // 策略 2(详情页主推文 — URL fallback):必须排在策略 3/4 **之前**!
+  // 策略 2(详情页主推文 — URL fallback):必须排在策略 3 **之前**!
   //
   // Twitter status detail 页**不给主推文 <time> 套自指 link**(当前已经在
   // 该推文页),策略 1 fail。但主推文 article 内部经常嵌入**引用推文** /
-  // 媒体卡片,它们带有指向**别人** /status/<id> 的链接 — 如果让策略 3/4
+  // 媒体卡片,它们带有指向**别人** /status/<id> 的链接 — 如果让策略 3
   // 先跑,会拿到引用推文的 id,用户在详情页永远看不到 chip(实测踩过)。
   //
-  // 顶层 article(无 article 祖先)+ 当前 URL 在 /<user>/status/<id> 模式
-  // → 这条 article 一定是主推文,用 URL 里的 id。回复区 article 走策略 1
-  // 已经命中,不会进这一步。
+  // 顶层 article 也可能是广告;只有作者与详情页 URL 的 handle 一致时
+  // 才能用 URL 里的 id。回复区 article 通常已在策略 1 命中。
   if (typeof location !== 'undefined' && location.pathname) {
-    const urlMatch = location.pathname.match(/^\/[^/]+\/status\/(\d+)/)
-    if (urlMatch && !article.parentElement?.closest('article')) {
-      return urlMatch[1]
+    const urlMatch = location.pathname.match(
+      /^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/,
+    )
+    if (
+      urlMatch &&
+      !article.parentElement?.closest('article') &&
+      extractAuthorHandleFromArticle(article) === urlMatch[1].toLowerCase()
+    ) {
+      return urlMatch[2]
     }
   }
 
@@ -71,13 +76,6 @@ export function extractTweetIdFromArticle(article: Element): string | null {
     // 如果这个 a 的最近 article 不是我们当前 article,说明它属于嵌套的
     // 引用推文(article > ... > article > a),跳过。
     if (a.closest('article') !== article) continue
-    const href = a.getAttribute('href') ?? ''
-    const m = href.match(STATUS_PATH_REGEX)
-    if (m) return m[1]
-  }
-
-  // 策略 4:兜底,任意 /status/ 链接(尽量挽救能识别的)
-  for (const a of Array.from(links)) {
     const href = a.getAttribute('href') ?? ''
     const m = href.match(STATUS_PATH_REGEX)
     if (m) return m[1]
