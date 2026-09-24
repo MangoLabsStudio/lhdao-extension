@@ -14,13 +14,8 @@ import {
   mapCaptureToCampaigns,
   mergeAction,
 } from '@/lib/engagement-capture'
-import {
-  SYNC_INTERVAL_SECONDS,
-  VERIFY_RETRY_DELAY_MS,
-  WEB_ENDPOINT,
-} from '@/lib/env'
+import { VERIFY_RETRY_DELAY_MS, WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
-import { withBackoffJitter } from '@/lib/gql-backoff'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
   buildProofCanonical,
@@ -313,21 +308,15 @@ function maskToken(token: string): string {
 /**
  * Background service worker.
  *
- *   - 启动 / 60s alarm 触发 → syncTasks() 拉取可参与任务,扁平化进 sessionStore
+ *   - popup 手动同步 → syncTasks() 拉取可参与任务,扁平化进 sessionStore
  *   - content script 来 RPC → 响应任务查询 / 处理 chip 点击 reserve+verify
  *   - 任务列表更新后广播 'tasks-updated',content script 收到立刻 rescan
  */
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
-  // 启动立刻 sync 一次,然后每 60s
-  void syncTasks()
-  chrome.alarms.create(ALARM_NAME, {
-    periodInMinutes: SYNC_INTERVAL_SECONDS / 60,
-  })
-  chrome.alarms.onAlarm.addListener((a) => {
-    if (a.name === ALARM_NAME) void syncTasks()
-  })
+  // 清除旧版本留下的定时器。任务数据只在用户点击同步时拉取。
+  void chrome.alarms.clear(ALARM_NAME)
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
     if (
@@ -545,8 +534,7 @@ export default defineBackground(() => {
       return { type: 'ack' }
     }
     if (req.type === 'force-sync') {
-      // popup "刷新" 按钮的入口 — 等 sync 跑完再 return,UI 可以即时
-      // 看到错误或最新计数,不用等下一个 60s alarm。
+      // popup 手动同步入口，等结果落入缓存后再返回。
       await syncTasks()
       const err = await sessionStore.get('lastSyncError')
       const httpStatus = await sessionStore.get('lastSyncHttpStatus')
@@ -596,8 +584,7 @@ export default defineBackground(() => {
     return { type: 'ack' }
   })
 
-  // token 写入 / 删除 → 立即重新 sync(用户在 options 页粘贴 token 后,
-  // 不必等下一个 60s alarm 才看到任务)
+  // token 切换时清理旧账户缓存，等待用户手动同步。
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && 'apiToken' in changes) {
       void handleTaskTokenChange()
@@ -767,7 +754,6 @@ let syncInFlight: {
   promise: Promise<void>
 } | null = null
 let syncReset: Promise<void> = Promise.resolve()
-let syncRetryTimer: ReturnType<typeof setTimeout> | null = null
 
 async function clearTaskCache(): Promise<void> {
   await sessionStore.patch({
@@ -792,17 +778,15 @@ async function clearTaskCache(): Promise<void> {
 export function handleTaskTokenChange(): Promise<void> {
   syncGeneration++
   syncInFlight = null
-  if (syncRetryTimer) clearTimeout(syncRetryTimer)
-  syncRetryTimer = null
   syncReset = syncReset.then(clearTaskCache)
-  return syncReset.then(syncTasks)
+  return syncReset
 }
 
 export async function syncTasks(): Promise<void> {
   const generation = syncGeneration
   await syncReset
   const token = await localStore.get('apiToken')
-  if (generation !== syncGeneration) return syncTasks()
+  if (generation !== syncGeneration) return
   if (syncInFlight?.token === token && syncInFlight.generation === generation) {
     return syncInFlight.promise
   }
@@ -983,16 +967,6 @@ async function performSyncTasks(
   if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
     queueRawCaptureReconcile()
   broadcastToContent({ type: 'tasks-updated' })
-  if (reason instanceof GqlError && reason.retryAfterMs !== undefined)
-    scheduleSyncRetry(reason.retryAfterMs)
-}
-
-function scheduleSyncRetry(retryAfterMs: number): void {
-  if (syncRetryTimer) clearTimeout(syncRetryTimer)
-  syncRetryTimer = setTimeout(() => {
-    syncRetryTimer = null
-    void syncTasks()
-  }, withBackoffJitter(retryAfterMs))
 }
 
 /**
@@ -1225,7 +1199,7 @@ export function flattenTasks(
  *   2. verifyEngagement — 系统去 Twitter API 校验是否真做了
  *      - 失败一次,等 5s 重试一次(Twitter API 缓存延迟兜底)
  *      - 第二次还失败就返回错误 code
- *   3. 成功后 syncTasks() 刷新缓存,chip 自动消失
+ *   3. 成功后返回奖励；任务和余额在下次手动同步时刷新
  */
 /**
  * 一键推广:调后端 promoteTweet(带 plugin token)建 ENGAGEMENT 商单。
@@ -1282,7 +1256,6 @@ export async function promoteTweetHandler(req: {
     }
 
     releaseSpendActionKey('promote', promoteVariables)
-    void syncTasks() // 刷新余额缓存
     return { type: 'promote-result', ok: true, campaignIds, reinvested }
   } catch (e) {
     // 只有确定性失败才换新键。5xx / internal / network / abort 可能发生在
@@ -1603,7 +1576,6 @@ async function submitTask(campaignId: string): Promise<MsgResponse> {
         },
       )
       const reward = Number(data.verifyEngagement?.actualReward ?? 0)
-      void syncTasks() // 刷新缓存,完成的任务消失
       return { type: 'submit-result', ok: true, reward }
     } catch (e) {
       const isLast = i === 1
@@ -1912,7 +1884,7 @@ async function doHandleEngagementCapture(
     const mapped = mapCaptureToCampaigns(cap, { byTweet, byAuthor })
     if (mapped.length === 0) {
       dbg(
-        'bg 暂存:无匹配任务(tweet 不在快照,或该任务动作类型与捕获不符),触发同步后重放。',
+        'bg 暂存:无匹配任务(tweet 不在快照,或该任务动作类型与捕获不符),等待手动同步后重放。',
         'tweetId=',
         cap.tweetId,
         '快照该推任务=',
@@ -1920,7 +1892,6 @@ async function doHandleEngagementCapture(
           ? (byTweet[cap.tweetId] ?? []).map((t) => t.actionType)
           : '-',
       )
-      await syncTasks()
       return
     }
     await reportMappedCaptures(mapped, capturedAt, { byTweet, byAuthor })
@@ -2107,7 +2078,6 @@ async function verifyOnly(campaignId: string): Promise<MsgResponse> {
     )
     const r = res.submitEngagementProof
     if (r.accepted) {
-      void syncTasks()
       // reward 异步发放,submit 不返金额 → reward:0,UI 回退显示预期奖励/发放中。
       return { type: 'verify-result', ok: true, reward: 0 }
     }
@@ -2361,7 +2331,7 @@ async function pollPairingOnce(code: string): Promise<void> {
       await closePairingTab()
       setPairingState({ kind: 'success' })
       scheduleReset()
-      // storage.onChanged 监听器会自动 trigger syncTasks(),无需手动
+      // 用户可在插件弹窗手动同步任务。
       return
     }
     if (status === 'EXPIRED') {

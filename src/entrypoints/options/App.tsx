@@ -11,6 +11,7 @@ const TOKEN_PATTERN = /^lhdao_pk_[A-Za-z0-9_-]{32,}$/
 
 type VerifyState =
   | { kind: 'idle' }
+  | { kind: 'saved' }
   | { kind: 'verifying' }
   | { kind: 'bound'; user: NonNullable<MeResult['me']> }
   | { kind: 'error'; message: string }
@@ -19,28 +20,20 @@ type VerifyState =
  * Options page (chrome://extensions → Lighthouse → Options)。
  * 唯一职责:粘贴 plugin token → 校验 → 保存到 chrome.storage.local。
  *
- * 校验通过后会触发 chrome.storage.onChanged 监听器,background SW
- * 立刻 syncTasks(),用户切到 X 就能看到 chip。
+ * 已保存的 token 不会在打开设置页时自动查询；验证按钮由用户触发。
  */
 export function App() {
   const [token, setToken] = React.useState('')
   const [state, setState] = React.useState<VerifyState>({ kind: 'idle' })
   const [pairing, setPairing] = React.useState<PairingState>({ kind: 'idle' })
 
-  // 启动时若已有 token,先回填 + 验证有效性
+  // 启动时只回填已有 token。
   React.useEffect(() => {
     void (async () => {
       const stored = await localStore.get('apiToken')
       if (!stored) return
       setToken(stored)
-      setState({ kind: 'verifying' })
-      try {
-        const r = await gql<MeResult>(ME_QUERY)
-        if (r.me) setState({ kind: 'bound', user: r.me })
-        else setState({ kind: 'error', message: 'token 无效或用户不存在' })
-      } catch (e) {
-        setState({ kind: 'error', message: errorText(e) })
-      }
+      setState({ kind: 'saved' })
     })()
   }, [])
 
@@ -53,18 +46,13 @@ export function App() {
     const listener = (msg: { type?: string; state?: PairingState }) => {
       if (msg?.type === 'pairing-status' && msg.state) {
         setPairing(msg.state)
-        // Pairing 成功后让 main verify 流程也跑一次,转到 Bound 卡
+        // Pairing 成功后只回填 token，用户可在弹窗手动同步。
         if (msg.state.kind === 'success') {
           void (async () => {
             const stored = await localStore.get('apiToken')
             if (!stored) return
             setToken(stored)
-            try {
-              const r = await gql<MeResult>(ME_QUERY)
-              if (r.me) setState({ kind: 'bound', user: r.me })
-            } catch {
-              /* 同步失败留给后续重试 */
-            }
+            setState({ kind: 'saved' })
           })()
         }
       }
@@ -132,6 +120,22 @@ export function App() {
       {/* Bound state — show first, hide token UI when already bound */}
       {state.kind === 'bound' ? (
         <BoundCard user={state.user} onUnbind={clearToken} />
+      ) : state.kind === 'saved' ? (
+        <section className="mt-8 rounded-2xl border border-emerald-200 bg-emerald-50 p-6 dark:border-emerald-900/40 dark:bg-emerald-950/30">
+          <p className="text-[13.5px] font-bold text-emerald-700 dark:text-emerald-300">
+            token 已保存
+          </p>
+          <p className="mt-1 text-[12px] text-emerald-600 dark:text-emerald-400">
+            请打开插件弹窗手动同步任务。
+          </p>
+          <button
+            type="button"
+            onClick={clearToken}
+            className="mt-3 text-[11.5px] font-bold text-rose-600 dark:text-rose-400"
+          >
+            解除绑定
+          </button>
+        </section>
       ) : (
         <>
           <PrimaryPairCard
@@ -594,7 +598,7 @@ function PrimaryPairCard({
               已连接 Lighthouse
             </p>
             <p className="mt-0.5 text-[12px] text-emerald-600/80 dark:text-emerald-400/70">
-              正在同步任务…
+              请打开插件弹窗手动同步任务。
             </p>
           </div>
         </div>

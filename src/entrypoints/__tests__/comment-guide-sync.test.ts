@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing'
-import { SYNC_INTERVAL_SECONDS } from '@/lib/env'
 import * as gqlApi from '@/lib/gql'
 import * as messaging from '@/lib/messaging'
 import {
@@ -81,10 +80,6 @@ const tasks = async () =>
   (await sessionStore.get('tasksByTweetId'))?.['123456'] ?? []
 
 describe('comment guide sync', () => {
-  it('rechecks Lighthouse Selected qualification every 60 seconds', () => {
-    expect(SYNC_INTERVAL_SECONDS).toBe(60)
-  })
-
   it('uses only a successful current-generation me result for qualification', async () => {
     me = {
       id: 'user-a',
@@ -400,6 +395,8 @@ describe('comment guide sync', () => {
       throw new Error('unexpected query')
     })
     const replacing = handleTaskTokenChange()
+    await replacing
+    const requested = syncTasks()
     await vi.waitFor(() => expect(resolveNewMe).toBeDefined())
 
     const sidebar = await readSidebarData()
@@ -428,7 +425,7 @@ describe('comment guide sync', () => {
         lighthouseSelected: false,
       },
     })
-    await replacing
+    await requested
   })
 
   it('never serves an old identity after logout', async () => {
@@ -512,6 +509,8 @@ describe('comment guide sync', () => {
     await handleTaskTokenChange()
     resolveOld({ availableEngagements: [order('old-session', '旧会话')] })
     await Promise.all([pending, switched])
+    expect(await tasks()).toEqual([])
+    await syncTasks()
     expect((await tasks()).map((t) => t.campaignId)).toEqual(['new-session'])
   })
 
