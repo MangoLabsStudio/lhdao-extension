@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { WEB_ENDPOINT } from '@/lib/env'
+import { API_ENDPOINT, WEB_ENDPOINT } from '@/lib/env'
 import { sendMessage } from '@/lib/messaging'
 import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
 import type { UserProfile } from '@/lib/storage'
@@ -829,7 +829,7 @@ function diagnoseSyncError(
   if (httpStatus === 401) {
     return {
       title: 'Token 无效',
-      hint: 'token 已被吊销或者拼写不对。去 app.lhdao.top/settings/plugin-tokens 重建一个再粘贴。',
+      hint: `token 已被吊销或者拼写不对。去 ${WEB_ENDPOINT}/settings/plugin-tokens 重建一个再粘贴。`,
       action: 'reconfigure',
     }
   }
@@ -873,7 +873,7 @@ function diagnoseSyncError(
   if (/Network error|Failed to fetch/i.test(err)) {
     return {
       title: '网络 / CORS 错误',
-      hint: '可能后端没把 chrome-extension://* 加进 CORS 白名单,或本机连不上 service.lhdao.top。',
+      hint: `可能后端没把 chrome-extension://* 加进 CORS 白名单,或本机连不上 ${new URL(API_ENDPOINT).host}。`,
     }
   }
   return {
