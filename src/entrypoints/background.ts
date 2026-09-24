@@ -87,6 +87,7 @@ import {
   sessionStore,
   type TweetCampaignSummary,
 } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import type {
   // MsgRequest, // Binance Square handler disabled
@@ -1951,7 +1952,7 @@ async function reserveOnly(
         type: 'reserve-result',
         ok: false,
         code: 'RESERVE_FAILED',
-        message: `可按 ${w.effectiveTier} 档领取，奖励 ${w.effectiveTierRewardLux} LUX，请确认。`,
+        message: `可按 ${tierDisplay(w.effectiveTier)} 档领取，奖励 ${w.effectiveTierRewardLux} LUX，请确认。`,
         cascadeWarning: w,
       }
     }

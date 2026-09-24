@@ -129,7 +129,7 @@ export interface UserProfile {
   avatar: string | null
   /** Twitter handle(无 @ 前缀)— sidebar 第二行小字 */
   twitterHandle: string | null
-  /** 用户 tier — S / A / B / C / D / E */
+  /** 后端原始 tier；F 仅在展示时映射为 D-。 */
   tier: string | null
   /** 劳动收入 LUX 余额(可用余额)— sidebar 大字显示 */
   newLux: number | null

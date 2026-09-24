@@ -5,6 +5,7 @@ import { GqlError, gql } from '@/lib/gql'
 import { sendMessage } from '@/lib/messaging'
 import { ME_QUERY, type MeResult } from '@/lib/queries'
 import { localStore } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 import type { PairingState } from '@/types/messages'
 
 const TOKEN_PATTERN = /^lhdao_pk_[A-Za-z0-9_-]{32,}$/
@@ -325,7 +326,7 @@ function BoundCard({
             Tier
           </dt>
           <dd className="mt-1 font-medium text-slate-900 dark:text-slate-100">
-            {user.tier ?? '—'}
+            {tierDisplay(user.tier)}
           </dd>
         </div>
         {user.nickname && (

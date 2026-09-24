@@ -8,6 +8,7 @@ import {
 import { sendMessage } from '@/lib/messaging'
 import type { CascadeWarning } from '@/lib/queries'
 import type { CampaignTaskCache } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 
 /**
  * Sidebar 卡片「当前任务」段 — 嵌入 SidebarCard 身份卡与底部指标之间。
@@ -780,7 +781,7 @@ export function CurrentTaskSection({
               {busy
                 ? '领取中…'
                 : cascadeWarning
-                  ? `确认按 ${cascadeWarning.effectiveTier} 档领取 · ${cascadeWarning.effectiveTierRewardLux} LUX`
+                  ? `确认按 ${tierDisplay(cascadeWarning.effectiveTier)} 档领取 · ${cascadeWarning.effectiveTierRewardLux} LUX`
                   : '领取任务'}
             </button>
           ) : (

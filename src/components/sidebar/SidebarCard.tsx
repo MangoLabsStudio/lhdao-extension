@@ -7,6 +7,7 @@ import type {
   TweetCampaignSummary,
   UserProfile,
 } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 
 /**
  * Sidebar 卡片 v3 — Lighthouse mini-dashboard 嵌入 X 右侧栏
@@ -137,7 +138,7 @@ function IdentityCard({
           {handle && <div className="lh-identity-handle">@{handle}</div>}
         </div>
         {profile?.tier && (
-          <span className="lh-tier-chip">TIER {profile.tier}</span>
+          <span className="lh-tier-chip">TIER {tierDisplay(profile.tier)}</span>
         )}
       </div>
       <div className="lh-balance-row">
@@ -199,7 +200,7 @@ function FooterStats({
         label="TODAY"
         value={today != null && today > 0 ? `+${formatToday(today)}` : '+0'}
       />
-      <FooterStatCell label="TIER" value={profile?.tier ?? '—'} />
+      <FooterStatCell label="TIER" value={tierDisplay(profile?.tier)} />
     </div>
   )
 }

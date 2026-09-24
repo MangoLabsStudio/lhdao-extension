@@ -3,6 +3,7 @@ import { API_ENDPOINT, WEB_ENDPOINT } from '@/lib/env'
 import { sendMessage } from '@/lib/messaging'
 import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
 import type { UserProfile } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 import type { PairingState } from '@/types/messages'
 
 /**
@@ -243,7 +244,7 @@ function IdentityRow({ profile }: { profile: UserProfile | null }) {
       </div>
       {profile?.tier && (
         <span className="shrink-0 rounded-md bg-[#0F172A] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.10em] text-[#5EEAD4]">
-          TIER {profile.tier}
+          TIER {tierDisplay(profile.tier)}
         </span>
       )}
     </div>

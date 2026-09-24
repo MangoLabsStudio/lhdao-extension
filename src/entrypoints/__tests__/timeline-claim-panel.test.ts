@@ -144,7 +144,7 @@ describe('timelineOnly claim button in current-task panel', () => {
           message: '请确认降档',
           cascadeWarning: {
             userTier: 'A',
-            effectiveTier: 'B',
+            effectiveTier: 'F',
             userTierRewardLux: 20,
             effectiveTierRewardLux: 13.5,
           },
@@ -153,14 +153,14 @@ describe('timelineOnly claim button in current-task panel', () => {
     })
     await act(async () => scanTimeline())
     await act(async () => claimButton()?.click())
-    expect(claimButton()?.textContent).toContain('B')
+    expect(claimButton()?.textContent).toContain('D-')
     expect(panel()?.textContent).toContain('13.5')
     await act(async () => claimButton()?.click())
     expect(send).toHaveBeenCalledWith({
       type: 'reserve-task',
       campaignId: 'timeline-like',
       confirmCascade: true,
-      confirmedCascadeTier: 'B',
+      confirmedCascadeTier: 'F',
     })
   })
 
