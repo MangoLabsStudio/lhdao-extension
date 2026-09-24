@@ -1,22 +1,22 @@
-import type { BinanceProbeObservation } from './binance-square-probe'
+// import type { BinanceProbeObservation } from './binance-square-probe'
 import type { AvailableEngagement } from './queries'
 
-export type BinanceSquareActionType = 'LIKE' | 'COMMENT' | 'SHARE' | 'FOLLOW'
-
-export interface BinanceSquareTaskCache {
-  campaignId: string
-  actionType: BinanceSquareActionType
-  targetUrl: string
-  targetContentId?: string
-  targetAuthorId?: string
-  reserved: boolean
-}
-
-export interface BinanceSquareTaskIndex {
-  byContentId: Record<string, BinanceSquareTaskCache[]>
-  byAuthorId: Record<string, BinanceSquareTaskCache[]>
-}
-
+// export type BinanceSquareActionType = 'LIKE' | 'COMMENT' | 'SHARE' | 'FOLLOW'
+//
+// export interface BinanceSquareTaskCache {
+//   campaignId: string
+//   actionType: BinanceSquareActionType
+//   targetUrl: string
+//   targetContentId?: string
+//   targetAuthorId?: string
+//   reserved: boolean
+// }
+//
+// export interface BinanceSquareTaskIndex {
+//   byContentId: Record<string, BinanceSquareTaskCache[]>
+//   byAuthorId: Record<string, BinanceSquareTaskCache[]>
+// }
+//
 // ── Schemas ───────────────────────────────────────────────────────────
 
 interface LocalSchema {
@@ -57,10 +57,10 @@ interface SessionSchema {
     reserved: AvailableEngagement[]
   } | null
 
-  /** Binance Square 任务的独立索引，不与 X tweet ID 缓存混用。 */
-  binanceSquareTasks: BinanceSquareTaskIndex
-  /** Beta 探针暂存的脱敏网络形状；不包含原始请求或响应。 */
-  binanceSquareProbeObservations: BinanceProbeObservation[]
+  //   /** Binance Square 任务的独立索引，不与 X tweet ID 缓存混用。 */
+  //   binanceSquareTasks: BinanceSquareTaskIndex
+  //   /** Beta 探针暂存的脱敏网络形状；不包含原始请求或响应。 */
+  //   binanceSquareProbeObservations: BinanceProbeObservation[]
   /** Lighthouse 页面保存的脱敏产品任务引用，不含规则或凭据。 */
   /**
    * key = tweetId, value = 这条推文上挂着的"推文级"任务(LIKE/RT/COMMENT)。
@@ -129,7 +129,7 @@ export interface UserProfile {
   avatar: string | null
   /** Twitter handle(无 @ 前缀)— sidebar 第二行小字 */
   twitterHandle: string | null
-  /** 用户 tier — S / A / B / C / D / E */
+  /** 后端原始 tier；F 仅在展示时映射为 D-。 */
   tier: string | null
   /** 劳动收入 LUX 余额(可用余额)— sidebar 大字显示 */
   newLux: number | null

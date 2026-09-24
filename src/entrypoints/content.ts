@@ -20,6 +20,7 @@ import { initDwellTracker, onDwellUrlChange } from '@/lib/dwell-tracker'
 import { sendMessage } from '@/lib/messaging'
 import type { LighthouseMember } from '@/lib/queries'
 import { type CampaignTaskCache, localStore } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 import {
   extractAuthorHandleFromArticle,
   extractTweetIdFromArticle,
@@ -1185,7 +1186,7 @@ function attachProfileBadge(bioEl: Element, member: LighthouseMember): void {
   host.style.marginTop = '8px'
 
   const shadow = host.attachShadow({ mode: 'open' })
-  const tier = member.tier ?? '—'
+  const tier = tierDisplay(member.tier)
   const iconUrl = chrome.runtime.getURL('icon/128.png')
   shadow.innerHTML = `
     <style>${PROFILE_BADGE_CSS}</style>

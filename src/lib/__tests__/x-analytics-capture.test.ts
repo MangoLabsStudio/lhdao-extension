@@ -66,7 +66,6 @@ describe('X account analytics capture', () => {
 
     expect(diagnoseXAnalyticsPage(document).missing).toEqual([
       'verifiedFollowers',
-      'activeFollowers',
       'followers',
       'engagementRate',
       'engagements',
@@ -322,15 +321,23 @@ describe('3M range refresh guard', () => {
     expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(false)
   })
 
+  it('captures a page without an active followers card as null', () => {
+    renderAnalyticsPage(true)
+    Array.from(document.querySelectorAll('button'))
+      .find((button) => button.textContent?.startsWith('Active followers'))!
+      .remove()
+    expect(captureXAnalyticsPage(document)?.metrics).toMatchObject({
+      activeFollowers: null,
+      followers: 2200,
+    })
+  })
+
   it('rejects complete metrics while the 3M range stays unselected', async () => {
     renderAnalyticsPage(false)
-    const previous = captureXAnalyticsPage(document)
     const clock = fakeClock()
 
     const result = await waitForThreeMonthCapture({
       root: document,
-      previousMetrics: previous?.metrics ?? null,
-      wasSelected: false,
       timeoutMs: 2_000,
       intervalMs: 250,
       now: clock.now,
@@ -342,13 +349,10 @@ describe('3M range refresh guard', () => {
 
   it('accepts the capture once 3M is selected and the metrics change', async () => {
     renderAnalyticsPage(false)
-    const previous = captureXAnalyticsPage(document)
     let tick = 0
 
     const result = await waitForThreeMonthCapture({
       root: document,
-      previousMetrics: previous?.metrics ?? null,
-      wasSelected: false,
       timeoutMs: 2_000,
       intervalMs: 250,
       now: () => tick,
@@ -371,13 +375,10 @@ describe('3M range refresh guard', () => {
 
   it('accepts unchanged metrics when 3M was already selected before the click', async () => {
     renderAnalyticsPage(true)
-    const previous = captureXAnalyticsPage(document)
     const clock = fakeClock()
 
     const result = await waitForThreeMonthCapture({
       root: document,
-      previousMetrics: previous?.metrics ?? null,
-      wasSelected: true,
       timeoutMs: 2_000,
       intervalMs: 250,
       now: clock.now,
@@ -388,15 +389,12 @@ describe('3M range refresh guard', () => {
     expect(result.capture?.metrics.impressions).toBe(11_700)
   })
 
-  it('keeps waiting when 3M becomes selected but the metrics are still stale', async () => {
+  it('accepts unchanged metrics after switching to 3M', async () => {
     renderAnalyticsPage(false)
-    const previous = captureXAnalyticsPage(document)
     let tick = 0
 
     const result = await waitForThreeMonthCapture({
       root: document,
-      previousMetrics: previous?.metrics ?? null,
-      wasSelected: false,
       timeoutMs: 1_000,
       intervalMs: 250,
       now: () => tick,
@@ -409,6 +407,7 @@ describe('3M range refresh guard', () => {
       },
     })
 
-    expect(result.refreshed).toBe(false)
+    expect(result.refreshed).toBe(true)
+    expect(result.capture?.metrics.impressions).toBe(11_700)
   })
 })

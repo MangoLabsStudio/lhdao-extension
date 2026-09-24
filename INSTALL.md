@@ -1,14 +1,14 @@
 # Lighthouse 浏览器扩展安装指南
 
-本指南适用于 `0.3.0` 的 Chrome / Edge / Firefox MV3 内测包。
+本指南适用于 `0.4.0` 的 Chrome / Edge / Firefox MV3 内测包。
 
 ## 1. 下载并解压
 
 从 [GitHub Releases](https://github.com/MangoLabsStudio/lhdao-extension/releases) 下载与浏览器匹配的包：
 
-- `lhdao-extension-0.3.0-chrome.zip`
-- `lhdao-extension-0.3.0-edge.zip`
-- `lhdao-extension-0.3.0-firefox.zip`
+- `lhdao-extension-0.4.0-chrome.zip`
+- `lhdao-extension-0.4.0-edge.zip`
+- `lhdao-extension-0.4.0-firefox.zip`
 
 解压后应直接看到 `manifest.json`。加载已解压扩展时不要选择 zip，也不要选择多包了一层
 的外部目录。
@@ -41,7 +41,7 @@ Firefox 包是 MV3 可运行产物，但尚未配置用于 AMO 签名的稳定 G
 1. 点击工具栏中的 Lighthouse 图标。
 2. 点击“立即登录”，在 `https://app.lhdao.top` 完成授权；或在 Options 中手动粘贴
    plugin token。
-3. Popup 显示 `Connected` 后，任务同步会在后台运行。
+3. Popup 显示 `Connected` 后，点击同步按钮获取最新任务。
 
 Plugin token 保存在扩展的 `storage.local` 中，并只作为 Bearer credential 发送给
 Lighthouse 后端。不会发送给第三方服务。

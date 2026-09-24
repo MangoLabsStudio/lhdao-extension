@@ -41,7 +41,7 @@ pnpm run build
 ## 权限边界
 
 - Manifest 只使用 `storage` 和 `alarms`。
-- 主机访问限定为 X、Twitter、Binance Square 及配置的 Lighthouse API 和网站。
+- 主机访问限定为 X、Twitter 及配置的 Lighthouse API 和网站。
 - 产品体验自动采集、规则匹配及证明运行时已移除。
 
 详细数据边界见 [PRIVACY.md](./PRIVACY.md)。
@@ -73,3 +73,5 @@ pnpm run build
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+币安广场功能已在 dev 注释停用：专用实现和测试保留在 `.disabled` 文件中，不参与构建。恢复前需同时恢复入口、后台、权限与测试。

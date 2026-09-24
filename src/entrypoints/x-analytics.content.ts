@@ -1,8 +1,6 @@
 import { sendMessage } from '@/lib/messaging'
 import {
-  captureXAnalyticsPage,
   findThreeMonthButton,
-  isThreeMonthSelected,
   rollingNinetyDayPeriod,
   waitForThreeMonthCapture,
 } from '@/lib/x-analytics-capture'
@@ -76,13 +74,9 @@ async function saveCapture(
   try {
     const range = findThreeMonthButton(document)
     if (!range) return fail(status, 'X 分析页尚未加载完整，请稍后重试。')
-    const previousMetrics = captureXAnalyticsPage(document)?.metrics ?? null
-    const wasSelected = isThreeMonthSelected(range)
     range.click()
     const result = await waitForThreeMonthCapture({
       root: document,
-      previousMetrics,
-      wasSelected,
     })
     if (!result.refreshed) return fail(status, '3M 数据尚未刷新，请稍后重试。')
     if (!result.capture)

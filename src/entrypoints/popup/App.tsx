@@ -1,8 +1,9 @@
 import * as React from 'react'
-import { WEB_ENDPOINT } from '@/lib/env'
+import { API_ENDPOINT, WEB_ENDPOINT } from '@/lib/env'
 import { sendMessage } from '@/lib/messaging'
 import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
 import type { UserProfile } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 import type { PairingState } from '@/types/messages'
 
 /**
@@ -14,9 +15,9 @@ import type { PairingState } from '@/types/messages'
  *   ③ token row      — "Token" label + 脱敏 token + Manage
  *   ④ stats split    — 2 cell:Available LUX(余额 + today delta)/ Tasks live(数量 + sync 状态)
  *   ⑤ error banner   — sync 失败时浮上来,翻译错误成中文人话
- *   ⑥ footer         — "Background syncing" 状态 + "Open dashboard ↗"
+ *   ⑥ footer         — 手动同步按钮 + "Open dashboard ↗"
  *
- * Popup 不做实际操作,只展示概览 + 跳到 options / lhdao.top。
+ * Popup 展示概览，并提供任务同步入口。
  */
 
 interface PopupData {
@@ -243,7 +244,7 @@ function IdentityRow({ profile }: { profile: UserProfile | null }) {
       </div>
       {profile?.tier && (
         <span className="shrink-0 rounded-md bg-[#0F172A] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.10em] text-[#5EEAD4]">
-          TIER {profile.tier}
+          TIER {tierDisplay(profile.tier)}
         </span>
       )}
     </div>
@@ -336,7 +337,7 @@ function StatsSplit({
             ? { text: 'syncing…', up: false }
             : lastSyncAt
               ? { text: `synced ${fmtRelative(lastSyncAt)}`, up: false }
-              : null
+              : { text: '点击下方同步任务', up: false }
         }
       />
     </div>
@@ -417,7 +418,7 @@ function Footer({
     ? 'Sync failed'
     : syncing
       ? 'Syncing…'
-      : 'Background syncing'
+      : '同步任务'
 
   return (
     <footer className="mt-0 flex items-center justify-between gap-2 border-t border-slate-200 px-4 py-3 text-[11.5px] dark:border-slate-800">
@@ -517,7 +518,7 @@ function SignInBlock({
           已连接
         </p>
         <p className="mx-auto mt-1.5 max-w-[240px] text-[11.5px] leading-relaxed text-slate-500 dark:text-slate-400">
-          插件正在同步任务,稍后自动刷新。
+          点击下方“同步任务”手动获取最新数据。
         </p>
       </div>
     )
@@ -829,7 +830,7 @@ function diagnoseSyncError(
   if (httpStatus === 401) {
     return {
       title: 'Token 无效',
-      hint: 'token 已被吊销或者拼写不对。去 app.lhdao.top/settings/plugin-tokens 重建一个再粘贴。',
+      hint: `token 已被吊销或者拼写不对。去 ${WEB_ENDPOINT}/settings/plugin-tokens 重建一个再粘贴。`,
       action: 'reconfigure',
     }
   }
@@ -873,7 +874,7 @@ function diagnoseSyncError(
   if (/Network error|Failed to fetch/i.test(err)) {
     return {
       title: '网络 / CORS 错误',
-      hint: '可能后端没把 chrome-extension://* 加进 CORS 白名单,或本机连不上 service.lhdao.top。',
+      hint: `可能后端没把 chrome-extension://* 加进 CORS 白名单,或本机连不上 ${new URL(API_ENDPOINT).host}。`,
     }
   }
   return {

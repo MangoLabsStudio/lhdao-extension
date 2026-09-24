@@ -46,8 +46,8 @@ export function broadcastToContent(
   const urls = [
     '*://x.com/*',
     '*://twitter.com/*',
-    'https://www.binance.com/*/square/*',
-    'https://www.binance.com/square/*',
+    //     'https://www.binance.com/*/square/*',
+    //     'https://www.binance.com/square/*',
   ]
   chrome.tabs.query({ url: urls }, (tabs) => {
     for (const tab of tabs) {

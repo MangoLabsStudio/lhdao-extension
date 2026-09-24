@@ -11,7 +11,7 @@ describe('broadcastToContent', () => {
     vi.clearAllMocks()
   })
 
-  it('broadcasts task updates to X, Twitter, and Binance Square', () => {
+  it('broadcasts task updates to X and Twitter only', () => {
     const sendMessage = vi.fn(() => Promise.resolve())
     const query = vi.fn((_query, callback) => callback([{ id: 7 }]))
     vi.stubGlobal('chrome', { tabs: { query, sendMessage } })
@@ -20,12 +20,7 @@ describe('broadcastToContent', () => {
 
     expect(query).toHaveBeenCalledWith(
       {
-        url: [
-          '*://x.com/*',
-          '*://twitter.com/*',
-          'https://www.binance.com/*/square/*',
-          'https://www.binance.com/square/*',
-        ],
+        url: ['*://x.com/*', '*://twitter.com/*'],
       },
       expect.any(Function),
     )

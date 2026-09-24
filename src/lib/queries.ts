@@ -85,7 +85,7 @@ export interface SaveXAnalyticsVars {
     periodStart: string
     periodEnd: string
     capturedAt: string
-    metrics: Record<string, number>
+    metrics: Record<string, number | null>
   }
 }
 
@@ -97,7 +97,7 @@ export interface SaveXAnalyticsResult {
     periodEnd: string
     capturedAt: string
     savedAt: string
-    metrics: Record<string, number>
+    metrics: Record<string, number | null>
   }
 }
 
@@ -152,7 +152,7 @@ export type EngagementActionType =
   | 'SHARE'
   | 'FOLLOW'
 
-export type EngagementPlatform = 'X' | 'BINANCE_SQUARE'
+export type EngagementPlatform = 'X' // | 'BINANCE_SQUARE' (disabled)
 
 export interface AvailableEngagement {
   id: string

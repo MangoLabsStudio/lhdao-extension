@@ -12,14 +12,15 @@ const summaryMetrics = {
 
 const requiredMetrics = [
   'verifiedFollowers',
-  'activeFollowers',
   'followers',
   ...Object.values(summaryMetrics),
 ] as const
 
 export interface XAnalyticsPageCapture {
   twitterUsername: string
-  metrics: Record<(typeof requiredMetrics)[number], number>
+  metrics: Record<(typeof requiredMetrics)[number], number> & {
+    activeFollowers: number | null
+  }
 }
 
 export interface XAnalyticsPageDiagnostic {
@@ -57,7 +58,11 @@ const selectedDataStates = new Set(['active', 'on', 'selected', 'checked'])
 // X 分析页范围选择器不用任何 ARIA/data 属性：选中的范围是实心胶囊
 // （bg-text + border-transparent + text-background），未选中是描边胶囊
 // （bg-transparent）。class 是语义化 design-token，不是哈希名。
-const xSelectedPillClasses = ['bg-text', 'border-transparent', 'text-background']
+const xSelectedPillClasses = [
+  'bg-text',
+  'border-transparent',
+  'text-background',
+]
 
 export function isThreeMonthSelected(button: HTMLButtonElement): boolean {
   if (button.getAttribute('aria-pressed') === 'true') return true
@@ -72,8 +77,6 @@ export function isThreeMonthSelected(button: HTMLButtonElement): boolean {
 
 export interface ThreeMonthCaptureWait {
   root: ParentNode
-  previousMetrics: Record<string, number> | null
-  wasSelected: boolean
   timeoutMs?: number
   intervalMs?: number
   now?: () => number
@@ -86,31 +89,21 @@ export interface ThreeMonthCaptureResult extends XAnalyticsPageDiagnostic {
 
 export async function waitForThreeMonthCapture({
   root,
-  previousMetrics,
-  wasSelected,
   timeoutMs = 8_000,
   intervalMs = 250,
   now = () => Date.now(),
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }: ThreeMonthCaptureWait): Promise<ThreeMonthCaptureResult> {
-  const before = previousMetrics ? metricsFingerprint(previousMetrics) : null
   const deadline = now() + timeoutMs
   for (;;) {
     const diagnostic = diagnoseXAnalyticsPage(root)
     const range = findThreeMonthButton(root)
     if (range && isThreeMonthSelected(range) && diagnostic.capture) {
-      const after = metricsFingerprint(diagnostic.capture.metrics)
-      if (wasSelected || after !== before) {
-        return { ...diagnostic, refreshed: true }
-      }
+      return { ...diagnostic, refreshed: true }
     }
     if (now() >= deadline) return { ...diagnostic, refreshed: false }
     await sleep(intervalMs)
   }
-}
-
-function metricsFingerprint(metrics: Record<string, number>): string {
-  return requiredMetrics.map((key) => metrics[key] ?? '').join('|')
 }
 
 export function captureXAnalyticsPage(
@@ -174,7 +167,10 @@ export function diagnoseXAnalyticsPage(
       missing.length === 0
         ? {
             twitterUsername: handle!.toLowerCase(),
-            metrics: metrics as XAnalyticsPageCapture['metrics'],
+            metrics: {
+              ...metrics,
+              activeFollowers: metrics.activeFollowers ?? null,
+            } as XAnalyticsPageCapture['metrics'],
           }
         : null,
     missing,

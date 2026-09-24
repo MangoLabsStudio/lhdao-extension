@@ -85,6 +85,26 @@ describe('content script focal task host', () => {
     expect(document.querySelectorAll('.lhdao-inline-task')).toHaveLength(1)
   })
 
+  it('keeps the task panel below the main tweet when an ad follows it', async () => {
+    rows = [
+      {
+        campaignId: 'reserved-like',
+        tweetId: '123456',
+        actionType: 'LIKE',
+        expectedReward: 1,
+        reserved: true,
+      },
+    ]
+    document.body.innerHTML = `
+      <article id="main"><div data-testid="User-Name"><a role="link" href="/user">User</a></div><div role="group"><button data-testid="like">Like</button></div></article>
+      <article id="ad"><div data-testid="User-Name"><a role="link" href="/advertiser">Advertiser</a></div><div role="group"><button data-testid="like">Like</button></div></article>`
+    await act(async () => scanTimeline())
+    const host = document.querySelector('.lhdao-inline-task')
+    expect(host).not.toBeNull()
+    expect(document.querySelector('#main')?.contains(host)).toBe(true)
+    expect(document.querySelector('#ad')?.contains(host)).toBe(false)
+  })
+
   it('preserves the panel across a temporary missing article and full DOM replacement', async () => {
     rows = [
       {
@@ -112,7 +132,7 @@ describe('content script focal task host', () => {
     replacement.querySelector('a')!.setAttribute('href', '/user/status/654321')
     await act(async () => scanTimeline())
     expect(document.querySelector('.lhdao-inline-task')).not.toBe(host)
-    expect(panel()?.textContent).toContain('正在同步已接任务')
+    expect(panel()).toBeNull()
   })
 
   it('waits for late action controls and recovers after they disappear temporarily', async () => {
@@ -142,10 +162,10 @@ describe('content script focal task host', () => {
     expect(document.querySelector('.lhdao-inline-task')).toBe(host)
   })
 
-  it('mounts on a cold empty snapshot and displays first-sync failure', async () => {
+  it('recovers silently on a cold empty snapshot and first-sync failure', async () => {
     syncFailed = true
     await act(async () => scanTimeline())
-    expect(panel()?.textContent ?? '').toContain('任务暂时无法加载')
+    expect(panel()).toBeNull()
     expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
     vi.mocked(messaging.sendMessage).mockClear()
     await act(async () => window.dispatchEvent(new Event('online')))
@@ -179,16 +199,16 @@ describe('content script focal task host', () => {
   it('unmounts the focal task panel when leaving the detail page', async () => {
     syncFailed = true
     await act(async () => scanTimeline())
-    expect(panel()).not.toBeNull()
+    expect(document.querySelector('.lhdao-inline-task')).not.toBeNull()
     window.history.replaceState({}, '', '/home')
     await act(async () => scanTimeline())
     expect(document.querySelector('.lhdao-inline-task')).toBeNull()
   })
 
-  it('keeps a confirmed empty snapshot visible during the reservation arrival window', async () => {
+  it('keeps an empty snapshot hidden during the reservation arrival window', async () => {
     await act(async () => scanTimeline())
     expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
-    expect(panel()?.textContent).toContain('正在同步已接任务')
+    expect(panel()).toBeNull()
     expect(
       document.querySelector('article')?.hasAttribute('data-lhdao-active'),
     ).toBe(false)

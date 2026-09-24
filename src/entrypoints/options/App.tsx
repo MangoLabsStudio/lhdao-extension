@@ -1,16 +1,18 @@
 import * as React from 'react'
-import { CAPTURE_DEBUG } from '@/lib/capture-debug'
+// import { CAPTURE_DEBUG } from '@/lib/capture-debug'
 import { WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
 import { sendMessage } from '@/lib/messaging'
 import { ME_QUERY, type MeResult } from '@/lib/queries'
 import { localStore } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 import type { PairingState } from '@/types/messages'
 
 const TOKEN_PATTERN = /^lhdao_pk_[A-Za-z0-9_-]{32,}$/
 
 type VerifyState =
   | { kind: 'idle' }
+  | { kind: 'saved' }
   | { kind: 'verifying' }
   | { kind: 'bound'; user: NonNullable<MeResult['me']> }
   | { kind: 'error'; message: string }
@@ -19,28 +21,20 @@ type VerifyState =
  * Options page (chrome://extensions → Lighthouse → Options)。
  * 唯一职责:粘贴 plugin token → 校验 → 保存到 chrome.storage.local。
  *
- * 校验通过后会触发 chrome.storage.onChanged 监听器,background SW
- * 立刻 syncTasks(),用户切到 X 就能看到 chip。
+ * 已保存的 token 不会在打开设置页时自动查询；验证按钮由用户触发。
  */
 export function App() {
   const [token, setToken] = React.useState('')
   const [state, setState] = React.useState<VerifyState>({ kind: 'idle' })
   const [pairing, setPairing] = React.useState<PairingState>({ kind: 'idle' })
 
-  // 启动时若已有 token,先回填 + 验证有效性
+  // 启动时只回填已有 token。
   React.useEffect(() => {
     void (async () => {
       const stored = await localStore.get('apiToken')
       if (!stored) return
       setToken(stored)
-      setState({ kind: 'verifying' })
-      try {
-        const r = await gql<MeResult>(ME_QUERY)
-        if (r.me) setState({ kind: 'bound', user: r.me })
-        else setState({ kind: 'error', message: 'token 无效或用户不存在' })
-      } catch (e) {
-        setState({ kind: 'error', message: errorText(e) })
-      }
+      setState({ kind: 'saved' })
     })()
   }, [])
 
@@ -53,18 +47,13 @@ export function App() {
     const listener = (msg: { type?: string; state?: PairingState }) => {
       if (msg?.type === 'pairing-status' && msg.state) {
         setPairing(msg.state)
-        // Pairing 成功后让 main verify 流程也跑一次,转到 Bound 卡
+        // Pairing 成功后只回填 token，用户可在弹窗手动同步。
         if (msg.state.kind === 'success') {
           void (async () => {
             const stored = await localStore.get('apiToken')
             if (!stored) return
             setToken(stored)
-            try {
-              const r = await gql<MeResult>(ME_QUERY)
-              if (r.me) setState({ kind: 'bound', user: r.me })
-            } catch {
-              /* 同步失败留给后续重试 */
-            }
+            setState({ kind: 'saved' })
           })()
         }
       }
@@ -132,6 +121,22 @@ export function App() {
       {/* Bound state — show first, hide token UI when already bound */}
       {state.kind === 'bound' ? (
         <BoundCard user={state.user} onUnbind={clearToken} />
+      ) : state.kind === 'saved' ? (
+        <section className="mt-8 rounded-2xl border border-emerald-200 bg-emerald-50 p-6 dark:border-emerald-900/40 dark:bg-emerald-950/30">
+          <p className="text-[13.5px] font-bold text-emerald-700 dark:text-emerald-300">
+            token 已保存
+          </p>
+          <p className="mt-1 text-[12px] text-emerald-600 dark:text-emerald-400">
+            请打开插件弹窗手动同步任务。
+          </p>
+          <button
+            type="button"
+            onClick={clearToken}
+            className="mt-3 text-[11.5px] font-bold text-rose-600 dark:text-rose-400"
+          >
+            解除绑定
+          </button>
+        </section>
       ) : (
         <>
           <PrimaryPairCard
@@ -173,7 +178,7 @@ export function App() {
       )}
 
       <SensitiveToggleCard />
-      <BinanceProbePanel />
+      {/* Binance Square disabled: <BinanceProbePanel /> */}
 
       <footer className="mt-12 border-t border-slate-200 pt-4 text-[11px] text-slate-400 dark:border-slate-800 dark:text-slate-600">
         <p>
@@ -321,7 +326,7 @@ function BoundCard({
             Tier
           </dt>
           <dd className="mt-1 font-medium text-slate-900 dark:text-slate-100">
-            {user.tier ?? '—'}
+            {tierDisplay(user.tier)}
           </dd>
         </div>
         {user.nickname && (
@@ -594,7 +599,7 @@ function PrimaryPairCard({
               已连接 Lighthouse
             </p>
             <p className="mt-0.5 text-[12px] text-emerald-600/80 dark:text-emerald-400/70">
-              正在同步任务…
+              请打开插件弹窗手动同步任务。
             </p>
           </div>
         </div>
@@ -844,138 +849,138 @@ function SensitiveToggleCard() {
   )
 }
 
-export function BinanceProbePanel() {
-  const [count, setCount] = React.useState(0)
-  const [copied, setCopied] = React.useState(false)
-  const [busy, setBusy] = React.useState(false)
-  const [status, setStatus] = React.useState<string | null>(null)
-  const generation = React.useRef(0)
-  const mounted = React.useRef(false)
-
-  React.useEffect(() => {
-    mounted.current = true
-    const current = ++generation.current
-    if (!CAPTURE_DEBUG) {
-      return () => {
-        mounted.current = false
-        generation.current += 1
-      }
-    }
-    void sendMessage({ type: 'export-binance-probe-observations' })
-      .then((response) => {
-        if (
-          mounted.current &&
-          current === generation.current &&
-          response.type === 'binance-probe-observations'
-        ) {
-          setCount(response.observations.length)
-        }
-      })
-      .catch(() => {
-        if (mounted.current && current === generation.current) {
-          setStatus('加载失败')
-        }
-      })
-    return () => {
-      mounted.current = false
-      generation.current += 1
-    }
-  }, [])
-
-  if (!CAPTURE_DEBUG) return null
-
-  const copy = async () => {
-    const current = ++generation.current
-    setBusy(true)
-    setCopied(false)
-    setStatus(null)
-    try {
-      const response = await sendMessage({
-        type: 'export-binance-probe-observations',
-      })
-      if (!mounted.current || current !== generation.current) return
-      if (response.type !== 'binance-probe-observations') {
-        setStatus('复制失败')
-        return
-      }
-      await navigator.clipboard.writeText(
-        JSON.stringify(response.observations, null, 2),
-      )
-      if (!mounted.current || current !== generation.current) return
-      setCount(response.observations.length)
-      setCopied(true)
-    } catch {
-      if (mounted.current && current === generation.current) {
-        setStatus('复制失败')
-      }
-    } finally {
-      if (mounted.current && current === generation.current) {
-        setBusy(false)
-      }
-    }
-  }
-
-  const clear = async () => {
-    const current = ++generation.current
-    setBusy(true)
-    setStatus(null)
-    try {
-      const response = await sendMessage({
-        type: 'clear-binance-probe-observations',
-      })
-      if (!mounted.current || current !== generation.current) return
-      if (response.type !== 'ack') {
-        setStatus('清空失败')
-        return
-      }
-      setCount(0)
-      setCopied(false)
-    } catch {
-      if (mounted.current && current === generation.current) {
-        setStatus('清空失败')
-      }
-    } finally {
-      if (mounted.current && current === generation.current) {
-        setBusy(false)
-      }
-    }
-  }
-
-  return (
-    <section className="mt-6 rounded-2xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-900/60 dark:bg-amber-950/30">
-      <h2 className="text-[14px] font-bold text-amber-950 dark:text-amber-100">
-        Binance Square Beta Probe
-      </h2>
-      <p className="mt-1 text-[12px] leading-relaxed text-amber-800 dark:text-amber-300">
-        已采集 {count} 条脱敏 fixture。数据仅保留在当前浏览器 session
-        24h，不会自动上传。
-      </p>
-      {status && (
-        <p
-          aria-live="polite"
-          className="mt-2 text-[12px] font-semibold text-rose-700 dark:text-rose-300"
-        >
-          {status}
-        </p>
-      )}
-      <div className="mt-4 flex gap-2">
-        <button
-          type="button"
-          onClick={copy}
-          disabled={busy}
-          className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {copied ? '已复制' : '复制脱敏 fixtures'}
-        </button>
-        <button
-          type="button"
-          onClick={clear}
-          disabled={busy}
-          className="rounded-lg border border-amber-300 px-3 py-1.5 text-[12px] font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/50"
-        >
-          清空
-        </button>
-      </div>
-    </section>
-  )
-}
+// export function BinanceProbePanel() {
+//   const [count, setCount] = React.useState(0)
+//   const [copied, setCopied] = React.useState(false)
+//   const [busy, setBusy] = React.useState(false)
+//   const [status, setStatus] = React.useState<string | null>(null)
+//   const generation = React.useRef(0)
+//   const mounted = React.useRef(false)
+//
+//   React.useEffect(() => {
+//     mounted.current = true
+//     const current = ++generation.current
+//     if (!CAPTURE_DEBUG) {
+//       return () => {
+//         mounted.current = false
+//         generation.current += 1
+//       }
+//     }
+//     void sendMessage({ type: 'export-binance-probe-observations' })
+//       .then((response) => {
+//         if (
+//           mounted.current &&
+//           current === generation.current &&
+//           response.type === 'binance-probe-observations'
+//         ) {
+//           setCount(response.observations.length)
+//         }
+//       })
+//       .catch(() => {
+//         if (mounted.current && current === generation.current) {
+//           setStatus('加载失败')
+//         }
+//       })
+//     return () => {
+//       mounted.current = false
+//       generation.current += 1
+//     }
+//   }, [])
+//
+//   if (!CAPTURE_DEBUG) return null
+//
+//   const copy = async () => {
+//     const current = ++generation.current
+//     setBusy(true)
+//     setCopied(false)
+//     setStatus(null)
+//     try {
+//       const response = await sendMessage({
+//         type: 'export-binance-probe-observations',
+//       })
+//       if (!mounted.current || current !== generation.current) return
+//       if (response.type !== 'binance-probe-observations') {
+//         setStatus('复制失败')
+//         return
+//       }
+//       await navigator.clipboard.writeText(
+//         JSON.stringify(response.observations, null, 2),
+//       )
+//       if (!mounted.current || current !== generation.current) return
+//       setCount(response.observations.length)
+//       setCopied(true)
+//     } catch {
+//       if (mounted.current && current === generation.current) {
+//         setStatus('复制失败')
+//       }
+//     } finally {
+//       if (mounted.current && current === generation.current) {
+//         setBusy(false)
+//       }
+//     }
+//   }
+//
+//   const clear = async () => {
+//     const current = ++generation.current
+//     setBusy(true)
+//     setStatus(null)
+//     try {
+//       const response = await sendMessage({
+//         type: 'clear-binance-probe-observations',
+//       })
+//       if (!mounted.current || current !== generation.current) return
+//       if (response.type !== 'ack') {
+//         setStatus('清空失败')
+//         return
+//       }
+//       setCount(0)
+//       setCopied(false)
+//     } catch {
+//       if (mounted.current && current === generation.current) {
+//         setStatus('清空失败')
+//       }
+//     } finally {
+//       if (mounted.current && current === generation.current) {
+//         setBusy(false)
+//       }
+//     }
+//   }
+//
+//   return (
+//     <section className="mt-6 rounded-2xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-900/60 dark:bg-amber-950/30">
+//       <h2 className="text-[14px] font-bold text-amber-950 dark:text-amber-100">
+//         Binance Square Beta Probe
+//       </h2>
+//       <p className="mt-1 text-[12px] leading-relaxed text-amber-800 dark:text-amber-300">
+//         已采集 {count} 条脱敏 fixture。数据仅保留在当前浏览器 session
+//         24h，不会自动上传。
+//       </p>
+//       {status && (
+//         <p
+//           aria-live="polite"
+//           className="mt-2 text-[12px] font-semibold text-rose-700 dark:text-rose-300"
+//         >
+//           {status}
+//         </p>
+//       )}
+//       <div className="mt-4 flex gap-2">
+//         <button
+//           type="button"
+//           onClick={copy}
+//           disabled={busy}
+//           className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+//         >
+//           {copied ? '已复制' : '复制脱敏 fixtures'}
+//         </button>
+//         <button
+//           type="button"
+//           onClick={clear}
+//           disabled={busy}
+//           className="rounded-lg border border-amber-300 px-3 py-1.5 text-[12px] font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/50"
+//         >
+//           清空
+//         </button>
+//       </div>
+//     </section>
+//   )
+// }

@@ -8,10 +8,10 @@ import type { CascadeWarning } from '@/lib/queries'
  *   - 单向广播(BG → CS)用 `tasks-updated`,响应永远是 `ack`
  */
 
-import type {
-  BinanceProbeObservation,
-  BinanceProbeTarget,
-} from '@/lib/binance-square-probe'
+// import type {
+//   BinanceProbeObservation,
+//   BinanceProbeTarget,
+// } from '@/lib/binance-square-probe'
 import type {
   EngagementCurrentMarketPrices,
   LighthouseMember,
@@ -39,15 +39,15 @@ export type MsgRequest =
       periodStart: string
       periodEnd: string
       capturedAt: string
-      metrics: Record<string, number>
+      metrics: Record<string, number | null>
     }
-  | { type: 'get-binance-probe-targets' }
-  | {
-      type: 'report-binance-probe-observation'
-      observation: BinanceProbeObservation
-    }
-  | { type: 'export-binance-probe-observations' }
-  | { type: 'clear-binance-probe-observations' }
+  //   | { type: 'get-binance-probe-targets' }
+  //   | {
+  //       type: 'report-binance-probe-observation'
+  //       observation: BinanceProbeObservation
+  //     }
+  //   | { type: 'export-binance-probe-observations' }
+  //   | { type: 'clear-binance-probe-observations' }
   | { type: 'get-tasks-for-tweet'; tweetId: string }
   | { type: 'get-tasks-for-author'; authorHandle: string }
   | { type: 'get-tasks-snapshot' }
@@ -132,11 +132,11 @@ export type MsgResponse =
       ok: false
       code: 'NO_TOKEN' | 'WRONG_X_ACCOUNT' | 'INCOMPLETE' | 'NETWORK'
     }
-  | { type: 'binance-probe-targets'; targets: BinanceProbeTarget[] }
-  | {
-      type: 'binance-probe-observations'
-      observations: BinanceProbeObservation[]
-    }
+  //   | { type: 'binance-probe-targets'; targets: BinanceProbeTarget[] }
+  //   | {
+  //       type: 'binance-probe-observations'
+  //       observations: BinanceProbeObservation[]
+  //     }
   | { type: 'tasks'; tasks: CampaignTaskCache[] }
   | {
       type: 'tasks-snapshot'

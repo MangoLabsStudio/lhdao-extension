@@ -1,26 +1,21 @@
-import {
-  type BinanceProbeObservation,
-  parseProbeObservation,
-} from '@/lib/binance-square-probe'
-import {
-  indexBinanceSquareTasks,
-  reservedBinanceProbeTargets,
-} from '@/lib/binance-square-tasks'
+// import {
+//   type BinanceProbeObservation,
+//   parseProbeObservation,
+// } from '@/lib/binance-square-probe'
+// import {
+//   indexBinanceSquareTasks,
+//   reservedBinanceProbeTargets,
+// } from '@/lib/binance-square-tasks'
 import { sha256Hex } from '@/lib/canonical-json'
-import { CAPTURE_DEBUG, dbg } from '@/lib/capture-debug'
+import { dbg } from '@/lib/capture-debug'
 import { getOrCreateDeviceIdentity } from '@/lib/device-key'
 import {
   type CapturedAction,
   mapCaptureToCampaigns,
   mergeAction,
 } from '@/lib/engagement-capture'
-import {
-  SYNC_INTERVAL_SECONDS,
-  VERIFY_RETRY_DELAY_MS,
-  WEB_ENDPOINT,
-} from '@/lib/env'
+import { VERIFY_RETRY_DELAY_MS, WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
-import { withBackoffJitter } from '@/lib/gql-backoff'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
 import {
   buildProofCanonical,
@@ -92,9 +87,10 @@ import {
   sessionStore,
   type TweetCampaignSummary,
 } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import type {
-  MsgRequest,
+  // MsgRequest, // Binance Square handler disabled
   MsgResponse,
   PairingState,
   PromoteAction,
@@ -104,11 +100,11 @@ import type {
 const ALARM_NAME = 'lhdao-sync'
 const RAW_CAPTURE_TTL_MS = 10 * 60 * 1000
 const MAX_RAW_CAPTURES = 80
-const MAX_BINANCE_PROBE_OBSERVATIONS = 100
-const BINANCE_PROBE_TTL_MS = 24 * 60 * 60 * 1_000
-// Page and service-worker clocks may differ briefly, but future fixtures must
-// not remain live forever or crowd real observations out of the bounded store.
-const BINANCE_PROBE_CLOCK_SKEW_MS = 5 * 60 * 1_000
+// const MAX_BINANCE_PROBE_OBSERVATIONS = 100
+// const BINANCE_PROBE_TTL_MS = 24 * 60 * 60 * 1_000
+// // Page and service-worker clocks may differ briefly, but future fixtures must
+// // not remain live forever or crowd real observations out of the bounded store.
+// const BINANCE_PROBE_CLOCK_SKEW_MS = 5 * 60 * 1_000
 const SUPPORTED_ACTIONS = new Set<CampaignTaskCache['actionType']>([
   'LIKE',
   'RT',
@@ -127,167 +123,167 @@ function isSupportedXAction(
   )
 }
 
-type BinanceProbeRuntimeOptions = {
-  now?: number
-  enabled?: boolean
-}
-
-let binanceProbeStorageQueue: Promise<void> = Promise.resolve()
-
-function withBinanceProbeStorage<T>(operation: () => Promise<T>): Promise<T> {
-  const result = binanceProbeStorageQueue.then(operation)
-  binanceProbeStorageQueue = result.then(
-    () => undefined,
-    () => undefined,
-  )
-  return result
-}
-
-function binanceProbeKey(observation: BinanceProbeObservation): string {
-  return JSON.stringify([
-    observation.method,
-    observation.path,
-    observation.status,
-    observation.target,
-    observation.requestShape,
-    observation.responseShape,
-  ])
-}
-
-function isLiveBinanceProbeTimestamp(
-  observation: BinanceProbeObservation,
-  now: number,
-): boolean {
-  const capturedAt = Date.parse(observation.capturedAt)
-  return (
-    capturedAt >= now - BINANCE_PROBE_TTL_MS &&
-    capturedAt <= now + BINANCE_PROBE_CLOCK_SKEW_MS
-  )
-}
-
-async function liveBinanceProbeObservationsUnlocked(
-  now: number,
-): Promise<BinanceProbeObservation[]> {
-  const raw = await sessionStore.get('binanceSquareProbeObservations')
-  const stored = Array.isArray(raw) ? raw : []
-  const parsed = stored.map(parseProbeObservation)
-  const live = parsed
-    .filter((item): item is BinanceProbeObservation => item !== null)
-    .filter((item) => isLiveBinanceProbeTimestamp(item, now))
-    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
-    .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
-  if (
-    !Array.isArray(raw) ||
-    live.length !== stored.length ||
-    live.some((item, index) => {
-      const original = parsed[index]
-      return !original || JSON.stringify(item) !== JSON.stringify(original)
-    })
-  ) {
-    await sessionStore.set('binanceSquareProbeObservations', live)
-  }
-  return live
-}
-
-export async function liveBinanceProbeObservations({
-  now = Date.now(),
-  enabled = CAPTURE_DEBUG,
-}: BinanceProbeRuntimeOptions = {}): Promise<BinanceProbeObservation[]> {
-  if (!enabled) return []
-  return withBinanceProbeStorage(() =>
-    liveBinanceProbeObservationsUnlocked(now),
-  )
-}
-
-export async function appendBinanceProbeObservation(
-  value: unknown,
-  options: BinanceProbeRuntimeOptions = {},
-): Promise<void> {
-  const { now = Date.now(), enabled = CAPTURE_DEBUG } = options
-  if (!enabled) return
-  const observation = parseProbeObservation(value)
-  if (!observation || !isLiveBinanceProbeTimestamp(observation, now)) return
-  await withBinanceProbeStorage(async () => {
-    const index = (await sessionStore.get('binanceSquareTasks')) ?? {
-      byContentId: {},
-      byAuthorId: {},
-    }
-    const allowed = reservedBinanceProbeTargets(index)
-    if (
-      !allowed.some(
-        (target) =>
-          target.kind === observation.target.kind &&
-          target.id === observation.target.id,
-      )
-    ) {
-      return
-    }
-    const existing = await liveBinanceProbeObservationsUnlocked(now)
-    const key = binanceProbeKey(observation)
-    const duplicate = existing.find((item) => binanceProbeKey(item) === key)
-    if (
-      duplicate &&
-      Date.parse(duplicate.capturedAt) >= Date.parse(observation.capturedAt)
-    ) {
-      return
-    }
-    const next = existing
-      .filter((item) => binanceProbeKey(item) !== key)
-      .concat(observation)
-      .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
-      .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
-    await sessionStore.set('binanceSquareProbeObservations', next)
-  })
-}
-
-export async function handleBinanceProbeRequest(
-  req: MsgRequest,
-  options: BinanceProbeRuntimeOptions = {},
-): Promise<MsgResponse | null> {
-  const enabled = options.enabled ?? CAPTURE_DEBUG
-  if (!enabled) {
-    if (req.type === 'get-binance-probe-targets') {
-      return { type: 'binance-probe-targets', targets: [] }
-    }
-    if (req.type === 'export-binance-probe-observations') {
-      return { type: 'binance-probe-observations', observations: [] }
-    }
-    if (
-      req.type === 'report-binance-probe-observation' ||
-      req.type === 'clear-binance-probe-observations'
-    ) {
-      return { type: 'ack' }
-    }
-  }
-  if (req.type === 'get-binance-probe-targets') {
-    const index = (await sessionStore.get('binanceSquareTasks')) ?? {
-      byContentId: {},
-      byAuthorId: {},
-    }
-    return {
-      type: 'binance-probe-targets',
-      targets: reservedBinanceProbeTargets(index),
-    }
-  }
-  if (req.type === 'report-binance-probe-observation') {
-    await appendBinanceProbeObservation(req.observation, options)
-    return { type: 'ack' }
-  }
-  if (req.type === 'export-binance-probe-observations') {
-    return {
-      type: 'binance-probe-observations',
-      observations: await liveBinanceProbeObservations(options),
-    }
-  }
-  if (req.type === 'clear-binance-probe-observations') {
-    await withBinanceProbeStorage(() =>
-      sessionStore.set('binanceSquareProbeObservations', []),
-    )
-    return { type: 'ack' }
-  }
-  return null
-}
-
+// type BinanceProbeRuntimeOptions = {
+//   now?: number
+//   enabled?: boolean
+// }
+//
+// let binanceProbeStorageQueue: Promise<void> = Promise.resolve()
+//
+// function withBinanceProbeStorage<T>(operation: () => Promise<T>): Promise<T> {
+//   const result = binanceProbeStorageQueue.then(operation)
+//   binanceProbeStorageQueue = result.then(
+//     () => undefined,
+//     () => undefined,
+//   )
+//   return result
+// }
+//
+// function binanceProbeKey(observation: BinanceProbeObservation): string {
+//   return JSON.stringify([
+//     observation.method,
+//     observation.path,
+//     observation.status,
+//     observation.target,
+//     observation.requestShape,
+//     observation.responseShape,
+//   ])
+// }
+//
+// function isLiveBinanceProbeTimestamp(
+//   observation: BinanceProbeObservation,
+//   now: number,
+// ): boolean {
+//   const capturedAt = Date.parse(observation.capturedAt)
+//   return (
+//     capturedAt >= now - BINANCE_PROBE_TTL_MS &&
+//     capturedAt <= now + BINANCE_PROBE_CLOCK_SKEW_MS
+//   )
+// }
+//
+// async function liveBinanceProbeObservationsUnlocked(
+//   now: number,
+// ): Promise<BinanceProbeObservation[]> {
+//   const raw = await sessionStore.get('binanceSquareProbeObservations')
+//   const stored = Array.isArray(raw) ? raw : []
+//   const parsed = stored.map(parseProbeObservation)
+//   const live = parsed
+//     .filter((item): item is BinanceProbeObservation => item !== null)
+//     .filter((item) => isLiveBinanceProbeTimestamp(item, now))
+//     .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+//     .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
+//   if (
+//     !Array.isArray(raw) ||
+//     live.length !== stored.length ||
+//     live.some((item, index) => {
+//       const original = parsed[index]
+//       return !original || JSON.stringify(item) !== JSON.stringify(original)
+//     })
+//   ) {
+//     await sessionStore.set('binanceSquareProbeObservations', live)
+//   }
+//   return live
+// }
+//
+// export async function liveBinanceProbeObservations({
+//   now = Date.now(),
+//   enabled = CAPTURE_DEBUG,
+// }: BinanceProbeRuntimeOptions = {}): Promise<BinanceProbeObservation[]> {
+//   if (!enabled) return []
+//   return withBinanceProbeStorage(() =>
+//     liveBinanceProbeObservationsUnlocked(now),
+//   )
+// }
+//
+// export async function appendBinanceProbeObservation(
+//   value: unknown,
+//   options: BinanceProbeRuntimeOptions = {},
+// ): Promise<void> {
+//   const { now = Date.now(), enabled = CAPTURE_DEBUG } = options
+//   if (!enabled) return
+//   const observation = parseProbeObservation(value)
+//   if (!observation || !isLiveBinanceProbeTimestamp(observation, now)) return
+//   await withBinanceProbeStorage(async () => {
+//     const index = (await sessionStore.get('binanceSquareTasks')) ?? {
+//       byContentId: {},
+//       byAuthorId: {},
+//     }
+//     const allowed = reservedBinanceProbeTargets(index)
+//     if (
+//       !allowed.some(
+//         (target) =>
+//           target.kind === observation.target.kind &&
+//           target.id === observation.target.id,
+//       )
+//     ) {
+//       return
+//     }
+//     const existing = await liveBinanceProbeObservationsUnlocked(now)
+//     const key = binanceProbeKey(observation)
+//     const duplicate = existing.find((item) => binanceProbeKey(item) === key)
+//     if (
+//       duplicate &&
+//       Date.parse(duplicate.capturedAt) >= Date.parse(observation.capturedAt)
+//     ) {
+//       return
+//     }
+//     const next = existing
+//       .filter((item) => binanceProbeKey(item) !== key)
+//       .concat(observation)
+//       .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
+//       .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
+//     await sessionStore.set('binanceSquareProbeObservations', next)
+//   })
+// }
+//
+// export async function handleBinanceProbeRequest(
+//   req: MsgRequest,
+//   options: BinanceProbeRuntimeOptions = {},
+// ): Promise<MsgResponse | null> {
+//   const enabled = options.enabled ?? CAPTURE_DEBUG
+//   if (!enabled) {
+//     if (req.type === 'get-binance-probe-targets') {
+//       return { type: 'binance-probe-targets', targets: [] }
+//     }
+//     if (req.type === 'export-binance-probe-observations') {
+//       return { type: 'binance-probe-observations', observations: [] }
+//     }
+//     if (
+//       req.type === 'report-binance-probe-observation' ||
+//       req.type === 'clear-binance-probe-observations'
+//     ) {
+//       return { type: 'ack' }
+//     }
+//   }
+//   if (req.type === 'get-binance-probe-targets') {
+//     const index = (await sessionStore.get('binanceSquareTasks')) ?? {
+//       byContentId: {},
+//       byAuthorId: {},
+//     }
+//     return {
+//       type: 'binance-probe-targets',
+//       targets: reservedBinanceProbeTargets(index),
+//     }
+//   }
+//   if (req.type === 'report-binance-probe-observation') {
+//     await appendBinanceProbeObservation(req.observation, options)
+//     return { type: 'ack' }
+//   }
+//   if (req.type === 'export-binance-probe-observations') {
+//     return {
+//       type: 'binance-probe-observations',
+//       observations: await liveBinanceProbeObservations(options),
+//     }
+//   }
+//   if (req.type === 'clear-binance-probe-observations') {
+//     await withBinanceProbeStorage(() =>
+//       sessionStore.set('binanceSquareProbeObservations', []),
+//     )
+//     return { type: 'ack' }
+//   }
+//   return null
+// }
+//
 function engagementReward(c: {
   myExpectedReward?: number | null
   expectedReward?: number | null
@@ -313,21 +309,15 @@ function maskToken(token: string): string {
 /**
  * Background service worker.
  *
- *   - 启动 / 60s alarm 触发 → syncTasks() 拉取可参与任务,扁平化进 sessionStore
+ *   - popup 手动同步 → syncTasks() 拉取可参与任务,扁平化进 sessionStore
  *   - content script 来 RPC → 响应任务查询 / 处理 chip 点击 reserve+verify
  *   - 任务列表更新后广播 'tasks-updated',content script 收到立刻 rescan
  */
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
-  // 启动立刻 sync 一次,然后每 60s
-  void syncTasks()
-  chrome.alarms.create(ALARM_NAME, {
-    periodInMinutes: SYNC_INTERVAL_SECONDS / 60,
-  })
-  chrome.alarms.onAlarm.addListener((a) => {
-    if (a.name === ALARM_NAME) void syncTasks()
-  })
+  // 清除旧版本留下的定时器。任务数据只在用户点击同步时拉取。
+  void chrome.alarms.clear(ALARM_NAME)
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
     if (
@@ -427,8 +417,8 @@ export default defineBackground(() => {
         }
       }
     }
-    const binanceProbeResponse = await handleBinanceProbeRequest(req)
-    if (binanceProbeResponse) return binanceProbeResponse
+    //     const binanceProbeResponse = await handleBinanceProbeRequest(req)
+    //     if (binanceProbeResponse) return binanceProbeResponse
 
     if (req.type === 'get-tasks-for-tweet') {
       const snapshot = await readTasksSnapshot()
@@ -545,8 +535,7 @@ export default defineBackground(() => {
       return { type: 'ack' }
     }
     if (req.type === 'force-sync') {
-      // popup "刷新" 按钮的入口 — 等 sync 跑完再 return,UI 可以即时
-      // 看到错误或最新计数,不用等下一个 60s alarm。
+      // popup 手动同步入口，等结果落入缓存后再返回。
       await syncTasks()
       const err = await sessionStore.get('lastSyncError')
       const httpStatus = await sessionStore.get('lastSyncHttpStatus')
@@ -596,8 +585,7 @@ export default defineBackground(() => {
     return { type: 'ack' }
   })
 
-  // token 写入 / 删除 → 立即重新 sync(用户在 options 页粘贴 token 后,
-  // 不必等下一个 60s alarm 才看到任务)
+  // token 切换时清理旧账户缓存，等待用户手动同步。
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && 'apiToken' in changes) {
       void handleTaskTokenChange()
@@ -767,14 +755,13 @@ let syncInFlight: {
   promise: Promise<void>
 } | null = null
 let syncReset: Promise<void> = Promise.resolve()
-let syncRetryTimer: ReturnType<typeof setTimeout> | null = null
 
 async function clearTaskCache(): Promise<void> {
   await sessionStore.patch({
     engagementSources: null,
     tasksByTweetId: {},
     tasksByAuthorHandle: {},
-    binanceSquareTasks: { byContentId: {}, byAuthorId: {} },
+    //     binanceSquareTasks: { byContentId: {}, byAuthorId: {} },
     activeCampaigns: [],
     tweetCampaigns: [],
     userProfile: null,
@@ -792,17 +779,15 @@ async function clearTaskCache(): Promise<void> {
 export function handleTaskTokenChange(): Promise<void> {
   syncGeneration++
   syncInFlight = null
-  if (syncRetryTimer) clearTimeout(syncRetryTimer)
-  syncRetryTimer = null
   syncReset = syncReset.then(clearTaskCache)
-  return syncReset.then(syncTasks)
+  return syncReset
 }
 
 export async function syncTasks(): Promise<void> {
   const generation = syncGeneration
   await syncReset
   const token = await localStore.get('apiToken')
-  if (generation !== syncGeneration) return syncTasks()
+  if (generation !== syncGeneration) return
   if (syncInFlight?.token === token && syncInFlight.generation === generation) {
     return syncInFlight.promise
   }
@@ -934,7 +919,7 @@ async function performSyncTasks(
     },
     tasksByTweetId: byTweet,
     tasksByAuthorHandle: byAuthor,
-    binanceSquareTasks: indexBinanceSquareTasks(merged, reservedIds),
+    //     binanceSquareTasks: indexBinanceSquareTasks(merged, reservedIds),
     activeCampaigns,
     lastSyncError: failure
       ? reason instanceof Error
@@ -983,16 +968,6 @@ async function performSyncTasks(
   if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
     queueRawCaptureReconcile()
   broadcastToContent({ type: 'tasks-updated' })
-  if (reason instanceof GqlError && reason.retryAfterMs !== undefined)
-    scheduleSyncRetry(reason.retryAfterMs)
-}
-
-function scheduleSyncRetry(retryAfterMs: number): void {
-  if (syncRetryTimer) clearTimeout(syncRetryTimer)
-  syncRetryTimer = setTimeout(() => {
-    syncRetryTimer = null
-    void syncTasks()
-  }, withBackoffJitter(retryAfterMs))
 }
 
 /**
@@ -1225,7 +1200,7 @@ export function flattenTasks(
  *   2. verifyEngagement — 系统去 Twitter API 校验是否真做了
  *      - 失败一次,等 5s 重试一次(Twitter API 缓存延迟兜底)
  *      - 第二次还失败就返回错误 code
- *   3. 成功后 syncTasks() 刷新缓存,chip 自动消失
+ *   3. 成功后返回奖励；任务和余额在下次手动同步时刷新
  */
 /**
  * 一键推广:调后端 promoteTweet(带 plugin token)建 ENGAGEMENT 商单。
@@ -1282,7 +1257,6 @@ export async function promoteTweetHandler(req: {
     }
 
     releaseSpendActionKey('promote', promoteVariables)
-    void syncTasks() // 刷新余额缓存
     return { type: 'promote-result', ok: true, campaignIds, reinvested }
   } catch (e) {
     // 只有确定性失败才换新键。5xx / internal / network / abort 可能发生在
@@ -1603,7 +1577,6 @@ async function submitTask(campaignId: string): Promise<MsgResponse> {
         },
       )
       const reward = Number(data.verifyEngagement?.actualReward ?? 0)
-      void syncTasks() // 刷新缓存,完成的任务消失
       return { type: 'submit-result', ok: true, reward }
     } catch (e) {
       const isLast = i === 1
@@ -1912,7 +1885,7 @@ async function doHandleEngagementCapture(
     const mapped = mapCaptureToCampaigns(cap, { byTweet, byAuthor })
     if (mapped.length === 0) {
       dbg(
-        'bg 暂存:无匹配任务(tweet 不在快照,或该任务动作类型与捕获不符),触发同步后重放。',
+        'bg 暂存:无匹配任务(tweet 不在快照,或该任务动作类型与捕获不符),等待手动同步后重放。',
         'tweetId=',
         cap.tweetId,
         '快照该推任务=',
@@ -1920,7 +1893,6 @@ async function doHandleEngagementCapture(
           ? (byTweet[cap.tweetId] ?? []).map((t) => t.actionType)
           : '-',
       )
-      await syncTasks()
       return
     }
     await reportMappedCaptures(mapped, capturedAt, { byTweet, byAuthor })
@@ -1980,7 +1952,7 @@ async function reserveOnly(
         type: 'reserve-result',
         ok: false,
         code: 'RESERVE_FAILED',
-        message: `可按 ${w.effectiveTier} 档领取，奖励 ${w.effectiveTierRewardLux} LUX，请确认。`,
+        message: `可按 ${tierDisplay(w.effectiveTier)} 档领取，奖励 ${w.effectiveTierRewardLux} LUX，请确认。`,
         cascadeWarning: w,
       }
     }
@@ -2107,7 +2079,6 @@ async function verifyOnly(campaignId: string): Promise<MsgResponse> {
     )
     const r = res.submitEngagementProof
     if (r.accepted) {
-      void syncTasks()
       // reward 异步发放,submit 不返金额 → reward:0,UI 回退显示预期奖励/发放中。
       return { type: 'verify-result', ok: true, reward: 0 }
     }
@@ -2361,7 +2332,7 @@ async function pollPairingOnce(code: string): Promise<void> {
       await closePairingTab()
       setPairingState({ kind: 'success' })
       scheduleReset()
-      // storage.onChanged 监听器会自动 trigger syncTasks(),无需手动
+      // 用户可在插件弹窗手动同步任务。
       return
     }
     if (status === 'EXPIRED') {

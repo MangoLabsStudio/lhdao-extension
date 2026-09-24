@@ -1,6 +1,6 @@
 # Lighthouse extension publishing checklist
 
-This document covers version `0.3.0` Chrome, Edge, and Firefox MV3 artifacts.
+This document covers version `0.4.0` Chrome, Edge, and Firefox MV3 artifacts.
 GitHub Releases are automated; browser-store submission remains a reviewed
 manual step.
 
@@ -46,9 +46,9 @@ shasum -a 256 \
 
 The verifier requires all three manifests to have:
 
-- `manifest_version: 3` and package version `0.3.0`;
+- `manifest_version: 3` and package version `0.4.0`;
 - Permissions: `storage` and `alarms` on all three browsers;
-- persistent host access only for X, Twitter, Binance, the production API, and
+- persistent host access only for X, Twitter, the production API, and
   the production web app;
 - No optional host access;
 - no wildcard persistent, customer-specific, or loopback host access;
@@ -63,16 +63,16 @@ then stop. Send that evidence to the release owner. Do not create a tag until th
 release owner gives explicit approval. Only after that approval:
 
 ```bash
-git tag -a v0.3.0 -m "release: extension v0.3.0"
-git push origin v0.3.0
+git tag -a v0.4.0 -m "release: extension v0.4.0"
+git push origin v0.4.0
 ```
 
 `.github/workflows/release.yml` repeats compile, test, typecheck, lint, three
 production zip builds, extraction, and manifest verification. It uploads only:
 
-- `lhdao-extension-0.3.0-chrome.zip`
-- `lhdao-extension-0.3.0-edge.zip`
-- `lhdao-extension-0.3.0-firefox.zip`
+- `lhdao-extension-0.4.0-chrome.zip`
+- `lhdao-extension-0.4.0-edge.zip`
+- `lhdao-extension-0.4.0-firefox.zip`
 
 The Firefox sources zip is not a store artifact and must not be uploaded as one.
 
@@ -104,12 +104,11 @@ token is transmitted only to the Lighthouse API as a Bearer credential.
 
 ### `alarms`
 
-Refreshes the user's available Lighthouse tasks in the background.
+Clears the scheduled task refresh alarm left by older extension versions.
 
 ### Host access
 
 - `x.com` and `twitter.com`: displays and verifies Lighthouse engagement tasks.
-- `www.binance.com`: discovers and verifies eligible Binance Square tasks.
 - `service.lhdao.top`: authenticates, synchronizes tasks, and submits engagement task data.
 - `app.lhdao.top`: pairs the extension and exchanges the sanitized page bridge
   state used by Lighthouse task pages.
@@ -134,8 +133,9 @@ website activity.
 
 ## 6. Store-specific release notes
 
-Version 0.3.0 is the first extension release that supports Lighthouse Selected
-identity, order scope, claim-time history, and the manual promotion option.
+Version 0.4.0 adds manual task synchronization, tighter matching of task panels
+to reserved campaigns and the focal X post, and a D- display label for the
+backend F tier. Binance Square integration is disabled in this build.
 
 ### Chrome Web Store
 

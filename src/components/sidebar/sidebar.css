@@ -686,6 +686,37 @@
   background: linear-gradient(180deg, oklch(0.98 0.02 190) 0%, #ffffff 60%);
   overflow: hidden;
 }
+
+.lh-cur-choices {
+  display: flex;
+  border: 0;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  padding: 10px 12px 0;
+  flex-wrap: wrap;
+}
+
+.lh-cur-choices button {
+  border: 1px solid oklch(0.78 0.03 190);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+.lh-cur-choices button[aria-pressed='true'] {
+  border-color: #0d9488;
+  background: rgba(13, 148, 136, 0.14);
+  color: #0b7d72;
+}
+
+.lh-cur-choices button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 @media (prefers-color-scheme: dark) {
   .lh-cur-card {
     border-color: oklch(0.3 0.04 190);
@@ -995,3 +1026,15 @@
   color: #d97706;
   font-size: 11px;
 }
+
+.lh-cur-close {
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  cursor: pointer;
+}
+.lh-cur-close:hover { background: rgba(128, 128, 128, 0.15); }

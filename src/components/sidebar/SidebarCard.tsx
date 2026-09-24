@@ -7,14 +7,15 @@ import type {
   TweetCampaignSummary,
   UserProfile,
 } from '@/lib/storage'
+import { tierDisplay } from '@/lib/tier-display'
 
 /**
  * Sidebar 卡片 v3 — Lighthouse mini-dashboard 嵌入 X 右侧栏
  *
  * 视觉规范跟 Chrome Web Store screenshot-2-sidebar.png 1:1 一致:
- *   ① 顶部 brand bar      — burst icon + LIGHTHOUSE + synced N s ago
+ *   ① 顶部 brand bar      — burst icon + LIGHTHOUSE + 手动同步提示
  *   ② identity 内嵌卡片   — 头像 / name / @handle / TIER chip + 大字余额 + today delta
- *   ③ LIVE TASKS eyebrow  — 小字 + 匹配数 + auto-refresh 60s
+ *   ③ LIVE TASKS eyebrow  — 小字 + 匹配数
  *   ④ task rows           — color-coded icon + author + brief + +X.X LUX
  *   ⑤ footer stats        — 3 个微指标(TASKS LIVE / TODAY / TIER)
  *   ⑥ 发布任务 CTA        — 卡片底部按钮
@@ -40,7 +41,6 @@ const INITIAL: SidebarData = {
 export function SidebarCard() {
   const [data, setData] = React.useState<SidebarData>(INITIAL)
   const [loading, setLoading] = React.useState(true)
-  const [lastSyncAt, setLastSyncAt] = React.useState<number>(Date.now())
 
   const refresh = React.useCallback(async () => {
     const r = await sendMessage({ type: 'get-sidebar-data' })
@@ -52,7 +52,6 @@ export function SidebarCard() {
         lighthouseSelectedStatus: r.lighthouseSelectedStatus,
       })
       setLoading(false)
-      setLastSyncAt(Date.now())
     }
   }, [])
 
@@ -76,7 +75,7 @@ export function SidebarCard() {
 
   return (
     <section className="lh-card">
-      <BrandBar lastSyncAt={lastSyncAt} />
+      <BrandBar />
       <IdentityCard
         profile={data.profile}
         lighthouseSelectedStatus={data.lighthouseSelectedStatus}
@@ -97,21 +96,14 @@ export function SidebarCard() {
 
 // ── ① Brand bar ─────────────────────────────────────────────────────
 
-function BrandBar({ lastSyncAt }: { lastSyncAt: number }) {
-  const [now, setNow] = React.useState(Date.now())
-  React.useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 10_000)
-    return () => clearInterval(id)
-  }, [])
-  const ago = formatSyncAgo(now - lastSyncAt)
-
+function BrandBar() {
   return (
     <div className="lh-brand-bar">
       <BurstIcon size={20} />
       <span className="lh-brand-name">LIGHTHOUSE</span>
       <span className="lh-sync">
         <span className="lh-sync-dot" />
-        synced {ago}
+        在插件弹窗同步
       </span>
     </div>
   )
@@ -146,7 +138,7 @@ function IdentityCard({
           {handle && <div className="lh-identity-handle">@{handle}</div>}
         </div>
         {profile?.tier && (
-          <span className="lh-tier-chip">TIER {profile.tier}</span>
+          <span className="lh-tier-chip">TIER {tierDisplay(profile.tier)}</span>
         )}
       </div>
       <div className="lh-balance-row">
@@ -208,7 +200,7 @@ function FooterStats({
         label="TODAY"
         value={today != null && today > 0 ? `+${formatToday(today)}` : '+0'}
       />
-      <FooterStatCell label="TIER" value={profile?.tier ?? '—'} />
+      <FooterStatCell label="TIER" value={tierDisplay(profile?.tier)} />
     </div>
   )
 }
@@ -397,11 +389,4 @@ function formatToday(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '0'
   if (Number.isInteger(n)) return n.toLocaleString('en-US')
   return Number(n.toFixed(1)).toLocaleString('en-US')
-}
-
-function formatSyncAgo(diffMs: number): string {
-  if (diffMs < 5_000) return 'just now'
-  if (diffMs < 60_000) return `${Math.floor(diffMs / 1000)}s ago`
-  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`
-  return `${Math.floor(diffMs / 3_600_000)}h ago`
 }
