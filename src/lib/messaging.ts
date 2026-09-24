@@ -37,19 +37,13 @@ export function onMessage(
 }
 
 /**
- * BG 主动广播给对应 origin 的 content script。
+ * BG 主动广播给所有 content script(目前只用 `tasks-updated`)。
  * 不等待响应,失败仅 console.warn — 没活的 tab 是常态。
  */
 export function broadcastToContent(
   msg: Extract<MsgRequest, { type: 'tasks-updated' }>,
 ) {
-  const urls = [
-    '*://x.com/*',
-    '*://twitter.com/*',
-    'https://www.binance.com/*/square/*',
-    'https://www.binance.com/square/*',
-  ]
-  chrome.tabs.query({ url: urls }, (tabs) => {
+  chrome.tabs.query({ url: ['*://x.com/*', '*://twitter.com/*'] }, (tabs) => {
     for (const tab of tabs) {
       if (tab.id === undefined) continue
       chrome.tabs.sendMessage(tab.id, msg).catch(() => {

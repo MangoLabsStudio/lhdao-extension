@@ -1,299 +1,51 @@
-import {
-  type BinanceProbeObservation,
-  parseProbeObservation,
-} from '@/lib/binance-square-probe'
-import {
-  indexBinanceSquareTasks,
-  reservedBinanceProbeTargets,
-} from '@/lib/binance-square-tasks'
-import { sha256Hex } from '@/lib/canonical-json'
-import { CAPTURE_DEBUG, dbg } from '@/lib/capture-debug'
-import { getOrCreateDeviceIdentity } from '@/lib/device-key'
-import {
-  type CapturedAction,
-  mapCaptureToCampaigns,
-  mergeAction,
-} from '@/lib/engagement-capture'
-import {
-  SYNC_INTERVAL_SECONDS,
-  VERIFY_RETRY_DELAY_MS,
-  WEB_ENDPOINT,
-} from '@/lib/env'
+import { SYNC_INTERVAL_SECONDS, VERIFY_RETRY_DELAY_MS, WEB_ENDPOINT } from '@/lib/env'
 import { GqlError, gql } from '@/lib/gql'
-import { withBackoffJitter } from '@/lib/gql-backoff'
 import { broadcastToContent, onMessage } from '@/lib/messaging'
-import {
-  buildProofCanonical,
-  hmacSignProof,
-  randomProofNonce,
-} from '@/lib/proof'
 import {
   AVAILABLE_ENGAGEMENTS_QUERY,
   AVAILABLE_TWEETS_QUERY,
   type AvailableEngagementsResult,
   type AvailableTweet,
   type AvailableTweetsResult,
-  CREATE_AUTO_REINVEST_MUTATION,
   CREATE_EXTENSION_PAIRING_MUTATION,
-  type CreateAutoReinvestResult,
-  type CreateAutoReinvestVars,
   type CreateExtensionPairingResult,
-  type CreateExtensionPairingVars,
-  CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY,
-  type CurrentEngagementMarketPricesResult,
-  type CurrentEngagementMarketPricesVars,
+  type EngagementActionType,
   LIGHTHOUSE_MEMBERS_QUERY,
   type LighthouseMember,
   type LighthouseMembersResult,
   ME_QUERY,
   type MeResult,
-  MINT_ENGAGEMENT_TICKET_MUTATION,
-  type MintEngagementTicketResult,
-  MY_RESERVED_ENGAGEMENTS_QUERY,
-  MY_X_ANALYTICS_QUERY,
-  type MyReservedEngagementsResult,
   POLL_EXTENSION_PAIRING_QUERY,
   type PollExtensionPairingResult,
-  PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
-  PROMOTE_TWEET_MUTATION,
-  type PreviewPromoteTweetPricingResult,
-  type PreviewPromoteTweetPricingVars,
-  type PromoteTweetPricingQuote,
-  type PromoteTweetResult,
-  type PromoteTweetVars,
   RECORD_TWEET_DWELL_MUTATION,
-  REPORT_ENGAGEMENT_CAPTURE_MUTATION,
   RESERVE_SLOT_MUTATION,
-  RESERVE_TIMELINE_SLOT_MUTATION,
-  type ReportEngagementCaptureResult,
   type ReserveSlotResult,
-  type ReserveTimelineSlotResult,
-  SAVE_X_ANALYTICS_MUTATION,
-  type SaveXAnalyticsResult,
-  type SaveXAnalyticsVars,
-  SUBMIT_ENGAGEMENT_PROOF_MUTATION,
-  type SubmitEngagementProofResult,
   VERIFY_ENGAGEMENT_MUTATION,
   type VerifyEngagementResult,
-  type XAnalyticsStatusResult,
 } from '@/lib/queries'
-import {
-  childSpendActionKey,
-  releaseSpendActionKey,
-  releaseSpendActionKeyAfterDefiniteFailure,
-  spendActionKey,
-} from '@/lib/spend-idempotency'
 import {
   type ActiveCampaignSummary,
   type CampaignTaskCache,
-  type LighthouseSelectedStatus,
   localStore,
-  type RawCapturedAction,
   sessionStore,
   type TweetCampaignSummary,
+  type UserProfile,
 } from '@/lib/storage'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import type {
-  MsgRequest,
   MsgResponse,
   PairingState,
-  PromoteAction,
   SubmitErrorCode,
 } from '@/types/messages'
 
 const ALARM_NAME = 'lhdao-sync'
-const RAW_CAPTURE_TTL_MS = 10 * 60 * 1000
-const MAX_RAW_CAPTURES = 80
-const MAX_BINANCE_PROBE_OBSERVATIONS = 100
-const BINANCE_PROBE_TTL_MS = 24 * 60 * 60 * 1_000
-// Page and service-worker clocks may differ briefly, but future fixtures must
-// not remain live forever or crowd real observations out of the bounded store.
-const BINANCE_PROBE_CLOCK_SKEW_MS = 5 * 60 * 1_000
-const SUPPORTED_ACTIONS = new Set<CampaignTaskCache['actionType']>([
+const SUPPORTED_ACTIONS = new Set<EngagementActionType>([
   'LIKE',
   'RT',
   'COMMENT',
   'COMMENT_LIKE',
   'FOLLOW',
 ])
-
-function isSupportedXAction(
-  action: AvailableEngagementsResult['availableEngagements'][number]['actions'][number],
-): action is AvailableEngagementsResult['availableEngagements'][number]['actions'][number] & {
-  actionType: CampaignTaskCache['actionType']
-} {
-  return SUPPORTED_ACTIONS.has(
-    action.actionType as CampaignTaskCache['actionType'],
-  )
-}
-
-type BinanceProbeRuntimeOptions = {
-  now?: number
-  enabled?: boolean
-}
-
-let binanceProbeStorageQueue: Promise<void> = Promise.resolve()
-
-function withBinanceProbeStorage<T>(operation: () => Promise<T>): Promise<T> {
-  const result = binanceProbeStorageQueue.then(operation)
-  binanceProbeStorageQueue = result.then(
-    () => undefined,
-    () => undefined,
-  )
-  return result
-}
-
-function binanceProbeKey(observation: BinanceProbeObservation): string {
-  return JSON.stringify([
-    observation.method,
-    observation.path,
-    observation.status,
-    observation.target,
-    observation.requestShape,
-    observation.responseShape,
-  ])
-}
-
-function isLiveBinanceProbeTimestamp(
-  observation: BinanceProbeObservation,
-  now: number,
-): boolean {
-  const capturedAt = Date.parse(observation.capturedAt)
-  return (
-    capturedAt >= now - BINANCE_PROBE_TTL_MS &&
-    capturedAt <= now + BINANCE_PROBE_CLOCK_SKEW_MS
-  )
-}
-
-async function liveBinanceProbeObservationsUnlocked(
-  now: number,
-): Promise<BinanceProbeObservation[]> {
-  const raw = await sessionStore.get('binanceSquareProbeObservations')
-  const stored = Array.isArray(raw) ? raw : []
-  const parsed = stored.map(parseProbeObservation)
-  const live = parsed
-    .filter((item): item is BinanceProbeObservation => item !== null)
-    .filter((item) => isLiveBinanceProbeTimestamp(item, now))
-    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
-    .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
-  if (
-    !Array.isArray(raw) ||
-    live.length !== stored.length ||
-    live.some((item, index) => {
-      const original = parsed[index]
-      return !original || JSON.stringify(item) !== JSON.stringify(original)
-    })
-  ) {
-    await sessionStore.set('binanceSquareProbeObservations', live)
-  }
-  return live
-}
-
-export async function liveBinanceProbeObservations({
-  now = Date.now(),
-  enabled = CAPTURE_DEBUG,
-}: BinanceProbeRuntimeOptions = {}): Promise<BinanceProbeObservation[]> {
-  if (!enabled) return []
-  return withBinanceProbeStorage(() =>
-    liveBinanceProbeObservationsUnlocked(now),
-  )
-}
-
-export async function appendBinanceProbeObservation(
-  value: unknown,
-  options: BinanceProbeRuntimeOptions = {},
-): Promise<void> {
-  const { now = Date.now(), enabled = CAPTURE_DEBUG } = options
-  if (!enabled) return
-  const observation = parseProbeObservation(value)
-  if (!observation || !isLiveBinanceProbeTimestamp(observation, now)) return
-  await withBinanceProbeStorage(async () => {
-    const index = (await sessionStore.get('binanceSquareTasks')) ?? {
-      byContentId: {},
-      byAuthorId: {},
-    }
-    const allowed = reservedBinanceProbeTargets(index)
-    if (
-      !allowed.some(
-        (target) =>
-          target.kind === observation.target.kind &&
-          target.id === observation.target.id,
-      )
-    ) {
-      return
-    }
-    const existing = await liveBinanceProbeObservationsUnlocked(now)
-    const key = binanceProbeKey(observation)
-    const duplicate = existing.find((item) => binanceProbeKey(item) === key)
-    if (
-      duplicate &&
-      Date.parse(duplicate.capturedAt) >= Date.parse(observation.capturedAt)
-    ) {
-      return
-    }
-    const next = existing
-      .filter((item) => binanceProbeKey(item) !== key)
-      .concat(observation)
-      .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt))
-      .slice(-MAX_BINANCE_PROBE_OBSERVATIONS)
-    await sessionStore.set('binanceSquareProbeObservations', next)
-  })
-}
-
-export async function handleBinanceProbeRequest(
-  req: MsgRequest,
-  options: BinanceProbeRuntimeOptions = {},
-): Promise<MsgResponse | null> {
-  const enabled = options.enabled ?? CAPTURE_DEBUG
-  if (!enabled) {
-    if (req.type === 'get-binance-probe-targets') {
-      return { type: 'binance-probe-targets', targets: [] }
-    }
-    if (req.type === 'export-binance-probe-observations') {
-      return { type: 'binance-probe-observations', observations: [] }
-    }
-    if (
-      req.type === 'report-binance-probe-observation' ||
-      req.type === 'clear-binance-probe-observations'
-    ) {
-      return { type: 'ack' }
-    }
-  }
-  if (req.type === 'get-binance-probe-targets') {
-    const index = (await sessionStore.get('binanceSquareTasks')) ?? {
-      byContentId: {},
-      byAuthorId: {},
-    }
-    return {
-      type: 'binance-probe-targets',
-      targets: reservedBinanceProbeTargets(index),
-    }
-  }
-  if (req.type === 'report-binance-probe-observation') {
-    await appendBinanceProbeObservation(req.observation, options)
-    return { type: 'ack' }
-  }
-  if (req.type === 'export-binance-probe-observations') {
-    return {
-      type: 'binance-probe-observations',
-      observations: await liveBinanceProbeObservations(options),
-    }
-  }
-  if (req.type === 'clear-binance-probe-observations') {
-    await withBinanceProbeStorage(() =>
-      sessionStore.set('binanceSquareProbeObservations', []),
-    )
-    return { type: 'ack' }
-  }
-  return null
-}
-
-function engagementReward(c: {
-  myExpectedReward?: number | null
-  expectedReward?: number | null
-}): number | null {
-  return c.myExpectedReward ?? c.expectedReward ?? null
-}
 
 /**
  * 把 plugin token 脱敏成 popup 展示用的形式:
@@ -320,185 +72,42 @@ function maskToken(token: string): string {
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
-  // 启动立刻 sync 一次,然后每 60s
+  // 启动立刻 sync 一次,然后每 SYNC_INTERVAL_SECONDS(5 分钟)
   void syncTasks()
+  // 0~60s 随机抖动:全量安装若按整分钟对齐,会在后端形成周期性请求尖峰;
+  // service worker 每次被唤醒重建 alarm 时抖动也会重新随机,长期自然打散。
   chrome.alarms.create(ALARM_NAME, {
-    periodInMinutes: SYNC_INTERVAL_SECONDS / 60,
+    periodInMinutes: (SYNC_INTERVAL_SECONDS + Math.random() * 60) / 60,
   })
   chrome.alarms.onAlarm.addListener((a) => {
     if (a.name === ALARM_NAME) void syncTasks()
   })
 
-  onMessage(async (req, sender): Promise<MsgResponse> => {
-    if (
-      req.type === 'get-x-analytics-status' ||
-      req.type === 'save-x-analytics'
-    ) {
-      const senderUrl = sender.tab?.url ?? sender.url ?? ''
-      if (
-        sender.id !== chrome.runtime.id ||
-        sender.frameId !== 0 ||
-        !/^https:\/\/(?:x|twitter)\.com\/i\/account_analytics(?:[/?#]|$)/.test(
-          senderUrl,
-        )
-      ) {
-        return {
-          type: 'x-analytics-save-result',
-          ok: false,
-          code: 'INCOMPLETE',
-        }
-      }
-      try {
-        const status = await gql<XAnalyticsStatusResult>(MY_X_ANALYTICS_QUERY)
-        if (req.type === 'get-x-analytics-status') {
-          return {
-            type: 'x-analytics-status',
-            twitterUserId: status.myXAnalytics.twitterUserId,
-            twitterUsername: status.myXAnalytics.twitterUsername,
-            completed: status.myXAnalytics.completed,
-          }
-        }
-        const observed = req.twitterUsername.toLowerCase()
-        const bound = status.myXAnalytics.twitterUsername?.toLowerCase() ?? null
-        if (
-          !status.myXAnalytics.twitterUserId ||
-          !bound ||
-          observed !== bound
-        ) {
-          return {
-            type: 'x-analytics-save-result',
-            ok: false,
-            code: 'WRONG_X_ACCOUNT',
-          }
-        }
-        const result = await gql<SaveXAnalyticsResult, SaveXAnalyticsVars>(
-          SAVE_X_ANALYTICS_MUTATION,
-          {
-            input: {
-              captureId: req.captureId,
-              twitterUserId: status.myXAnalytics.twitterUserId,
-              twitterUsername: observed,
-              periodStart: req.periodStart,
-              periodEnd: req.periodEnd,
-              capturedAt: req.capturedAt,
-              metrics: req.metrics,
-            },
-          },
-        )
-        return {
-          type: 'x-analytics-save-result',
-          ok: true,
-          savedAt: result.saveXAnalytics.savedAt,
-        }
-      } catch (error) {
-        if (error instanceof GqlError) {
-          const codes = error.graphqlErrors?.map(
-            (item) => item.extensions?.code ?? item.message,
-          ) ?? [error.message]
-          if (
-            codes.some((value) => String(value).includes('X_ACCOUNT_MISMATCH'))
-          )
-            return {
-              type: 'x-analytics-save-result',
-              ok: false,
-              code: 'WRONG_X_ACCOUNT',
-            }
-          if (
-            codes.some((value) =>
-              String(value).includes('X_ANALYTICS_INCOMPLETE'),
-            )
-          )
-            return {
-              type: 'x-analytics-save-result',
-              ok: false,
-              code: 'INCOMPLETE',
-            }
-          if (error.kind === 'CLIENT')
-            return {
-              type: 'x-analytics-save-result',
-              ok: false,
-              code: 'NO_TOKEN',
-            }
-        }
-        return {
-          type: 'x-analytics-save-result',
-          ok: false,
-          code: 'NETWORK',
-        }
-      }
-    }
-    const binanceProbeResponse = await handleBinanceProbeRequest(req)
-    if (binanceProbeResponse) return binanceProbeResponse
-
+  onMessage(async (req): Promise<MsgResponse> => {
     if (req.type === 'get-tasks-for-tweet') {
-      const snapshot = await readTasksSnapshot()
-      return { type: 'tasks', tasks: snapshot.byTweet[req.tweetId] ?? [] }
+      const map = (await sessionStore.get('tasksByTweetId')) ?? {}
+      return { type: 'tasks', tasks: map[req.tweetId] ?? [] }
     }
     if (req.type === 'get-tasks-for-author') {
-      const snapshot = await readTasksSnapshot()
+      const map = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
       const handle = req.authorHandle.toLowerCase()
-      return { type: 'tasks', tasks: snapshot.byAuthor[handle] ?? [] }
+      return { type: 'tasks', tasks: map[handle] ?? [] }
     }
     if (req.type === 'get-tasks-snapshot') {
-      return readTasksSnapshot()
-    }
-    if (req.type === 'get-captured-actions') {
-      // [网页 gate] 返回某 campaign 已捕获的动作类型。网页验证前预检:没捕获就
-      // 直接判「未检测到动作」失败,不走异步乐观提交。tweetId 作别名兜底(捕获
-      // 可能挂在另一 campaign 键上,按推文 id 扫一遍)。
-      const cap = (await sessionStore.get('capturedActions')) ?? {}
-      const types = new Set<string>()
-      for (const a of cap[req.campaignId] ?? []) types.add(a.actionType)
-      if (req.tweetId) {
-        for (const acts of Object.values(cap)) {
-          for (const a of acts) {
-            if (a.tweetId === req.tweetId) types.add(a.actionType)
-          }
-        }
-      }
-      const pending = await getRawCapturedActions()
-      if (pending.length > 0) {
-        const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
-        const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
-        for (const raw of pending) {
-          const mapped = mapCaptureToCampaigns(raw, { byTweet, byAuthor })
-          if (mapped.some((m) => m.campaignId === req.campaignId)) {
-            types.add(raw.actionType)
-            continue
-          }
-          // 如果任务快照仍然慢半拍,网页 gate 至少能通过同 tweetId 的
-          // tweet-level 动作预检;真正发奖仍会在 proof/worker 层按 campaign 校验。
-          if (req.tweetId && raw.tweetId === req.tweetId) {
-            types.add(raw.actionType)
-          }
-        }
-      }
-      return { type: 'captured-actions', actions: Array.from(types) }
+      // 整体快照 — content script 启动 + tasks-updated 时各拉一次,本地缓存
+      // 后 scan 直接同步查,避免 per-article RPC 串行 await 的肉眼延迟。
+      const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
+      const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
+      return { type: 'tasks-snapshot', byTweet, byAuthor }
     }
     if (req.type === 'submit-task') {
       return submitTask(req.campaignId)
     }
     if (req.type === 'reserve-task') {
-      return reserveOnly(
-        req.campaignId,
-        req.confirmCascade,
-        req.confirmedCascadeTier,
-      )
+      return reserveOnly(req.campaignId, req.confirmCascade)
     }
     if (req.type === 'verify-task') {
       return verifyOnly(req.campaignId)
-    }
-    if (req.type === 'promote-tweet') {
-      return promoteTweetHandler(req)
-    }
-    if (req.type === 'get-current-engagement-prices') {
-      return currentEngagementMarketPricesHandler(req)
-    }
-    if (req.type === 'preview-promote-tweet-pricing') {
-      return previewPromoteTweetPricingHandler(req)
-    }
-    if (req.type === 'get-balance') {
-      return readBalanceData()
     }
     if (req.type === 'record-dwell') {
       // fire-and-forget: 失败不影响用户,只 console.warn
@@ -510,39 +119,51 @@ export default defineBackground(() => {
       )
       return { type: 'ack' }
     }
-    if (req.type === 'report-engagement-capture') {
-      // fire-and-forget:非资金影子上报,失败静默(同 record-dwell)
-      void handleEngagementCapture(req, req.capturedAt)
-      return { type: 'ack' }
-    }
     if (req.type === 'get-active-campaigns') {
-      return readActiveCampaignsData()
+      const campaigns = (await sessionStore.get('activeCampaigns')) ?? []
+      return { type: 'active-campaigns', campaigns }
     }
     if (req.type === 'get-sidebar-data') {
-      return readSidebarData()
+      const token = await localStore.get('apiToken')
+      const tokenConfigured = !!token
+      const profile = (await sessionStore.get('userProfile')) ?? null
+      const tweetCampaigns = (await sessionStore.get('tweetCampaigns')) ?? null
+      return {
+        type: 'sidebar-data',
+        profile,
+        tweetCampaigns,
+        tokenConfigured,
+      }
     }
     if (req.type === 'has-token') {
       const token = await localStore.get('apiToken')
       return { type: 'token-status', configured: !!token }
     }
     if (req.type === 'get-popup-data') {
-      return readPopupData()
-    }
-    if (req.type === 'open-task-hall') {
-      // [B3] 验证成功后去任务广场:先查已开的本站标签页——
-      //   已在任务广场(/campaigns)→ 直接聚焦(不 reload);
-      //   有本站其它页 → 复用该标签,聚焦并导航到 /campaigns;
-      //   都没有 → 才新建标签。避免每次验证都堆一个新标签。
-      // URL 由后台自算(不接收 content 传入的任意 url)。查标签 URL 依赖
-      // WEB_ENDPOINT 的 host_permission(见 wxt.config)。
-      await openTaskHall()
-      return { type: 'ack' }
-    }
-    if (req.type === 'open-campaign') {
-      // [profile 关注卡] 验证成功后跳该 campaign 详情页(任务观察界面)。同
-      // openTaskHall 的复用逻辑,只是 URL 带上 campaignId。
-      await openCampaignDetail(req.campaignId)
-      return { type: 'ack' }
+      // popup 一次拿全:token / profile / 任务计数 / sync 状态
+      const token = await localStore.get('apiToken')
+      const profile = (await sessionStore.get('userProfile')) ?? null
+      const map = (await sessionStore.get('tasksByTweetId')) ?? {}
+      let taskCount = 0
+      let tweetCount = 0
+      for (const arr of Object.values(map)) {
+        if (arr.length > 0) {
+          tweetCount += 1
+          taskCount += arr.length
+        }
+      }
+      return {
+        type: 'popup-data',
+        hasToken: !!token,
+        tokenMasked: token ? maskToken(token) : null,
+        profile,
+        taskCount,
+        tweetCount,
+        lastSyncAt: (await sessionStore.get('lastSyncAt')) ?? null,
+        lastSyncError: (await sessionStore.get('lastSyncError')) ?? null,
+        lastSyncHttpStatus:
+          (await sessionStore.get('lastSyncHttpStatus')) ?? null,
+      }
     }
     if (req.type === 'force-sync') {
       // popup "刷新" 按钮的入口 — 等 sync 跑完再 return,UI 可以即时
@@ -600,399 +221,100 @@ export default defineBackground(() => {
   // 不必等下一个 60s alarm 才看到任务)
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && 'apiToken' in changes) {
-      void handleTaskTokenChange()
+      void syncTasks()
     }
   })
 })
 
 // ── sync ─────────────────────────────────────────────────────────────
 
-async function readOwnedSessionSnapshot<T>(
-  read: () => Promise<T>,
-): Promise<{ token: string | null; owned: boolean; value: T | null }> {
-  const generation = syncGeneration
-  await syncReset
+async function syncTasks(): Promise<void> {
   const token = await localStore.get('apiToken')
-  const [sources, value] = await Promise.all([
-    sessionStore.get('engagementSources'),
-    read(),
-  ])
-  const owner = token ? await sha256Hex(token) : null
-  const currentToken = await localStore.get('apiToken')
-  const owned =
-    owner != null &&
-    sources?.owner === owner &&
-    currentToken === token &&
-    generation === syncGeneration
-  return { token: currentToken, owned, value: owned ? value : null }
-}
-
-export async function readBalanceData(): Promise<
-  Extract<MsgResponse, { type: 'balance-result' }>
-> {
-  const snapshot = await readOwnedSessionSnapshot(() =>
-    sessionStore.get('userProfile'),
-  )
-  return {
-    type: 'balance-result',
-    balance: snapshot.value?.newLux ?? null,
-  }
-}
-
-export async function readActiveCampaignsData(): Promise<
-  Extract<MsgResponse, { type: 'active-campaigns' }>
-> {
-  const snapshot = await readOwnedSessionSnapshot(() =>
-    sessionStore.get('activeCampaigns'),
-  )
-  return {
-    type: 'active-campaigns',
-    campaigns: snapshot.value ?? [],
-  }
-}
-
-export async function readSidebarData(): Promise<
-  Extract<MsgResponse, { type: 'sidebar-data' }>
-> {
-  const snapshot = await readOwnedSessionSnapshot(async () => {
-    const [profile, tweetCampaigns, lighthouseSelectedStatus] =
-      await Promise.all([
-        sessionStore.get('userProfile'),
-        sessionStore.get('tweetCampaigns'),
-        sessionStore.get('lighthouseSelectedStatus'),
-      ])
-    return { profile, tweetCampaigns, lighthouseSelectedStatus }
-  })
-  const tokenConfigured = !!snapshot.token
-  if (!snapshot.owned || !snapshot.value) {
-    return {
-      type: 'sidebar-data',
-      profile: null,
-      tweetCampaigns: null,
-      tokenConfigured,
-      lighthouseSelectedStatus: tokenConfigured ? 'loading' : 'unavailable',
-    }
-  }
-  const { profile, tweetCampaigns } = snapshot.value
-  const lighthouseSelectedStatus: LighthouseSelectedStatus =
-    snapshot.value.lighthouseSelectedStatus ??
-    (typeof profile?.lighthouseSelected === 'boolean' ? 'available' : 'loading')
-  return {
-    type: 'sidebar-data',
-    profile: profile ?? null,
-    tweetCampaigns: tweetCampaigns ?? null,
-    tokenConfigured,
-    lighthouseSelectedStatus,
-  }
-}
-
-export async function readPopupData(): Promise<
-  Extract<MsgResponse, { type: 'popup-data' }>
-> {
-  const snapshot = await readOwnedSessionSnapshot(async () => {
-    const [profile, map, lastSyncAt, lastSyncError, lastSyncHttpStatus] =
-      await Promise.all([
-        sessionStore.get('userProfile'),
-        sessionStore.get('tasksByTweetId'),
-        sessionStore.get('lastSyncAt'),
-        sessionStore.get('lastSyncError'),
-        sessionStore.get('lastSyncHttpStatus'),
-      ])
-    return { profile, map, lastSyncAt, lastSyncError, lastSyncHttpStatus }
-  })
-  const empty = {
-    profile: null,
-    map: {} as Record<string, CampaignTaskCache[]>,
-    lastSyncAt: null,
-    lastSyncError: null,
-    lastSyncHttpStatus: null,
-  }
-  const values = snapshot.value ?? empty
-  let taskCount = 0
-  let tweetCount = 0
-  for (const arr of Object.values(values.map ?? {})) {
-    if (arr.length > 0) {
-      tweetCount += 1
-      taskCount += arr.length
-    }
-  }
-  return {
-    type: 'popup-data',
-    hasToken: !!snapshot.token,
-    tokenMasked: snapshot.token ? maskToken(snapshot.token) : null,
-    profile: values.profile ?? null,
-    taskCount,
-    tweetCount,
-    lastSyncAt: values.lastSyncAt ?? null,
-    lastSyncError: values.lastSyncError ?? null,
-    lastSyncHttpStatus: values.lastSyncHttpStatus ?? null,
-  }
-}
-
-export async function readTasksSnapshot(): Promise<
-  Extract<MsgResponse, { type: 'tasks-snapshot' }>
-> {
-  const snapshot = await readOwnedSessionSnapshot(async () => {
-    const [byTweet, byAuthor, lastSyncAt, lastSyncError] = await Promise.all([
-      sessionStore.get('tasksByTweetId'),
-      sessionStore.get('tasksByAuthorHandle'),
-      sessionStore.get('lastSyncAt'),
-      sessionStore.get('lastSyncError'),
-    ])
-    return { byTweet, byAuthor, lastSyncAt, lastSyncError }
-  })
-  if (!snapshot.owned || !snapshot.value) {
-    return {
-      type: 'tasks-snapshot',
-      byTweet: {},
-      byAuthor: {},
-      ready: !snapshot.token,
-      tokenConfigured: !!snapshot.token,
-    }
-  }
-  return {
-    type: 'tasks-snapshot',
-    byTweet: snapshot.value.byTweet ?? {},
-    byAuthor: snapshot.value.byAuthor ?? {},
-    ready: snapshot.value.lastSyncAt != null,
-    tokenConfigured: true,
-    syncFailed: snapshot.value.lastSyncError != null,
-  }
-}
-
-let syncGeneration = 0
-let syncInFlight: {
-  token: string | null
-  generation: number
-  promise: Promise<void>
-} | null = null
-let syncReset: Promise<void> = Promise.resolve()
-let syncRetryTimer: ReturnType<typeof setTimeout> | null = null
-
-async function clearTaskCache(): Promise<void> {
-  await sessionStore.patch({
-    engagementSources: null,
-    tasksByTweetId: {},
-    tasksByAuthorHandle: {},
-    binanceSquareTasks: { byContentId: {}, byAuthorId: {} },
-    activeCampaigns: [],
-    tweetCampaigns: [],
-    userProfile: null,
-    lighthouseSelectedStatus: null,
-    capturedActions: {},
-    rawCapturedActions: [],
-    lastSyncAt: null,
-    lastSyncError: null,
-    lastSyncHttpStatus: null,
-  })
-  broadcastToContent({ type: 'tasks-updated' })
-}
-
-/** Invalidate immediately, including A -> B -> A transitions while requests run. */
-export function handleTaskTokenChange(): Promise<void> {
-  syncGeneration++
-  syncInFlight = null
-  if (syncRetryTimer) clearTimeout(syncRetryTimer)
-  syncRetryTimer = null
-  syncReset = syncReset.then(clearTaskCache)
-  return syncReset.then(syncTasks)
-}
-
-export async function syncTasks(): Promise<void> {
-  const generation = syncGeneration
-  await syncReset
-  const token = await localStore.get('apiToken')
-  if (generation !== syncGeneration) return syncTasks()
-  if (syncInFlight?.token === token && syncInFlight.generation === generation) {
-    return syncInFlight.promise
-  }
-  // A force-sync can arrive before storage.onChanged is delivered.
-  if (syncInFlight && syncInFlight.token !== token) syncGeneration++
-  const flight = {
-    token,
-    generation: syncGeneration,
-    promise: Promise.resolve(),
-  }
-  flight.promise = performSyncTasks(token, flight.generation).finally(() => {
-    if (syncInFlight === flight) syncInFlight = null
-  })
-  syncInFlight = flight
-  return flight.promise
-}
-
-async function performSyncTasks(
-  token: string | null,
-  generation: number,
-): Promise<void> {
-  const isCurrent = async () => {
-    const currentToken = await localStore.get('apiToken')
-    return generation === syncGeneration && currentToken === token
-  }
-  const owner = token ? await sha256Hex(token) : null
-  let cached = await sessionStore.get('engagementSources')
-  if (!(await isCurrent())) return
-  if (!token || cached?.owner !== owner) {
-    await clearTaskCache()
-    cached = null
-    if (!(await isCurrent())) return
-  }
-  if (!token || !owner) {
-    await sessionStore.patch({ lastSyncError: 'No API token configured' })
+  if (!token) {
+    // 没 token 就清空所有缓存,避免遗留旧任务/旧余额误导
+    await sessionStore.set('tasksByTweetId', {})
+    await sessionStore.set('tasksByAuthorHandle', {})
+    await sessionStore.set('activeCampaigns', [])
+    await sessionStore.set('tweetCampaigns', [])
+    await sessionStore.set('userProfile', null)
+    await sessionStore.set('lastSyncError', 'No API token configured')
+    await sessionStore.set('lastSyncHttpStatus', null)
     return
   }
-  const cachedProfile = await sessionStore.get('userProfile')
 
-  const [engRes, reservedRes, tweetsRes, meRes] = await Promise.allSettled([
+  // 三个 query 并行拉,allSettled 让部分失败不阻塞其他成功的结果。
+  // engagements → chip 高亮用;tweets → sidebar 列表用;me → sidebar 个人面板用。
+  const [engRes, tweetsRes, meRes] = await Promise.allSettled([
     gql<AvailableEngagementsResult>(AVAILABLE_ENGAGEMENTS_QUERY),
-    gql<MyReservedEngagementsResult>(MY_RESERVED_ENGAGEMENTS_QUERY),
     gql<AvailableTweetsResult>(AVAILABLE_TWEETS_QUERY),
     gql<MeResult>(ME_QUERY),
   ])
-  if (!(await isCurrent())) return
 
-  const available =
-    engRes.status === 'fulfilled'
-      ? engRes.value.availableEngagements
-      : (cached?.available ?? [])
-  const reserved =
-    reservedRes.status === 'fulfilled'
-      ? reservedRes.value.myReservedEngagements
-      : (cached?.reserved ?? [])
-  // During a partial refresh, a missing order may have moved to the failed source.
-  const incomplete =
-    engRes.status === 'rejected' || reservedRes.status === 'rejected'
-  const retained = incomplete
-    ? [...(cached?.available ?? []), ...(cached?.reserved ?? [])]
-    : []
-  // A fresh order wins over a failed source's old copy during reservation changes.
-  const fresh = new Set(
-    [
-      ...(engRes.status === 'fulfilled' ? available : []),
-      ...(reservedRes.status === 'fulfilled' ? reserved : []),
-    ].map((c) => c.id),
-  )
-  const stale = new Set(
-    [
-      ...retained,
-      ...(engRes.status === 'rejected' ? available : []),
-      ...(reservedRes.status === 'rejected' ? reserved : []),
-    ]
-      .filter((c) => !fresh.has(c.id))
-      .map((c) => c.id),
-  )
-  const merged = [
-    ...new Map(
-      [
-        ...retained,
-        ...available,
-        ...reserved,
-        ...(engRes.status === 'fulfilled' ? available : []),
-        ...(reservedRes.status === 'fulfilled' ? reserved : []),
-      ].map((c) => [c.id, c]),
-    ).values(),
-  ]
-  const reservedIds = new Set(reserved.map((c) => c.id))
-  const { byTweet, byAuthor } = flattenTasks(merged, reservedIds)
-  const activeCampaigns = buildActiveCampaignSummaries(merged)
-  for (const task of [
-    ...Object.values(byTweet).flat(),
-    ...Object.values(byAuthor).flat(),
-    ...activeCampaigns,
-  ]) {
-    if (stale.has(task.campaignId)) {
-      task.commentGuideStatus =
-        task.commentGuide === undefined ? 'unavailable' : 'stale'
-    }
+  // —— engagement → chip / activeCampaigns ——
+  if (engRes.status === 'fulfilled') {
+    const data = engRes.value
+    const { byTweet, byAuthor } = flattenTasks(data.availableEngagements)
+    const activeCampaigns = buildActiveCampaignSummaries(
+      data.availableEngagements,
+    )
+    await sessionStore.set('tasksByTweetId', byTweet)
+    await sessionStore.set('tasksByAuthorHandle', byAuthor)
+    await sessionStore.set('activeCampaigns', activeCampaigns)
+  } else {
+    console.warn('[lhdao] availableEngagements failed', engRes.reason)
   }
-  const failure =
-    engRes.status === 'rejected'
-      ? engRes
-      : reservedRes.status === 'rejected'
-        ? reservedRes
-        : null
-  const reason = failure?.reason
-  const values: Parameters<typeof sessionStore.patch>[0] = {
-    engagementSources: {
-      owner,
-      available: incomplete
-        ? [
-            ...new Map(
-              [...(cached?.available ?? []), ...available].map((c) => [
-                c.id,
-                c,
-              ]),
-            ).values(),
-          ]
-        : available,
-      reserved: incomplete
-        ? [
-            ...new Map(
-              [...(cached?.reserved ?? []), ...reserved].map((c) => [c.id, c]),
-            ).values(),
-          ]
-        : reserved,
-    },
-    tasksByTweetId: byTweet,
-    tasksByAuthorHandle: byAuthor,
-    binanceSquareTasks: indexBinanceSquareTasks(merged, reservedIds),
-    activeCampaigns,
-    lastSyncError: failure
-      ? reason instanceof Error
-        ? reason.message
-        : String(reason)
-      : null,
-    lastSyncHttpStatus:
-      reason instanceof GqlError ? (reason.httpStatus ?? null) : null,
-    lighthouseSelectedStatus:
-      meRes.status === 'fulfilled' &&
-      typeof meRes.value.me?.lighthouseSelected === 'boolean'
-        ? 'available'
-        : 'unavailable',
-  }
-  if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
-    values.lastSyncAt = Date.now()
-  if (tweetsRes.status === 'fulfilled')
-    values.tweetCampaigns = buildTweetCampaignSummaries(
+
+  // —— tweets → sidebar 任务列表 ——
+  if (tweetsRes.status === 'fulfilled') {
+    const summaries = buildTweetCampaignSummaries(
       tweetsRes.value.availableTweets,
     )
+    await sessionStore.set('tweetCampaigns', summaries)
+  } else {
+    console.warn('[lhdao] availableTweets failed', tweetsRes.reason)
+    // 保留旧缓存 — 网络抖动时旧数据比空数据更可用
+  }
+
+  // —— me → sidebar 个人面板 ——
   if (meRes.status === 'fulfilled' && meRes.value.me) {
     const m = meRes.value.me
-    values.userProfile = {
+    // displayName 优先级: nickname > username > twitterUsername > null
+    // (nickname 是用户主动设的;username 是登录名;twitter handle 兜底)
+    const displayName = m.nickname ?? m.username ?? m.twitterUsername ?? null
+    const profile: UserProfile = {
       id: m.id,
-      displayName: m.nickname ?? m.username ?? m.twitterUsername ?? null,
+      displayName,
       avatar: m.avatar ?? null,
       twitterHandle: m.twitterUsername ?? null,
       tier: m.tier ?? null,
+      // newLux 是 GraphQLDecimal scalar,后端传 string;显式转 number,
+      // 不可解析(空串 / null / NaN)统一归一为 null,前端 formatBalance
+      // 才能正确识别"无数据"显示横杠,而不是把 string "520" 当成 NaN
       newLux: parseNumber(m.newLux),
+      // todayEarnings 后端 ResolveField 已 .toNumber(),是 number,直接用
       todayEarnings: m.todayEarnings ?? null,
-      ...(typeof m.lighthouseSelected === 'boolean'
-        ? { lighthouseSelected: m.lighthouseSelected }
-        : {}),
     }
-  } else if (meRes.status === 'rejected' && cachedProfile) {
-    const { lighthouseSelected: _staleQualification, ...ordinaryProfile } =
-      cachedProfile
-    values.userProfile = ordinaryProfile
-  } else if (meRes.status === 'fulfilled') {
-    values.userProfile = null
+    await sessionStore.set('userProfile', profile)
+  } else if (meRes.status === 'rejected') {
+    console.warn('[lhdao] me failed', meRes.reason)
   }
-  // One storage write: no old-session continuation can write another field after reset.
-  if (!(await isCurrent())) return
-  await sessionStore.patch(values)
-  if (!(await isCurrent())) return
-  if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
-    queueRawCaptureReconcile()
-  broadcastToContent({ type: 'tasks-updated' })
-  if (reason instanceof GqlError && reason.retryAfterMs !== undefined)
-    scheduleSyncRetry(reason.retryAfterMs)
-}
 
-function scheduleSyncRetry(retryAfterMs: number): void {
-  if (syncRetryTimer) clearTimeout(syncRetryTimer)
-  syncRetryTimer = setTimeout(() => {
-    syncRetryTimer = null
-    void syncTasks()
-  }, withBackoffJitter(retryAfterMs))
+  // —— 全局 sync 状态:任一关键 query 成功就算"同步过" ——
+  // engagement 是 chip 的核心,优先用它的成功/失败做主判断;
+  // 单 me 或 tweets 失败不算整体失败(部分降级展示)。
+  if (engRes.status === 'fulfilled') {
+    await sessionStore.set('lastSyncAt', Date.now())
+    await sessionStore.set('lastSyncError', null)
+    await sessionStore.set('lastSyncHttpStatus', null)
+    broadcastToContent({ type: 'tasks-updated' })
+  } else {
+    const reason = engRes.reason
+    const msg = reason instanceof Error ? reason.message : String(reason)
+    const httpStatus =
+      reason instanceof GqlError ? (reason.httpStatus ?? null) : null
+    await sessionStore.set('lastSyncError', msg)
+    await sessionStore.set('lastSyncHttpStatus', httpStatus)
+  }
 }
 
 /**
@@ -1038,14 +360,6 @@ function buildTweetCampaignSummaries(
       rewardLux: reward,
       submitClose: t.submitClose ?? null,
       targetUrl: t.targetUrl ?? null,
-      ...(t.lighthouseSelectedOnly === undefined
-        ? {}
-        : { lighthouseSelectedOnly: t.lighthouseSelectedOnly }),
-      ...(t.myLighthouseSelectedAtClaim === undefined
-        ? {}
-        : {
-            lighthouseSelectedAtClaim: t.myLighthouseSelectedAtClaim,
-          }),
     })
   }
   result.sort((a, b) => b.rewardLux - a.rewardLux)
@@ -1064,17 +378,19 @@ function buildTweetCampaignSummaries(
  *  - 没有 targetUrl / tweetId
  *  - actions 全是 unsupported 类型
  */
-export function buildActiveCampaignSummaries(
+function buildActiveCampaignSummaries(
   engagements: AvailableEngagementsResult['availableEngagements'],
 ): ActiveCampaignSummary[] {
   const result: ActiveCampaignSummary[] = []
   for (const c of engagements) {
-    if (c.type !== 'ENGAGEMENT' || c.platform !== 'X') continue
+    if (c.type !== 'ENGAGEMENT') continue
     const tweetId =
       c.tweetId ?? (c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null)
     if (!tweetId || !c.targetUrl) continue
 
-    const supportedActions = c.actions.filter(isSupportedXAction)
+    const supportedActions = c.actions.filter((a) =>
+      SUPPORTED_ACTIONS.has(a.actionType),
+    )
     if (supportedActions.length === 0) continue
 
     // dedupe action types
@@ -1094,7 +410,7 @@ export function buildActiveCampaignSummaries(
     result.push({
       campaignId: c.id,
       rewardLux:
-        engagementReward(c) ??
+        c.expectedReward ??
         supportedActions.reduce((acc, a) => acc + a.baseReward, 0),
       actionTypes,
       tweetId,
@@ -1104,12 +420,6 @@ export function buildActiveCampaignSummaries(
       authorAvatar: c.tweetAuthorAvatar ?? null,
       tweetPreview,
       commentKeyword,
-      commentGuide: isCommentish ? c.commentGuide : null,
-      commentGuideStatus:
-        isCommentish && c.commentGuide === undefined ? 'unavailable' : 'ready',
-      ...(c.lighthouseSelectedOnly === undefined
-        ? {}
-        : { lighthouseSelectedOnly: c.lighthouseSelectedOnly }),
     })
   }
   // 按奖励降序排,高价值任务靠前
@@ -1130,11 +440,8 @@ export function buildActiveCampaignSummaries(
  * 同一个 FOLLOW 任务仍然在 byTweet 里存一份(挂在 targetUrl 对应的"代表推文"
  * 上),让用户在 campaign 来源推文上看到合并 chip(Q3:复合任务合并显示)。
  */
-export function flattenTasks(
+function flattenTasks(
   engagements: AvailableEngagementsResult['availableEngagements'],
-  /** 当前用户已预约(RESERVED)的 campaignId 集合(来自 myReservedEngagements)。
-   *  标进 task.reserved,让「当前任务」在同推文多单时优先显示已预约的那个。 */
-  reservedIds: Set<string> = new Set(),
 ): {
   byTweet: Record<string, CampaignTaskCache[]>
   byAuthor: Record<string, CampaignTaskCache[]>
@@ -1143,16 +450,18 @@ export function flattenTasks(
   const byAuthor: Record<string, CampaignTaskCache[]> = {}
 
   for (const c of engagements) {
-    if (c.type !== 'ENGAGEMENT' || c.platform !== 'X') continue
+    if (c.type !== 'ENGAGEMENT') continue
     const tweetId = c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null
     // 注意:FOLLOW-only campaign 也可能没有 targetUrl(纯粹是关注账户,
     // 没有"代表推文")。所以 tweetId null 不能直接 skip 整条 campaign,
     // 要看 FOLLOW action 能否落到 author 索引上。
     const firstKeyword = c.keywords?.[0] ?? null
-    const supportedActions = c.actions.filter(isSupportedXAction)
+    const supportedActions = c.actions.filter((a) =>
+      SUPPORTED_ACTIONS.has(a.actionType),
+    )
     if (supportedActions.length === 0) continue
 
-    const effectiveTotal = engagementReward(c)
+    const effectiveTotal = c.expectedReward
     const perAction =
       effectiveTotal != null ? effectiveTotal / supportedActions.length : null
 
@@ -1171,25 +480,7 @@ export function flattenTasks(
         actionType: a.actionType,
         expectedReward: perAction ?? a.baseReward,
         commentKeyword: isCommentish ? firstKeyword : null,
-        commentGuide: isCommentish ? c.commentGuide : null,
-        commentGuideStatus:
-          isCommentish && c.commentGuide === undefined
-            ? 'unavailable'
-            : 'ready',
         targetUsername: isFollow ? targetUsername : null,
-        authorName: c.tweetAuthorName ?? null,
-        authorHandle: c.tweetAuthorHandle ?? null,
-        reserved: reservedIds.has(c.id),
-        // myReservedEngagements 不 select 该字段(运行时为 undefined)→ false
-        timelineOnly: c.timelineOnly === true,
-        ...(c.lighthouseSelectedOnly === undefined
-          ? {}
-          : { lighthouseSelectedOnly: c.lighthouseSelectedOnly }),
-        ...(c.myLighthouseSelectedAtClaim === undefined
-          ? {}
-          : {
-              lighthouseSelectedAtClaim: c.myLighthouseSelectedAtClaim,
-            }),
       }
 
       // —— byTweet 索引 ——
@@ -1227,351 +518,6 @@ export function flattenTasks(
  *      - 第二次还失败就返回错误 code
  *   3. 成功后 syncTasks() 刷新缓存,chip 自动消失
  */
-/**
- * 一键推广:调后端 promoteTweet(带 plugin token)建 ENGAGEMENT 商单。
- * 后端按冻结报价 + 余额校验 + 现有手续费处理;前端提交原 quoteId。
- */
-export async function promoteTweetHandler(req: {
-  tweetUrl: string
-  actions: { actionType: string; tierSlots: Record<string, number> }[]
-  quoteId: string
-  reinvestCount?: number
-  lighthouseSelectedOnly?: boolean
-}): Promise<MsgResponse> {
-  const token = await localStore.get('apiToken')
-  if (!token) {
-    return {
-      type: 'promote-result',
-      ok: false,
-      code: 'NO_TOKEN',
-      message: '请先在插件 options 配置 plugin token',
-    }
-  }
-  const promoteVariables: PromoteTweetVars = {
-    input: {
-      quoteId: req.quoteId,
-      tweetUrl: req.tweetUrl,
-      actions: req.actions,
-      lighthouseSelectedOnly: req.lighthouseSelectedOnly === true,
-    },
-  }
-  const promoteKey = spendActionKey('promote', promoteVariables)
-  try {
-    const data = await gql<PromoteTweetResult, PromoteTweetVars>(
-      PROMOTE_TWEET_MUTATION,
-      promoteVariables,
-      { idempotencyKey: promoteKey },
-    )
-    const campaignIds = data.promoteTweet.map((c) => c.id)
-
-    // 持续复投:给每个子单建 auto-reinvest 任务(best-effort,失败不影响推广成功)
-    let reinvested = false
-    if (req.reinvestCount && req.reinvestCount > 0 && campaignIds.length) {
-      try {
-        for (const id of campaignIds) {
-          await gql<CreateAutoReinvestResult, CreateAutoReinvestVars>(
-            CREATE_AUTO_REINVEST_MUTATION,
-            { input: { campaignId: id, reinvestCount: req.reinvestCount } },
-            { idempotencyKey: childSpendActionKey(promoteKey, id) },
-          )
-        }
-        reinvested = true
-      } catch (e) {
-        console.warn('[lhdao] auto-reinvest setup failed:', e)
-      }
-    }
-
-    releaseSpendActionKey('promote', promoteVariables)
-    void syncTasks() // 刷新余额缓存
-    return { type: 'promote-result', ok: true, campaignIds, reinvested }
-  } catch (e) {
-    // 只有确定性失败才换新键。5xx / internal / network / abort 可能发生在
-    // 服务端已扣款建单、但成功响应丢失之后，必须保留原键供安全重试。
-    if (e instanceof GqlError) {
-      releaseSpendActionKeyAfterDefiniteFailure('promote', promoteVariables, e)
-    }
-    const msg = e instanceof GqlError ? e.message : String(e)
-    const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
-    let code = pluginPricingErrorCode(e)
-    if (httpStatus === 401) code = 'TOKEN_INVALID'
-    else if (/Insufficient|余额/.test(msg)) code = 'INSUFFICIENT_BALANCE'
-    else if (/DUPLICATE/.test(msg)) code = 'DUPLICATE'
-    else if (/最低|MIN_BUDGET/.test(msg)) code = 'MIN_BUDGET'
-    return { type: 'promote-result', ok: false, code, message: msg }
-  }
-}
-
-export async function previewPromoteTweetPricingHandler(req: {
-  tweetUrl: string
-  actions: { actionType: string; tierSlots: Record<string, number> }[]
-}): Promise<MsgResponse> {
-  const token = await localStore.get('apiToken')
-  if (!token) {
-    return {
-      type: 'promote-pricing-result',
-      ok: false,
-      code: 'NO_TOKEN',
-      message: '请先在插件 options 配置 plugin token',
-    }
-  }
-  const variables: PreviewPromoteTweetPricingVars = {
-    input: { tweetUrl: req.tweetUrl, actions: req.actions },
-  }
-  try {
-    const data = await gql<
-      PreviewPromoteTweetPricingResult,
-      PreviewPromoteTweetPricingVars
-    >(PREVIEW_PROMOTE_TWEET_PRICING_QUERY, variables)
-    if (!isPromoteTweetPricingQuote(data.previewPromoteTweetPricing)) {
-      return {
-        type: 'promote-pricing-result',
-        ok: false,
-        code: 'PLUGIN_PRICING_RESPONSE_INVALID',
-        message: '报价响应无效，请刷新后重试。',
-      }
-    }
-    return {
-      type: 'promote-pricing-result',
-      ok: true,
-      quote: data.previewPromoteTweetPricing,
-    }
-  } catch (e) {
-    const message = e instanceof GqlError ? e.message : String(e)
-    return {
-      type: 'promote-pricing-result',
-      ok: false,
-      code: pluginPricingErrorCode(e),
-      message,
-    }
-  }
-}
-
-const PROMOTE_ACTIONS = new Set<PromoteAction>(['LIKE', 'RT', 'COMMENT'])
-const CURRENT_PRICE_TIERS = ['S', 'A', 'B', 'C', 'D'] as const
-const QUOTE_TIERS = new Set(['A', 'B', 'C', 'D'])
-const MONEY_STRING = /^(?:0|[1-9]\d{0,15})\.\d{8}$/
-
-export async function currentEngagementMarketPricesHandler(req: {
-  actions: unknown
-}): Promise<MsgResponse> {
-  if (!isClosedPromoteActions(req.actions)) {
-    return {
-      type: 'current-engagement-prices-result',
-      ok: false,
-      code: 'PLUGIN_CURRENT_PRICES_REQUEST_INVALID',
-      message: '当前价格请求无效。',
-    }
-  }
-  const token = await localStore.get('apiToken')
-  if (!token) {
-    return {
-      type: 'current-engagement-prices-result',
-      ok: false,
-      code: 'NO_TOKEN',
-      message: '请先在插件 options 配置 plugin token',
-    }
-  }
-  const variables: CurrentEngagementMarketPricesVars = {
-    input: { actions: req.actions },
-  }
-  try {
-    const data = await gql<
-      CurrentEngagementMarketPricesResult,
-      CurrentEngagementMarketPricesVars
-    >(CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY, variables)
-    if (
-      !isCurrentEngagementMarketPrices(
-        data.currentEngagementMarketPrices,
-        req.actions,
-      )
-    ) {
-      return {
-        type: 'current-engagement-prices-result',
-        ok: false,
-        code: 'PLUGIN_CURRENT_PRICES_RESPONSE_INVALID',
-        message: '当前价格响应无效，请稍后重试。',
-      }
-    }
-    return {
-      type: 'current-engagement-prices-result',
-      ok: true,
-      prices: data.currentEngagementMarketPrices,
-    }
-  } catch (error) {
-    return {
-      type: 'current-engagement-prices-result',
-      ok: false,
-      code: pluginPricingErrorCode(error),
-      message: '当前价格暂不可用，请稍后重试。',
-    }
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function hasExactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-): boolean {
-  const actual = Object.keys(value)
-  return (
-    actual.length === expected.length &&
-    actual.every((key) => expected.includes(key))
-  )
-}
-
-function isClosedPromoteActions(value: unknown): value is PromoteAction[] {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.length <= PROMOTE_ACTIONS.size &&
-    value.every(
-      (action): action is PromoteAction =>
-        typeof action === 'string' &&
-        PROMOTE_ACTIONS.has(action as PromoteAction),
-    ) &&
-    new Set(value).size === value.length
-  )
-}
-
-function isMoneyString(value: unknown): value is string {
-  return typeof value === 'string' && MONEY_STRING.test(value)
-}
-
-function isValidDateString(value: unknown): value is string {
-  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
-    return false
-  }
-  return new Date(value).toISOString() === value
-}
-
-function isCurrentEngagementMarketPrices(
-  value: unknown,
-  requestedActions: readonly PromoteAction[],
-): value is CurrentEngagementMarketPricesResult['currentEngagementMarketPrices'] {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ['asOf', 'currency', 'precision', 'lines']) ||
-    !isValidDateString(value.asOf) ||
-    value.currency !== 'LUX' ||
-    value.precision !== 8 ||
-    !Array.isArray(value.lines) ||
-    value.lines.length !== requestedActions.length * CURRENT_PRICE_TIERS.length
-  ) {
-    return false
-  }
-  return value.lines.every(
-    (line, index) =>
-      isRecord(line) &&
-      hasExactKeys(line, [
-        'actionType',
-        'tier',
-        'pricingSource',
-        'unitPrice',
-      ]) &&
-      line.actionType ===
-        requestedActions[Math.floor(index / CURRENT_PRICE_TIERS.length)] &&
-      line.tier === CURRENT_PRICE_TIERS[index % CURRENT_PRICE_TIERS.length] &&
-      (line.pricingSource === 'PILOT' || line.pricingSource === 'LEGACY') &&
-      isMoneyString(line.unitPrice),
-  )
-}
-
-function isPromoteTweetPricingQuote(
-  value: unknown,
-): value is PromoteTweetPricingQuote {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      'quoteId',
-      'priceVersion',
-      'currency',
-      'precision',
-      'quotedAt',
-      'expiresAt',
-      'principal',
-      'feeRate',
-      'promotionFee',
-      'totalCost',
-      'lines',
-    ]) ||
-    typeof value.quoteId !== 'string' ||
-    value.quoteId.length === 0 ||
-    typeof value.priceVersion !== 'string' ||
-    value.priceVersion.length === 0 ||
-    value.currency !== 'LUX' ||
-    value.precision !== 8 ||
-    !isValidDateString(value.quotedAt) ||
-    !isValidDateString(value.expiresAt) ||
-    !isMoneyString(value.principal) ||
-    !isMoneyString(value.feeRate) ||
-    !isMoneyString(value.promotionFee) ||
-    !isMoneyString(value.totalCost) ||
-    !Array.isArray(value.lines) ||
-    value.lines.length === 0
-  ) {
-    return false
-  }
-  return value.lines.every((line) => {
-    if (
-      !isRecord(line) ||
-      !hasExactKeys(line, [
-        'campaignIndex',
-        'actionType',
-        'tier',
-        'quantity',
-        'pricingSource',
-        'unitPrice',
-        'principal',
-      ]) ||
-      !Number.isInteger(line.campaignIndex) ||
-      (line.campaignIndex as number) < 0 ||
-      typeof line.actionType !== 'string' ||
-      !PROMOTE_ACTIONS.has(line.actionType as PromoteAction) ||
-      typeof line.tier !== 'string' ||
-      !QUOTE_TIERS.has(line.tier) ||
-      !Number.isInteger(line.quantity) ||
-      (line.quantity as number) <= 0 ||
-      (line.pricingSource !== 'PILOT' && line.pricingSource !== 'LEGACY') ||
-      !isMoneyString(line.unitPrice) ||
-      !isMoneyString(line.principal)
-    ) {
-      return false
-    }
-    return true
-  })
-}
-
-function pluginPricingErrorCode(error: unknown): string {
-  if (!(error instanceof GqlError)) return 'INTERNAL'
-  const candidates = [
-    ...(error.graphqlErrors ?? []).map((entry) => entry.extensions?.code),
-    error.message,
-  ]
-  if (
-    candidates.some((value) =>
-      /PLUGIN_OPERATION_DENIED|PLUGIN_SECURITY_REQUIRED|ENGAGEMENT_PILOT_QUOTE_REQUIRED/.test(
-        String(value),
-      ),
-    )
-  ) {
-    return 'PLUGIN_UPGRADE_REQUIRED'
-  }
-  for (const code of [
-    'ENGAGEMENT_PILOT_QUOTE_EXPIRED',
-    'ENGAGEMENT_PILOT_QUOTE_REVOKED',
-    'ENGAGEMENT_PILOT_QUOTE_NOT_FOUND',
-    'ENGAGEMENT_PILOT_QUOTE_MISMATCH',
-    'ENGAGEMENT_PILOT_QUOTE_INVALID',
-    'ENGAGEMENT_PILOT_QUOTE_UNAVAILABLE',
-  ]) {
-    if (candidates.some((value) => String(value).includes(code))) return code
-  }
-  return error.httpStatus === 401 ? 'TOKEN_INVALID' : 'INTERNAL'
-}
-
 async function submitTask(campaignId: string): Promise<MsgResponse> {
   // —— Reserve ——
   try {
@@ -1629,15 +575,10 @@ interface CodedError {
   message: string
 }
 
-export function reserveErrorCode(msg: string, httpStatus?: number): CodedError {
+function reserveErrorCode(msg: string, httpStatus?: number): CodedError {
   let code: SubmitErrorCode = 'RESERVE_FAILED'
   if (httpStatus === 401) code = 'TOKEN_INVALID'
-  else if (/LIGHTHOUSE_SELECTED_REQUIRED/i.test(msg)) {
-    return {
-      code: 'LIGHTHOUSE_SELECTED_REQUIRED',
-      message: '需灯塔严选资格',
-    }
-  } else if (/Slot full/i.test(msg)) code = 'SLOT_FULL'
+  else if (/Slot full/i.test(msg)) code = 'SLOT_FULL'
   else if (/BotUserBlocked/i.test(msg)) code = 'BOT_BLOCKED'
   return { code, message: msg }
 }
@@ -1694,242 +635,6 @@ async function recordDwell(
   }
 }
 
-/**
- * [shadow 捕获] 串行化闸门:doHandleEngagementCapture 是异步 read-modify-write
- * (读 capturedActions → 合并 → 写回),并发调用会互相覆盖内存累积。用一条
- * promise 链串起来消除竞态(shadow 非资金,串行代价可接受)。
- */
-let captureChain: Promise<void> = Promise.resolve()
-
-function rawCaptureKey(cap: {
-  actionType: string
-  tweetId?: string
-  handle?: string
-  commentText?: string
-  resultTweetId?: string
-  capturedAt: string
-}): string {
-  return [
-    cap.actionType,
-    cap.tweetId ?? '',
-    cap.handle?.toLowerCase() ?? '',
-    cap.commentText ?? '',
-    cap.resultTweetId ?? '',
-    cap.capturedAt,
-  ].join('|')
-}
-
-function toRawCapturedAction(
-  cap: CapturedAction,
-  capturedAt: string,
-): RawCapturedAction {
-  return {
-    actionType: cap.actionType,
-    ...(cap.tweetId ? { tweetId: cap.tweetId } : {}),
-    ...(cap.handle ? { handle: cap.handle.toLowerCase() } : {}),
-    ...(cap.commentText ? { commentText: cap.commentText } : {}),
-    ...(cap.resultTweetId ? { resultTweetId: cap.resultTweetId } : {}),
-    capturedAt,
-    expiresAt: Date.now() + RAW_CAPTURE_TTL_MS,
-  }
-}
-
-async function getRawCapturedActions(): Promise<RawCapturedAction[]> {
-  const now = Date.now()
-  const raw = (await sessionStore.get('rawCapturedActions')) ?? []
-  const alive = raw.filter((a) => a.expiresAt > now).slice(-MAX_RAW_CAPTURES)
-  if (alive.length !== raw.length) {
-    await sessionStore.set('rawCapturedActions', alive)
-  }
-  return alive
-}
-
-async function saveRawCapturedAction(
-  cap: CapturedAction,
-  capturedAt: string,
-): Promise<RawCapturedAction> {
-  const raw = toRawCapturedAction(cap, capturedAt)
-  const pending = await getRawCapturedActions()
-  const key = rawCaptureKey(raw)
-  const next = pending.filter((a) => rawCaptureKey(a) !== key)
-  next.push(raw)
-  await sessionStore.set('rawCapturedActions', next.slice(-MAX_RAW_CAPTURES))
-  return raw
-}
-
-async function removeRawCapturedAction(raw: RawCapturedAction): Promise<void> {
-  const key = rawCaptureKey(raw)
-  const pending = await getRawCapturedActions()
-  await sessionStore.set(
-    'rawCapturedActions',
-    pending.filter((a) => rawCaptureKey(a) !== key),
-  )
-}
-
-function queueRawCaptureReconcile(): void {
-  captureChain = captureChain
-    .then(() => reconcileRawCapturedActions())
-    .catch(() => {})
-}
-
-async function reportMappedCaptures(
-  mapped: ReturnType<typeof mapCaptureToCampaigns>,
-  capturedAt: string,
-  snapshot: {
-    byTweet: Record<string, CampaignTaskCache[]>
-    byAuthor: Record<string, CampaignTaskCache[]>
-  },
-): Promise<void> {
-  if (mapped.length === 0) return
-
-  dbg('bg 映射到', mapped.length, '个 campaign,开始上报')
-  const acc = (await sessionStore.get('capturedActions')) ?? {}
-  for (const m of mapped) {
-    const next =
-      m.actionType === 'FOLLOW' && m.handle
-        ? {
-            actionType: m.actionType,
-            handle: m.handle.toLowerCase(),
-            capturedAt,
-          }
-        : m.tweetId
-          ? {
-              actionType: m.actionType,
-              tweetId: m.tweetId,
-              // COMMENT/COMMENT_LIKE 持久化评论正文,供 verifyOnly 随签名提交
-              ...(m.commentText ? { commentText: m.commentText } : {}),
-              ...(m.resultTweetId ? { resultTweetId: m.resultTweetId } : {}),
-              capturedAt,
-            }
-          : { actionType: m.actionType, capturedAt }
-    const merged = mergeAction(acc[m.campaignId], next)
-    acc[m.campaignId] = merged // session 保留 commentText,供 verifyOnly 随签名提交
-    await gql<ReportEngagementCaptureResult>(
-      REPORT_ENGAGEMENT_CAPTURE_MUTATION,
-      {
-        input: {
-          campaignId: m.campaignId,
-          // 后端 CapturedActionInput 不接受每动作 commentText —— 剥掉,只发它认的
-          // 字段;评论正文走下面顶层 input.commentText(否则 GraphQL 校验整条上报被拒,
-          // 导致捕获没落库、验证提交 0 动作被拒)。
-          actions: merged.map((a) => ({
-            actionType: a.actionType,
-            ...(a.tweetId ? { tweetId: a.tweetId } : {}),
-            ...(a.handle ? { handle: a.handle } : {}),
-            ...(a.resultTweetId ? { resultTweetId: a.resultTweetId } : {}),
-            capturedAt: a.capturedAt,
-          })),
-          ...(m.commentText ? { commentText: m.commentText } : {}),
-        },
-      },
-    )
-    dbg(
-      'bg 上报成功',
-      m.campaignId,
-      merged.map((x) => x.actionType),
-    )
-  }
-
-  // 剪枝:只留仍在当前活跃任务集(byTweet + byAuthor)里的 campaign,防
-  // capturedActions 无界增长(chrome.storage.session 跨 SW 重启不清)。
-  const activeIds = new Set<string>()
-  for (const tasks of Object.values(snapshot.byTweet)) {
-    for (const t of tasks) activeIds.add(t.campaignId)
-  }
-  for (const tasks of Object.values(snapshot.byAuthor)) {
-    for (const t of tasks) activeIds.add(t.campaignId)
-  }
-  const pruned: typeof acc = {}
-  for (const id of Object.keys(acc)) {
-    if (activeIds.has(id)) pruned[id] = acc[id]
-  }
-  await sessionStore.set('capturedActions', pruned)
-}
-
-async function reconcileRawCapturedActions(): Promise<void> {
-  const token = await localStore.get('apiToken')
-  if (!token) return
-
-  const pending = await getRawCapturedActions()
-  if (pending.length === 0) return
-
-  const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
-  const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
-  const keep: RawCapturedAction[] = []
-  let replayed = 0
-
-  for (const raw of pending) {
-    const mapped = mapCaptureToCampaigns(raw, { byTweet, byAuthor })
-    if (mapped.length === 0) {
-      keep.push(raw)
-      continue
-    }
-    try {
-      await reportMappedCaptures(mapped, raw.capturedAt, { byTweet, byAuthor })
-      replayed += 1
-    } catch (e) {
-      console.warn('[lhdao] replay raw engagement capture failed', e)
-      keep.push(raw)
-    }
-  }
-
-  if (replayed > 0) {
-    dbg('bg 重放原始捕获成功', replayed, '条')
-  }
-  await sessionStore.set('rawCapturedActions', keep.slice(-MAX_RAW_CAPTURES))
-}
-
-/**
- * [shadow 捕获] 把插件捕获到的一个互动动作映射到命中的 campaign 并上报后端。
- * 无 token → 静默(同 dwell);该 tweet 暂无匹配任务 → 先暂存原始动作并强制
- * sync,等 RESERVED campaign 进入快照后重放。多动作累积上报(session
- * capturedActions),避免后端 latest-wins 覆盖漏判。fire-and-forget,串行。
- */
-function handleEngagementCapture(
-  cap: CapturedAction,
-  capturedAt: string,
-): Promise<void> {
-  captureChain = captureChain
-    .then(() => doHandleEngagementCapture(cap, capturedAt))
-    .catch(() => {})
-  return captureChain
-}
-
-async function doHandleEngagementCapture(
-  cap: CapturedAction,
-  capturedAt: string,
-): Promise<void> {
-  try {
-    dbg('bg 收到捕获', cap.actionType, cap.tweetId ?? cap.handle)
-    const token = await localStore.get('apiToken')
-    if (!token) {
-      dbg('bg 丢弃:无 apiToken')
-      return
-    }
-    const raw = await saveRawCapturedAction(cap, capturedAt)
-    const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
-    const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
-    const mapped = mapCaptureToCampaigns(cap, { byTweet, byAuthor })
-    if (mapped.length === 0) {
-      dbg(
-        'bg 暂存:无匹配任务(tweet 不在快照,或该任务动作类型与捕获不符),触发同步后重放。',
-        'tweetId=',
-        cap.tweetId,
-        '快照该推任务=',
-        cap.tweetId
-          ? (byTweet[cap.tweetId] ?? []).map((t) => t.actionType)
-          : '-',
-      )
-      await syncTasks()
-      return
-    }
-    await reportMappedCaptures(mapped, capturedAt, { byTweet, byAuthor })
-    await removeRawCapturedAction(raw)
-  } catch (e) {
-    console.warn('[lhdao] report engagement capture failed', e)
-  }
-}
-
 // ── reserve / verify split (两步抢单) ───────────────────────────────
 
 /**
@@ -1939,30 +644,13 @@ async function doHandleEngagementCapture(
 async function reserveOnly(
   campaignId: string,
   confirmCascade?: boolean,
-  confirmedCascadeTier?: string,
 ): Promise<MsgResponse> {
   try {
-    // timelineOnly 任务走插件专用签名预约口;普通任务维持旧 mutation
-    // (旧口对 plugin token 403 是后端既有姿态,普通单预约仍在网页)。
-    const byTweet = (await sessionStore.get('tasksByTweetId')) ?? {}
-    const byAuthor = (await sessionStore.get('tasksByAuthorHandle')) ?? {}
-    const cachedTask = [...Object.values(byTweet), ...Object.values(byAuthor)]
-      .flat()
-      .find((t) => t.campaignId === campaignId)
-    const mutation = cachedTask?.timelineOnly
-      ? RESERVE_TIMELINE_SLOT_MUTATION
-      : RESERVE_SLOT_MUTATION
-    const data = await gql<ReserveSlotResult & ReserveTimelineSlotResult>(
-      mutation,
-      {
-        campaignId,
-        confirmCascade: confirmCascade ?? null,
-        ...(cachedTask?.timelineOnly
-          ? { confirmedCascadeTier: confirmedCascadeTier ?? null }
-          : {}),
-      },
-    )
-    const r = data.reserveEngagementSlot ?? data.reserveTimelineEngagementSlot
+    const data = await gql<ReserveSlotResult>(RESERVE_SLOT_MUTATION, {
+      campaignId,
+      confirmCascade: confirmCascade ?? null,
+    })
+    const r = data.reserveEngagementSlot
 
     if (r?.reserved) {
       return {
@@ -1980,8 +668,7 @@ async function reserveOnly(
         type: 'reserve-result',
         ok: false,
         code: 'RESERVE_FAILED',
-        message: `可按 ${w.effectiveTier} 档领取，奖励 ${w.effectiveTierRewardLux} LUX，请确认。`,
-        cascadeWarning: w,
+        message: `本档已满,可降到 ${w.effectiveTier} 档拿 ${w.effectiveTierRewardLux} LUX (原 ${w.userTierRewardLux})。点重抢确认降档。`,
       }
     }
 
@@ -2027,167 +714,34 @@ async function reserveOnly(
 }
 
 /**
- * [B3] 插件专用验证:mint 票据 → 组装捕获证明(actions + nonce + ts + HMAC 签名)
- * → submitEngagementProof。取代对 plugin token 403 的 verifyEngagement。
- *
- * 前提:用户已在**网页**预约该 campaign(mint 要求 RESERVED)且已去 Twitter 做动作。
- * 发奖仍在后端 worker(Phase3 Twitter 权威 / Phase4 插件权威),故 submit 只回
- * accepted/status,不返 reward —— UI 显"已提交,发放中",余额由 syncTasks 稍后刷新。
+ * 只调 verifyEngagement (1 次 5s 重试)。前提是用户已经 reserve 过且
+ * 已经去 Twitter 完成动作。返回 actualReward。
  */
 async function verifyOnly(campaignId: string): Promise<MsgResponse> {
-  try {
-    // 验证前先尝试把短缓存里的原始捕获重放一次,避免"刚完成动作但
-    // capturedActions 还没落 campaignId"时提交空 proof。
-    queueRawCaptureReconcile()
-    await captureChain
-
-    // 1) mint 票据(要求已 RESERVED;返回 ticket + 一次性 macKey)
-    const mint = await gql<MintEngagementTicketResult>(
-      MINT_ENGAGEMENT_TICKET_MUTATION,
-      { campaignId },
-    )
-    const { ticket, macKey } = mint.mintEngagementTicket
-
-    // 2) 该 campaign 已捕获的动作(session 累积,来自 __lhcap)
-    const capMap = (await sessionStore.get('capturedActions')) ?? {}
-    const actions = (capMap[campaignId] ?? []).map((a) => ({
-      actionType: a.actionType,
-      tweetId: a.tweetId,
-      handle: a.handle, // FOLLOW 被关注 handle,后端 recordCapture + canonical 需要
-      resultTweetId: a.resultTweetId,
-      capturedAt: a.capturedAt,
-    }))
-    if (actions.length === 0) {
-      return {
-        type: 'verify-result',
-        ok: false,
-        code: 'ACTION_NOT_DETECTED',
-        message:
-          '插件还没有检测到你的动作。请确认 X 页面已完成点赞/转发/评论/关注,等待几秒或点击插件刷新后再验证。',
-      }
-    }
-    // 评论正文:取本 campaign 捕获里第一个带 commentText 的动作。随签名提交,后端
-    // 插件权威路径落库 / auto-title 才拿得到(否则发奖后评论正文丢失)。commentText
-    // 也进 canonical(sha256),故两端必须一致带上。
-    const commentText = (capMap[campaignId] ?? []).find(
-      (a) => a.commentText,
-    )?.commentText
-
-    // 3) 组装证明 + 签名(canonical 与后端逐字节一致)
-    const ts = Math.floor(Date.now() / 1000)
-    const nonce = randomProofNonce()
-    const canonical = await buildProofCanonical({
-      campaignId,
-      ts,
-      nonce,
-      actions: actions.map((a) => ({
-        actionType: a.actionType,
-        tweetId: a.tweetId ?? null,
-        handle: a.handle ?? null,
-        resultTweetId: a.resultTweetId ?? null,
-      })),
-      commentText,
-    })
-    const sig = await hmacSignProof(macKey, canonical)
-
-    // 4) 提交证明(commentText 随签名一并提交,后端 recordCapture 落库供权威路径读)
-    const res = await gql<SubmitEngagementProofResult>(
-      SUBMIT_ENGAGEMENT_PROOF_MUTATION,
-      {
-        input: {
-          campaignId,
-          ticket,
-          sig,
-          nonce,
-          ts,
-          actions,
-          ...(commentText ? { commentText } : {}),
-        },
-      },
-    )
-    const r = res.submitEngagementProof
-    if (r.accepted) {
+  for (let i = 0; i < 2; i++) {
+    try {
+      const data = await gql<VerifyEngagementResult>(
+        VERIFY_ENGAGEMENT_MUTATION,
+        { campaignId },
+      )
+      const reward = Number(data.verifyEngagement?.actualReward ?? 0)
       void syncTasks()
-      // reward 异步发放,submit 不返金额 → reward:0,UI 回退显示预期奖励/发放中。
-      return { type: 'verify-result', ok: true, reward: 0 }
-    }
-    const { code, message } = verifyErrorCode(
-      r.reason ?? r.status ?? 'VERIFY_FAILED',
-      undefined,
-    )
-    return { type: 'verify-result', ok: false, code, message }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
-    const { code, message } = verifyErrorCode(msg, httpStatus)
-    return { type: 'verify-result', ok: false, code, message }
-  }
-}
-
-/**
- * [B3] 去任务广场:优先复用已开的本站标签页,避免每次验证堆新标签。
- *   - 已在 /campaigns → 只聚焦(不 reload)
- *   - 有本站其它页 → 复用该标签,聚焦并导航到 /campaigns
- *   - 都没有 → 新建标签
- * 任何查询/聚焦失败一律兜底为直接新建。查标签 URL 依赖 WEB_ENDPOINT 的
- * host_permission(见 wxt.config)。
- */
-async function openTaskHall(): Promise<void> {
-  const origin = new URL(WEB_ENDPOINT).origin
-  const url = `${WEB_ENDPOINT}/campaigns`
-  try {
-    const tabs = await chrome.tabs.query({ url: `${origin}/*` })
-    const onHall = tabs.find(
-      (t) => t.id != null && (t.url ?? '').startsWith(url),
-    )
-    const target = onHall ?? tabs.find((t) => t.id != null)
-    if (target?.id != null) {
-      await chrome.tabs.update(
-        target.id,
-        onHall ? { active: true } : { active: true, url },
-      )
-      if (target.windowId != null) {
-        await chrome.windows.update(target.windowId, { focused: true })
+      return { type: 'verify-result', ok: true, reward }
+    } catch (e) {
+      if (i === 1) {
+        const msg = e instanceof Error ? e.message : String(e)
+        const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
+        const { code, message } = verifyErrorCode(msg, httpStatus)
+        return { type: 'verify-result', ok: false, code, message }
       }
-      return
+      await sleep(VERIFY_RETRY_DELAY_MS)
     }
-  } catch {
-    // 查询/聚焦失败 → 落到新建
   }
-  try {
-    await chrome.tabs.create({ url, active: true })
-  } catch {
-    // ignore — 开标签失败不影响主流程
-  }
-}
-
-/** 跳该 campaign 详情页(任务观察界面)。复用 openTaskHall 的「复用已开标签」逻辑。 */
-async function openCampaignDetail(campaignId: string): Promise<void> {
-  const origin = new URL(WEB_ENDPOINT).origin
-  const url = `${WEB_ENDPOINT}/campaigns/${encodeURIComponent(campaignId)}`
-  try {
-    const tabs = await chrome.tabs.query({ url: `${origin}/*` })
-    const onDetail = tabs.find(
-      (t) => t.id != null && (t.url ?? '').startsWith(url),
-    )
-    const target = onDetail ?? tabs.find((t) => t.id != null)
-    if (target?.id != null) {
-      await chrome.tabs.update(
-        target.id,
-        onDetail ? { active: true } : { active: true, url },
-      )
-      if (target.windowId != null) {
-        await chrome.windows.update(target.windowId, { focused: true })
-      }
-      return
-    }
-  } catch {
-    // 查询/聚焦失败 → 落到新建
-  }
-  try {
-    await chrome.tabs.create({ url, active: true })
-  } catch {
-    // ignore
+  return {
+    type: 'verify-result',
+    ok: false,
+    code: 'INTERNAL',
+    message: 'unreachable',
   }
 }
 
@@ -2285,19 +839,14 @@ async function startPairing(): Promise<
   }
 
   // 注册 code,极小概率冲突重试 3 次
-  const identity = await getOrCreateDeviceIdentity()
   let code = ''
   let createOk = false
   for (let i = 0; i < 3; i++) {
     code = generatePairingCode()
     try {
-      await gql<CreateExtensionPairingResult, CreateExtensionPairingVars>(
+      await gql<CreateExtensionPairingResult>(
         CREATE_EXTENSION_PAIRING_MUTATION,
-        {
-          code,
-          deviceId: identity.deviceId,
-          publicKeyJwk: identity.publicKeyJwk,
-        },
+        { code },
         { anonymous: true },
       )
       createOk = true

@@ -1,39 +1,19 @@
-import type { BinanceProbeObservation } from './binance-square-probe'
-import type { AvailableEngagement } from './queries'
-
-export type BinanceSquareActionType = 'LIKE' | 'COMMENT' | 'SHARE' | 'FOLLOW'
-
-export interface BinanceSquareTaskCache {
-  campaignId: string
-  actionType: BinanceSquareActionType
-  targetUrl: string
-  targetContentId?: string
-  targetAuthorId?: string
-  reserved: boolean
-}
-
-export interface BinanceSquareTaskIndex {
-  byContentId: Record<string, BinanceSquareTaskCache[]>
-  byAuthorId: Record<string, BinanceSquareTaskCache[]>
-}
+/**
+ * 类型化的 chrome.storage 封装。
+ *
+ *  - **local**:持久(用户数据,跨浏览器会话保留)。装 plugin token、用户偏好。
+ *  - **session**:浏览器一关就清(MV3 SW 重启可活下来,但用户关浏览器会失效)。
+ *    装可重新拉取的任务缓存。
+ *
+ * 不暴露 raw chrome.storage.* — 调用方只看到 typed get/set,违法 key
+ * 直接 TS 编译期就报错。
+ */
 
 // ── Schemas ───────────────────────────────────────────────────────────
 
 interface LocalSchema {
   /** 用户在 web 端创建的 plugin token (lhdao_pk_*) */
   apiToken: string | null
-  /**
-   * 稳定的设备标识 (UUID v4),首次需要时生成并持久化。
-   *
-   * 作为 watermark 的 `did` 维度:抢单/验证请求带 `x-device-id`,后端 mint +
-   * verify 时绑定它(防 token 跨设备共享)。SW 重启不丢(存 local),换浏览器
-   * 才会重生成。详见 src/lib/watermark.ts。
-   */
-  deviceId: string | null
-  /** 配对时登记到后端的 P-256 公钥；对应私钥只保存在 IndexedDB。 */
-  devicePublicKeyJwk: JsonWebKey | null
-  /** 已完成一次性旧 token 设备迁移的 token SHA-256。 */
-  deviceRegisteredTokenHash: string | null
   /** 是否同意上报错误日志 (placeholder,后续接 Sentry) */
   optInErrorReport: boolean
   /**
@@ -50,18 +30,6 @@ interface LocalSchema {
 }
 
 interface SessionSchema {
-  /** Per-token sources survive worker suspension; never retain the token itself. */
-  engagementSources: {
-    owner: string
-    available: AvailableEngagement[]
-    reserved: AvailableEngagement[]
-  } | null
-
-  /** Binance Square 任务的独立索引，不与 X tweet ID 缓存混用。 */
-  binanceSquareTasks: BinanceSquareTaskIndex
-  /** Beta 探针暂存的脱敏网络形状；不包含原始请求或响应。 */
-  binanceSquareProbeObservations: BinanceProbeObservation[]
-  /** Lighthouse 页面保存的脱敏产品任务引用，不含规则或凭据。 */
   /**
    * key = tweetId, value = 这条推文上挂着的"推文级"任务(LIKE/RT/COMMENT)。
    * content script 拿到 tweetId 时 O(1) 查询。
@@ -75,34 +43,8 @@ interface SessionSchema {
    * 跟 tasksByTweetId 合并起来挂 chip。
    */
   tasksByAuthorHandle: Record<string, CampaignTaskCache[]>
-  /**
-   * [shadow 捕获] key = campaignId,value = 该 campaign 至今捕获到的动作(按
-   * actionType 去重)。累积上报:后端 recordCapture 是 latest-wins 覆盖,故每次
-   * 报「该 campaign 全部已捕获动作」,避免多动作任务互相覆盖漏判。session 级
-   * (SW 重启清空,后端 Redis 本就有 TTL)。
-   */
-  capturedActions: Record<
-    string,
-    {
-      actionType: string
-      tweetId?: string
-      handle?: string
-      commentText?: string
-      resultTweetId?: string
-      capturedAt: string
-    }[]
-  >
-  /**
-   * [shadow 捕获] 原始动作短暂暂存区。
-   *
-   * 用户在网页刚预约成功后马上去 X 完成动作时,background 里的任务快照可能
-   * 还没同步到那条 RESERVED campaign。旧逻辑在这种情况下会因为"无匹配任务"
-   * 直接丢弃动作,导致后续验证永远卡在"未检测到动作"。这里先把原始动作存
-   * 10 分钟,等 syncTasks 拉到最新任务快照后再重放映射。
-   */
-  rawCapturedActions: RawCapturedAction[]
   /** 上次 background SW 拉取任务的时间戳 (ms since epoch) */
-  lastSyncAt: number | null
+  lastSyncAt: number
   /** 上次同步的错误信息;成功时为 null */
   lastSyncError: string | null
   /** 上次同步的错误对应 HTTP status (401/403/...);非 HTTP 错误为 null */
@@ -113,11 +55,7 @@ interface SessionSchema {
   tweetCampaigns: TweetCampaignSummary[]
   /** [v2] 个人面板数据:余额 / Tier / 今日收益 — sidebar 顶部三件套 */
   userProfile: UserProfile | null
-  /** 当前 token 的严选资格查询状态;null 表示尚未完成本轮确认。 */
-  lighthouseSelectedStatus: LighthouseSelectedStatus | null
 }
-
-export type LighthouseSelectedStatus = 'available' | 'loading' | 'unavailable'
 
 /** Sidebar v2 顶部个人面板用 — 全是 me query 拉来的字段 */
 export interface UserProfile {
@@ -135,18 +73,6 @@ export interface UserProfile {
   newLux: number | null
   /** 今日新增 newLux — sidebar 小字显示 */
   todayEarnings: number | null
-  /** Missing means current qualification could not be confirmed. */
-  lighthouseSelected?: boolean
-}
-
-export interface RawCapturedAction {
-  actionType: 'LIKE' | 'RT' | 'COMMENT' | 'FOLLOW'
-  tweetId?: string
-  handle?: string
-  commentText?: string
-  resultTweetId?: string
-  capturedAt: string
-  expiresAt: number
 }
 
 /** Sidebar v2 列表行数据 — TWEET 类型 campaign 精简摘要 */
@@ -162,15 +88,9 @@ export interface TweetCampaignSummary {
   submitClose: string | null
   /** 点击 row 跳转的 URL — 通常 lhdao.top/campaigns/<id> */
   targetUrl: string | null
-  /** Missing means unread/legacy data. */
-  lighthouseSelectedOnly?: boolean
-  /** Missing means unavailable; null means a known legacy participant row. */
-  lighthouseSelectedAtClaim?: boolean | null
 }
 
 /** Sidebar 列表卡片单条数据 — 展示用,跟 chip 用的 task cache 解耦 */
-export type CommentGuideStatus = 'ready' | 'stale' | 'unavailable'
-
 export interface ActiveCampaignSummary {
   campaignId: string
   /** 用户级联后实际能拿到的总奖励 */
@@ -191,10 +111,6 @@ export interface ActiveCampaignSummary {
   tweetPreview: string | null
   /** COMMENT 类任务的关键字提示 */
   commentKeyword: string | null
-  commentGuide?: string | null
-  commentGuideStatus?: CommentGuideStatus
-  /** Missing means unread/legacy data. */
-  lighthouseSelectedOnly?: boolean
 }
 
 /**
@@ -219,33 +135,8 @@ export interface CampaignTaskCache {
   expectedReward: number
   /** COMMENT 类任务的关键词提示,non-comment 类型为 null */
   commentKeyword?: string | null
-  commentGuide?: string | null
-  commentGuideStatus?: CommentGuideStatus
   /** FOLLOW 任务的目标账户 handle(小写)。non-FOLLOW 为 null */
   targetUsername?: string | null
-  /**
-   * 目标推文作者显示名(availableEngagements.tweetAuthorName)。
-   * sidebar「当前任务」段的标题用,可能 null(hourly cron 未抓到)。
-   */
-  authorName?: string | null
-  /** 目标推文作者 handle(无 @)。sidebar「当前任务」段副标题 fallback。可能 null。 */
-  authorHandle?: string | null
-  /**
-   * 该 campaign 是否是当前用户**已预约(RESERVED)**的(来自 myReservedEngagements)。
-   * 同一推文挂多个 campaign(评论/转发/点赞各一单)时,「当前任务」必须优先显示
-   * 已预约的那个 —— 否则会显示奖励最高的可参与单,验证时用错 campaignId 触发
-   * NO_ACTIVE_RESERVATION(用户预约了评论、卡片却显示转发)。
-   */
-  reserved?: boolean
-  /** Missing means unread/legacy data. */
-  lighthouseSelectedOnly?: boolean
-  /** Missing means unavailable; null means a known legacy participant row. */
-  lighthouseSelectedAtClaim?: boolean | null
-  /**
-   * [timelineOnly] 仅插件时间线展示的任务。true 时预约必须走插件专用签名
-   * 入口 ReserveTimelineEngagementSlot(旧 mutation 会被后端按渠道拒绝)。
-   */
-  timelineOnly?: boolean
 }
 
 // ── Stores ────────────────────────────────────────────────────────────
@@ -266,9 +157,6 @@ export const localStore = {
 }
 
 export const sessionStore = {
-  async patch(values: Partial<SessionSchema>) {
-    await chrome.storage.session.set(values)
-  },
   async get<K extends keyof SessionSchema>(
     key: K,
   ): Promise<SessionSchema[K] | null> {
@@ -277,9 +165,6 @@ export const sessionStore = {
   },
   async set<K extends keyof SessionSchema>(key: K, val: SessionSchema[K]) {
     await chrome.storage.session.set({ [key]: val })
-  },
-  async remove(keys: (keyof SessionSchema)[]) {
-    await chrome.storage.session.remove(keys)
   },
   async clear() {
     await chrome.storage.session.clear()

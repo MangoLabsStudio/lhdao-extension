@@ -33,7 +33,6 @@ export const ME_QUERY = `
       newLux
       todayEarnings
       twitterUsername
-      lighthouseSelected
     }
   }
 `
@@ -58,57 +57,17 @@ export interface MeResult {
     todayEarnings: number | null
     /** 用户绑定的 Twitter handle(无 @ 前缀);后端 ResolveField 从 OAuthAccount 拿 */
     twitterUsername: string | null
-    /** Missing means the server/plugin contract cannot confirm qualification. */
-    lighthouseSelected?: boolean
   } | null
-}
-
-export const MY_X_ANALYTICS_QUERY = 'query MyXAnalytics { myXAnalytics }'
-
-export const SAVE_X_ANALYTICS_MUTATION =
-  'mutation SaveXAnalytics($input: XAnalyticsInput!) { saveXAnalytics(input: $input) }'
-
-export interface XAnalyticsStatusResult {
-  myXAnalytics: {
-    required: boolean
-    completed: boolean
-    twitterUserId: string | null
-    twitterUsername: string | null
-  }
-}
-
-export interface SaveXAnalyticsVars {
-  input: {
-    captureId: string
-    twitterUserId: string
-    twitterUsername: string
-    periodStart: string
-    periodEnd: string
-    capturedAt: string
-    metrics: Record<string, number>
-  }
-}
-
-export interface SaveXAnalyticsResult {
-  saveXAnalytics: {
-    id: string
-    twitterUserId: string
-    periodStart: string
-    periodEnd: string
-    capturedAt: string
-    savedAt: string
-    metrics: Record<string, number>
-  }
 }
 
 // ── 拉可参与的 engagement 任务 ────────────────────────────────────────
 //
 // 字段来自 backend src/modules/unified-campaign/dto/campaign.model.ts:
 //   - UnifiedCampaignModel.keywords: string[]   ← 评论关键字 (campaign 级)
-//   - expectedReward / myExpectedReward:后端按当前用户可用 tier / 已预约
-//     rewardTier 计算出的预期奖励。插件展示必须优先 myExpectedReward,避免
-//     回落到 action.baseReward(高档/默认值)导致金额偏高。
 //   - UnifiedCampaignActionModel.{actionType,baseReward,targetCount}
+//
+// 没有 effectiveTier / commentGuide(我之前 queries 拍脑袋写的)。
+// 真实的 user-tier 奖励数额会在 verifyEngagement 完成后由后端返回。
 
 export const AVAILABLE_ENGAGEMENTS_QUERY = `
   query AvailableEngagements {
@@ -116,12 +75,7 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       id
       type
       mode
-      platform
-      lighthouseSelectedOnly
-      myLighthouseSelectedAtClaim
       targetUrl
-      targetContentId
-      targetAuthorId
       tweetId
       tweetText
       tweetAuthorName
@@ -129,12 +83,8 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
       tweetAuthorAvatar
       targetUsername
       keywords
-      commentGuide
       expectedReward
-      myExpectedReward
       effectiveTier
-      myEffectiveTier
-      timelineOnly
       actions {
         actionType
         baseReward
@@ -149,23 +99,13 @@ export type EngagementActionType =
   | 'RT'
   | 'COMMENT'
   | 'COMMENT_LIKE'
-  | 'SHARE'
   | 'FOLLOW'
-
-export type EngagementPlatform = 'X' | 'BINANCE_SQUARE'
 
 export interface AvailableEngagement {
   id: string
   type: string
   mode: string
-  platform: EngagementPlatform
-  /** Missing means unread/legacy data, not an ordinary order. */
-  lighthouseSelectedOnly?: boolean
-  /** Current viewer's participant snapshot; missing means unavailable/legacy. */
-  myLighthouseSelectedAtClaim?: boolean | null
   targetUrl: string | null
-  targetContentId: string | null
-  targetAuthorId: string | null
   tweetId: string | null
   tweetText: string | null
   tweetAuthorName: string | null
@@ -178,18 +118,10 @@ export interface AvailableEngagement {
    */
   targetUsername: string | null
   keywords: string[]
-  /** Missing means unread/legacy data; null means no guide. */
-  commentGuide?: string | null
   /** 用户级联后实际能拿到的总奖励 (LUX),后端 listAvailableCampaigns 计算 */
   expectedReward: number | null
-  /** 当前用户 tier / 已预约 rewardTier 下的精确预期奖励;展示优先用它。 */
-  myExpectedReward: number | null
   /** 用户实际能进的 tier 桶,如果级联了会跟 userTier 不同 */
   effectiveTier: string | null
-  /** 当前用户实际奖励 tier;展示/诊断优先用它。 */
-  myEffectiveTier: string | null
-  /** true = 仅插件时间线展示的任务;预约走 ReserveTimelineEngagementSlot */
-  timelineOnly: boolean
   actions: Array<{
     actionType: EngagementActionType
     baseReward: number
@@ -199,47 +131,6 @@ export interface AvailableEngagement {
 
 export interface AvailableEngagementsResult {
   availableEngagements: AvailableEngagement[]
-}
-
-// ── 我已预约的互动任务 ────────────────────────────────────────────────
-// availableEngagements 会把已参与(含 RESERVED)的过滤掉,但卡片「当前任务」段
-// 需要"已预约"的单(打开推文=已预约,直接检测/验证)。同 AvailableEngagement
-// 形状,syncTasks 里和 available 合并进 tasksByTweetId。后端 @AllowPluginToken。
-export const MY_RESERVED_ENGAGEMENTS_QUERY = `
-  query MyReservedEngagements {
-    myReservedEngagements {
-      id
-      type
-      mode
-      platform
-      lighthouseSelectedOnly
-      myLighthouseSelectedAtClaim
-      targetUrl
-      targetContentId
-      targetAuthorId
-      tweetId
-      tweetText
-      tweetAuthorName
-      tweetAuthorHandle
-      tweetAuthorAvatar
-      targetUsername
-      keywords
-      commentGuide
-      expectedReward
-      myExpectedReward
-      effectiveTier
-      myEffectiveTier
-      actions {
-        actionType
-        baseReward
-        targetCount
-      }
-    }
-  }
-`
-
-export interface MyReservedEngagementsResult {
-  myReservedEngagements: AvailableEngagement[]
 }
 
 // ── 拉可参与的 TWEET 类型任务(创作类:原创推文 / 引用转推) ────────
@@ -267,8 +158,6 @@ export const AVAILABLE_TWEETS_QUERY = `
       expectedReward
       myExpectedReward
       targetUrl
-      lighthouseSelectedOnly
-      myLighthouseSelectedAtClaim
       isParticipated
       isSoldOut
     }
@@ -287,10 +176,6 @@ export interface AvailableTweet {
   /** 我 tier 下的精确奖励;null 时 fallback 到 expectedReward */
   myExpectedReward: number | null
   targetUrl: string | null
-  /** Missing means unread/legacy data, not an ordinary order. */
-  lighthouseSelectedOnly?: boolean
-  /** Current viewer's participant snapshot when already participating. */
-  myLighthouseSelectedAtClaim?: boolean | null
   /**
    * 当前用户是不是已经参与过这个 campaign(抢过或完成过)。
    * sidebar 用来过滤"可抢单"列表 — 已参与的不展示。
@@ -345,39 +230,6 @@ export interface ReserveSlotResult {
   }
 }
 
-// ── [timelineOnly] 插件专用预约(签名操作 engagement.reserve.v1)──
-// 网页端 reserveEngagementSlot 对 timelineOnly 任务一律 CAMPAIGN_NOT_CLAIMABLE;
-// 插件侧带 device 签名走这个入口。后端按 documentSha256 逐字节校验本文档,
-// 定稿后不要改动格式(换行/缩进/字段顺序都会让哈希失效)。
-export const RESERVE_TIMELINE_SLOT_MUTATION = `
-  mutation ReserveTimelineEngagementSlot($campaignId: String!, $confirmCascade: Boolean, $confirmedCascadeTier: PaidEngagementSellerTier) {
-    reserveTimelineEngagementSlot(campaignId: $campaignId, confirmCascade: $confirmCascade, confirmedCascadeTier: $confirmedCascadeTier) {
-      reserved
-      reservedTier
-      cooldownSeconds
-      releasedSeats
-      activeReservations
-      cascadeWarning {
-        userTier
-        effectiveTier
-        userTierRewardLux
-        effectiveTierRewardLux
-      }
-    }
-  }
-`
-
-export interface ReserveTimelineSlotResult {
-  reserveTimelineEngagementSlot: {
-    reserved: boolean
-    reservedTier: string | null
-    cooldownSeconds: number | null
-    releasedSeats: number | null
-    activeReservations: number | null
-    cascadeWarning: CascadeWarning | null
-  }
-}
-
 export const VERIFY_ENGAGEMENT_MUTATION = `
   mutation VerifyEngagement($campaignId: String!) {
     verifyEngagement(campaignId: $campaignId) {
@@ -388,75 +240,6 @@ export const VERIFY_ENGAGEMENT_MUTATION = `
 
 export interface VerifyEngagementResult {
   verifyEngagement: { actualReward: number }
-}
-
-// ── [B3 插件专用验证] 票据签发 + 证明提交(取代对 plugin token 403 的 verifyEngagement)──
-// 预约仍在网页;插件先 mint 票据(要求已 RESERVED),再带票据 + 捕获结果 + HMAC 签名
-// 提交证明。发奖仍在后端 worker(Phase3 Twitter 权威 / Phase4 插件权威),故 submit
-// 只返回 accepted/status,不返 reward。
-
-export const MINT_ENGAGEMENT_TICKET_MUTATION = `
-  mutation MintEngagementTicket($campaignId: String!) {
-    mintEngagementTicket(campaignId: $campaignId) {
-      ticket
-      macKey
-      expiresAt
-    }
-  }
-`
-
-export interface MintEngagementTicketResult {
-  mintEngagementTicket: {
-    ticket: string
-    macKey: string
-    expiresAt: string
-  }
-}
-
-export const SUBMIT_ENGAGEMENT_PROOF_MUTATION = `
-  mutation SubmitEngagementProof($input: SubmitEngagementProofInput!) {
-    submitEngagementProof(input: $input) {
-      accepted
-      status
-      reason
-    }
-  }
-`
-
-export interface SubmitEngagementProofResult {
-  submitEngagementProof: {
-    accepted: boolean
-    status: string
-    reason?: string | null
-  }
-}
-
-// ── [shadow 捕获] 上报插件捕获到的互动动作(非资金,供一致率影子对比) ──────
-// 后端 @AllowPluginToken,不发奖、不动钱;background 累积某 campaign 已捕获动作
-// 后调用,返回 Boolean。input 见后端 ReportEngagementCaptureInput。
-export const REPORT_ENGAGEMENT_CAPTURE_MUTATION = `
-  mutation ReportEngagementCapture($input: ReportEngagementCaptureInput!) {
-    reportEngagementCapture(input: $input)
-  }
-`
-
-export interface ReportEngagementCaptureVars {
-  input: {
-    campaignId: string
-    actions: {
-      actionType: string
-      tweetId?: string
-      handle?: string
-      resultTweetId?: string
-      capturedAt?: string
-    }[]
-    commentText?: string
-    dwellMs?: number
-  }
-}
-
-export interface ReportEngagementCaptureResult {
-  reportEngagementCapture: boolean
 }
 
 // ── Lighthouse member lookup(灯塔成员识别) ─────────────────────────
@@ -501,61 +284,20 @@ export interface LighthouseMembersResult {
 // 流程见 kol-dao-service 后端 ExtensionPairingService doc。
 //
 // 扩展端只调 2 个 endpoint:
-//   - createExtensionPairing(code, deviceId, publicKeyJwk)
-//       占 code slot,扩展 BG 调,@IsPublic
+//   - createExtensionPairing(code) — 占 code slot,扩展 BG 调,@IsPublic
 //   - pollExtensionPairing(code)    — polling 拿 token,@IsPublic
 //
 // completeExtensionPairing 是主站调的(用户在 connect 页点 Allow),扩展
 // 不调,所以不在这里。
 
 export const CREATE_EXTENSION_PAIRING_MUTATION = `
-  mutation CreateExtensionPairing($code: String!, $deviceId: String!, $publicKeyJwk: JSON!) {
-    createExtensionPairing(code: $code, deviceId: $deviceId, publicKeyJwk: $publicKeyJwk)
+  mutation CreateExtensionPairing($code: String!) {
+    createExtensionPairing(code: $code)
   }
 `
 
-export interface CreateExtensionPairingVars {
-  code: string
-  deviceId: string
-  publicKeyJwk: JsonWebKey
-}
-
-export interface CreateExtensionPairingLegacyVars {
-  code: string
-}
-
-export function createExtensionPairingVariables(
-  code: string,
-  deviceId: string,
-  publicKeyJwk: JsonWebKey,
-): CreateExtensionPairingVars {
-  return { code, deviceId, publicKeyJwk }
-}
-
-export function createExtensionPairingLegacyVariables(
-  code: string,
-): CreateExtensionPairingLegacyVars {
-  return { code }
-}
-
-export function isCreateExtensionPairingDeviceBindingUnsupported(
-  error: unknown,
-): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return (
-    /Unknown argument ["'](?:deviceId|publicKeyJwk)["']/i.test(message) &&
-    /createExtensionPairing/i.test(message)
-  )
-}
-
 export interface CreateExtensionPairingResult {
   createExtensionPairing: boolean
-}
-
-export interface CreateExtensionPairingVars {
-  code: string
-  deviceId: string
-  publicKeyJwk: JsonWebKey
 }
 
 export const POLL_EXTENSION_PAIRING_QUERY = `
@@ -597,168 +339,4 @@ export const RECORD_TWEET_DWELL_MUTATION = `
 
 export interface RecordTweetDwellResult {
   recordTweetDwell: boolean
-}
-
-// ── Watermark mint (抢单接口防护) ─────────────────────────────────────
-//
-// 抢单/验证 mutation 在后端被 WatermarkInterceptor 保护(加密信封 + jti 防重放
-// + reserve 的 PoW)。扩展在调 ReserveEngagementSlot / VerifyEngagement 前,先
-// mint 一个 watermark token 并拼进请求头。详见 src/lib/watermark.ts。
-
-export const MINT_WATERMARK_TOKEN_QUERY = `
-  query MintWatermarkToken($operationName: String!, $opType: String!) {
-    mintWatermarkToken(operationName: $operationName, opType: $opType) {
-      token
-      expiresAt
-      kid
-      powChallenge
-      powDifficulty
-    }
-  }
-`
-
-export interface MintWatermarkTokenResult {
-  mintWatermarkToken: {
-    token: string
-    expiresAt: string | null
-    kid: string | null
-    powChallenge: string | null
-    powDifficulty: string | null
-  }
-}
-
-// ── 一键推广(promoteTweet)──────────────────────────────────────────
-// 后端按平台价格表把 预算+动作+档位 折成 ENGAGEMENT 商单(余额校验/10% 手续费)。
-// promoteTweet 返回创建的子单数组(每动作一个)。
-export const CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY = `
-  query CurrentEngagementMarketPrices($input: EngagementCurrentMarketPricesInput!) {
-    currentEngagementMarketPrices(input: $input) {
-      asOf
-      currency
-      precision
-      lines {
-        actionType
-        tier
-        pricingSource
-        unitPrice
-      }
-    }
-  }
-`
-
-export const PREVIEW_PROMOTE_TWEET_PRICING_QUERY = `
-  query PreviewPromoteTweetPricing($input: PromoteTweetPreviewInput!) {
-    previewPromoteTweetPricing(input: $input) {
-      quoteId
-      priceVersion
-      currency
-      precision
-      quotedAt
-      expiresAt
-      principal
-      feeRate
-      promotionFee
-      totalCost
-      lines {
-        campaignIndex
-        actionType
-        tier
-        quantity
-        pricingSource
-        unitPrice
-        principal
-      }
-    }
-  }
-`
-
-export interface EngagementCurrentMarketPrices {
-  asOf: string
-  currency: 'LUX'
-  precision: 8
-  lines: {
-    actionType: EngagementActionType
-    tier: 'S' | 'A' | 'B' | 'C' | 'D'
-    pricingSource: 'PILOT' | 'LEGACY'
-    unitPrice: string
-  }[]
-}
-
-export interface CurrentEngagementMarketPricesVars {
-  input: { actions: EngagementActionType[] }
-}
-
-export interface CurrentEngagementMarketPricesResult {
-  currentEngagementMarketPrices: EngagementCurrentMarketPrices
-}
-
-export interface PromoteTweetPricingQuote {
-  quoteId: string
-  priceVersion: string
-  currency: 'LUX'
-  precision: number
-  quotedAt: string
-  expiresAt: string
-  principal: string
-  feeRate: string
-  promotionFee: string
-  totalCost: string
-  lines: {
-    campaignIndex: number
-    actionType: string
-    tier: string
-    quantity: number
-    pricingSource: 'PILOT' | 'LEGACY'
-    unitPrice: string
-    principal: string
-  }[]
-}
-
-export interface PreviewPromoteTweetPricingVars {
-  input: {
-    tweetUrl: string
-    actions: { actionType: string; tierSlots: Record<string, number> }[]
-  }
-}
-
-export interface PreviewPromoteTweetPricingResult {
-  previewPromoteTweetPricing: PromoteTweetPricingQuote
-}
-
-export const PROMOTE_TWEET_MUTATION = `
-  mutation PromoteTweet($input: PromoteTweetInput!) {
-    promoteTweet(input: $input) {
-      id
-    }
-  }
-`
-
-export interface PromoteTweetVars {
-  input: {
-    quoteId: string
-    tweetUrl: string
-    actions: { actionType: string; tierSlots: Record<string, number> }[]
-    lighthouseSelectedOnly: boolean
-  }
-}
-
-export interface PromoteTweetResult {
-  promoteTweet: { id: string }[]
-}
-
-// 持续复投:给某子单建 auto-reinvest 任务(作者发新推文自动复投 N 次)。
-export const CREATE_AUTO_REINVEST_MUTATION = `
-  mutation CreateAutoReinvestTask($input: CreateAutoReinvestTaskInput!) {
-    createAutoReinvestTask(input: $input) {
-      id
-    }
-  }
-`
-
-export interface CreateAutoReinvestVars {
-  input: { campaignId: string; reinvestCount: number }
-}
-
-export interface CreateAutoReinvestResult {
-  createAutoReinvestTask: { id: string }
 }

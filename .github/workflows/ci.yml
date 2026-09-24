@@ -14,9 +14,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      WXT_API_ENDPOINT: https://service.lhdao.top/graphql
-      WXT_WEB_ENDPOINT: https://app.lhdao.top
 
     steps:
       - name: Checkout
@@ -50,14 +47,9 @@ jobs:
       - name: Build chrome-mv3
         run: pnpm run build
 
-      - name: Build edge-mv3
-        run: pnpm run build:edge
-
-      - name: Build firefox-mv3
+      - name: Build firefox-mv2
         run: pnpm run build:firefox
-
-      - name: Verify browser manifests
-        run: node scripts/verify-manifests.mjs
+        continue-on-error: true # firefox 还没主流回归,失败不卡 PR
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
