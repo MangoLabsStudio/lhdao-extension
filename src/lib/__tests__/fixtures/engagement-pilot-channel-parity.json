@@ -1,0 +1,16 @@
+{
+  "campaigns": [
+    {
+      "actions": ["LIKE"],
+      "tierSeats": { "S": 0, "A": 5, "B": 10, "C": 0, "D": 0 },
+      "platform": "X",
+      "mode": "OPEN"
+    },
+    {
+      "actions": ["RT"],
+      "tierSeats": { "S": 0, "A": 2, "B": 0, "C": 0, "D": 0 },
+      "platform": "X",
+      "mode": "OPEN"
+    }
+  ]
+}
