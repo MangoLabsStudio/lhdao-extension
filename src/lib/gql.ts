@@ -253,7 +253,9 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
         json.errors,
         res.status,
         'GRAPHQL',
-        res.status >= 500 || code === 'INTERNAL_SERVER_ERROR',
+        res.status >= 500 ||
+          code === 'INTERNAL_SERVER_ERROR' ||
+          (res.status === 429 && mutationMayHaveCommitted),
         undefined,
         retryAfterMs,
       )
@@ -261,6 +263,17 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
 
     // 没 errors 但 HTTP 状态非 2xx → 真的是 transport 层失败
     if (!res.ok) {
+      if (res.status === 429) {
+        throw new GqlError(
+          '请求过于频繁，请稍后重试。',
+          undefined,
+          res.status,
+          'HTTP',
+          mutationMayHaveCommitted,
+          undefined,
+          retryAfterMs,
+        )
+      }
       const snippet = bodyText.slice(0, 200) || '(empty body)'
       throw new GqlError(
         `HTTP ${res.status}: ${snippet}`,

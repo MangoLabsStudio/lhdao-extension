@@ -16,7 +16,7 @@ import {
 } from '../queries'
 
 describe('PLUGIN_OPERATIONS', () => {
-  it('allowlists only current prices, v2 preview, and quoted spend', async () => {
+  it('allowlists current prices, combined quote preview, and quoted spend', async () => {
     expect('PREVIEW_PROMOTE_TWEET_PRICING_V1_QUERY' in queries).toBe(false)
     await expect(
       sha256Hex(CURRENT_ENGAGEMENT_MARKET_PRICES_QUERY),
@@ -24,7 +24,7 @@ describe('PLUGIN_OPERATIONS', () => {
       'a6db29afa57f31cacc46403504c8c43f0ac10ac5fabfce5fe89f6ee269d1b312',
     )
     await expect(sha256Hex(PREVIEW_PROMOTE_TWEET_PRICING_QUERY)).resolves.toBe(
-      'd71bdd5a31703929fc61a7408b167668f558c16840c340ce8073248b8190e934',
+      '427dfd9325327ac2299660166085fa0aa7bc9436eba4c52c75294a620a755760',
     )
     expect(
       getPluginOperationByDocument(
@@ -40,7 +40,7 @@ describe('PLUGIN_OPERATIONS', () => {
         PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
         'PreviewPromoteTweetPricing',
       ),
-    ).toMatchObject({ id: 'read.promote-pricing.v2', permission: 'read' })
+    ).toMatchObject({ id: 'read.promote-pricing.v3', permission: 'read' })
     expect(PLUGIN_OPERATIONS.map((operation) => operation.id)).not.toContain(
       'read.promote-pricing.v1',
     )
@@ -49,7 +49,7 @@ describe('PLUGIN_OPERATIONS', () => {
     ).toMatchObject({ id: 'spend.promote.v1', permission: 'spend' })
   })
 
-  it('contains current prices, v2 preview, and quoted spend', () => {
+  it('contains current prices, v3 preview, and quoted spend', () => {
     expect(
       PLUGIN_OPERATIONS.map((operation) => operation.operationName),
     ).toEqual([

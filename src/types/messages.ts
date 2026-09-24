@@ -15,6 +15,7 @@ import type { CascadeWarning } from '@/lib/queries'
 import type {
   EngagementCurrentMarketPrices,
   LighthouseMember,
+  PromoteTweetPaymentPreview,
   PromoteTweetPricingQuote,
 } from '@/lib/queries'
 import type {
@@ -71,6 +72,7 @@ export type MsgRequest =
         actionType: PromoteAction
         tierSlots: Record<string, number>
       }[]
+      lighthouseSelectedOnly?: boolean
     }
   | {
       type: 'promote-tweet'
@@ -85,6 +87,10 @@ export type MsgRequest =
       reinvestCount?: number
       /** Explicitly false for ordinary promotion; never inherited. */
       lighthouseSelectedOnly: boolean
+      paymentConfirmations: {
+        requestKey: string
+        paymentPreviewToken: string
+      }[]
     }
   | { type: 'get-balance' }
   | { type: 'has-token' }
@@ -180,6 +186,7 @@ export type MsgResponse =
       type: 'promote-pricing-result'
       ok: true
       quote: PromoteTweetPricingQuote
+      payment: PromoteTweetPaymentPreview
     }
   | {
       type: 'promote-pricing-result'

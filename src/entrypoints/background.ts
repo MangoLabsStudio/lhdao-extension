@@ -1212,6 +1212,10 @@ export async function promoteTweetHandler(req: {
   quoteId: string
   reinvestCount?: number
   lighthouseSelectedOnly?: boolean
+  paymentConfirmations?: {
+    requestKey: string
+    paymentPreviewToken: string
+  }[]
 }): Promise<MsgResponse> {
   const token = await localStore.get('apiToken')
   if (!token) {
@@ -1228,6 +1232,9 @@ export async function promoteTweetHandler(req: {
       tweetUrl: req.tweetUrl,
       actions: req.actions,
       lighthouseSelectedOnly: req.lighthouseSelectedOnly === true,
+      ...(req.paymentConfirmations
+        ? { paymentConfirmations: req.paymentConfirmations }
+        : {}),
     },
   }
   const promoteKey = spendActionKey('promote', promoteVariables)
@@ -1264,7 +1271,12 @@ export async function promoteTweetHandler(req: {
     if (e instanceof GqlError) {
       releaseSpendActionKeyAfterDefiniteFailure('promote', promoteVariables, e)
     }
-    const msg = e instanceof GqlError ? e.message : String(e)
+    const msg =
+      e instanceof GqlError && e.httpStatus === 429
+        ? '请求过于频繁，请稍后重试。'
+        : e instanceof GqlError
+          ? e.message
+          : String(e)
     const httpStatus = e instanceof GqlError ? e.httpStatus : undefined
     let code = pluginPricingErrorCode(e)
     if (httpStatus === 401) code = 'TOKEN_INVALID'
@@ -1278,6 +1290,7 @@ export async function promoteTweetHandler(req: {
 export async function previewPromoteTweetPricingHandler(req: {
   tweetUrl: string
   actions: { actionType: string; tierSlots: Record<string, number> }[]
+  lighthouseSelectedOnly?: boolean
 }): Promise<MsgResponse> {
   const token = await localStore.get('apiToken')
   if (!token) {
@@ -1289,7 +1302,11 @@ export async function previewPromoteTweetPricingHandler(req: {
     }
   }
   const variables: PreviewPromoteTweetPricingVars = {
-    input: { tweetUrl: req.tweetUrl, actions: req.actions },
+    input: {
+      tweetUrl: req.tweetUrl,
+      actions: req.actions,
+      lighthouseSelectedOnly: req.lighthouseSelectedOnly === true,
+    },
   }
   try {
     const data = await gql<
@@ -1304,13 +1321,44 @@ export async function previewPromoteTweetPricingHandler(req: {
         message: '报价响应无效，请刷新后重试。',
       }
     }
+    const quote = data.previewPromoteTweetPricing
+    const payment = quote.paymentPreview
+    if (
+      !payment ||
+      !Array.isArray(payment.items) ||
+      payment.items.length !== req.actions.length ||
+      payment.items.some(
+        (item) => !/^[a-f0-9]{64}$/.test(item.paymentPreviewToken),
+      )
+    ) {
+      return {
+        type: 'promote-pricing-result',
+        ok: false,
+        code: 'PLUGIN_PRICING_RESPONSE_INVALID',
+        message: '付款预览响应无效，请刷新后重试。',
+      }
+    }
+    if (!payment.canSubmit) {
+      return {
+        type: 'promote-pricing-result',
+        ok: false,
+        code: 'PAYMENT_UNAVAILABLE',
+        message: '当前余额或付款来源不足，请调整后重新获取报价。',
+      }
+    }
     return {
       type: 'promote-pricing-result',
       ok: true,
-      quote: data.previewPromoteTweetPricing,
+      quote,
+      payment,
     }
   } catch (e) {
-    const message = e instanceof GqlError ? e.message : String(e)
+    const message =
+      e instanceof GqlError && e.httpStatus === 429
+        ? '请求过于频繁，请稍后重试。'
+        : e instanceof GqlError
+          ? e.message
+          : String(e)
     return {
       type: 'promote-pricing-result',
       ok: false,
@@ -1469,6 +1517,7 @@ function isPromoteTweetPricingQuote(
       'feeRate',
       'promotionFee',
       'totalCost',
+      'paymentPreview',
       'lines',
     ]) ||
     typeof value.quoteId !== 'string' ||
@@ -1520,6 +1569,7 @@ function isPromoteTweetPricingQuote(
 
 function pluginPricingErrorCode(error: unknown): string {
   if (!(error instanceof GqlError)) return 'INTERNAL'
+  if (error.httpStatus === 429) return 'RATE_LIMITED'
   const candidates = [
     ...(error.graphqlErrors ?? []).map((entry) => entry.extensions?.code),
     error.message,
@@ -1540,6 +1590,7 @@ function pluginPricingErrorCode(error: unknown): string {
     'ENGAGEMENT_PILOT_QUOTE_MISMATCH',
     'ENGAGEMENT_PILOT_QUOTE_INVALID',
     'ENGAGEMENT_PILOT_QUOTE_UNAVAILABLE',
+    'PAYMENT_PREVIEW_CHANGED',
   ]) {
     if (candidates.some((value) => String(value).includes(code))) return code
   }

@@ -140,10 +140,10 @@ export const PLUGIN_OPERATIONS: readonly PluginOperationDefinition[] = [
     'read',
   ),
   operation(
-    'read.promote-pricing.v2',
+    'read.promote-pricing.v3',
     'PreviewPromoteTweetPricing',
     PREVIEW_PROMOTE_TWEET_PRICING_QUERY,
-    'd71bdd5a31703929fc61a7408b167668f558c16840c340ce8073248b8190e934',
+    '427dfd9325327ac2299660166085fa0aa7bc9436eba4c52c75294a620a755760',
     'read',
   ),
   operation(

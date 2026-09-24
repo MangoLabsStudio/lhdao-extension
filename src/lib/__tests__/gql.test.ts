@@ -416,6 +416,26 @@ describe('gql transport outcomes', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('does not expose a rate-limit HTML page and preserves mutation retry safety', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('<!doctype html><title>Rate limited</title>', {
+          status: 429,
+          headers: { 'Retry-After': '30', 'Content-Type': 'text/html' },
+        }),
+      ),
+    )
+
+    await expect(gql(QUERY, { input: 'same-payload' })).rejects.toMatchObject({
+      message: '请求过于频繁，请稍后重试。',
+      kind: 'HTTP',
+      httpStatus: 429,
+      uncertain: true,
+      retryAfterMs: 30_000,
+    })
+  })
+
   it('marks a 5xx gateway response as an uncertain transport outcome', async () => {
     vi.stubGlobal(
       'fetch',

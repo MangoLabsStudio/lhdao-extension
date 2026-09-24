@@ -3,6 +3,7 @@ import { sendMessage } from '@/lib/messaging'
 import { isPluginDeviceDenied } from '@/lib/plugin-device-recovery'
 import type {
   EngagementCurrentMarketPrices,
+  PromoteTweetPaymentPreview,
   PromoteTweetPricingQuote,
 } from '@/lib/queries'
 import type { MsgResponse, PromoteAction } from '@/types/messages'
@@ -154,6 +155,10 @@ type PromoteRequest = {
   quoteId: string
   reinvestCount: number
   lighthouseSelectedOnly: boolean
+  paymentConfirmations: {
+    requestKey: string
+    paymentPreviewToken: string
+  }[]
 }
 
 const QUOTE_REFRESH_CODES = new Set([
@@ -162,9 +167,11 @@ const QUOTE_REFRESH_CODES = new Set([
   'ENGAGEMENT_PILOT_QUOTE_NOT_FOUND',
   'ENGAGEMENT_PILOT_QUOTE_MISMATCH',
   'ENGAGEMENT_PILOT_QUOTE_INVALID',
+  'PAYMENT_PREVIEW_CHANGED',
 ])
 const UNCERTAIN_PROMOTE_CODES = new Set([
   'INTERNAL',
+  'RATE_LIMITED',
   'ENGAGEMENT_PILOT_QUOTE_UNAVAILABLE',
   'ENGAGEMENT_PILOT_QUOTE_STORAGE_UNAVAILABLE',
 ])
@@ -219,6 +226,8 @@ export function PromoteDialog({
   const [quote, setQuote] = React.useState<PromoteTweetPricingQuote | null>(
     null,
   )
+  const [payment, setPayment] =
+    React.useState<PromoteTweetPaymentPreview | null>(null)
   const [currentPrices, setCurrentPrices] =
     React.useState<EngagementCurrentMarketPrices | null>(null)
   const [currentPricesError, setCurrentPricesError] = React.useState('')
@@ -292,6 +301,7 @@ export function PromoteDialog({
     automaticRefreshPending.current = false
     previewSequence.current += 1
     setQuote(null)
+    setPayment(null)
     setPreviewState('idle')
     setPreviewError('')
     setPhase('form')
@@ -337,6 +347,7 @@ export function PromoteDialog({
   React.useEffect(() => {
     void refreshKey
     setQuote(null)
+    setPayment(null)
     setPreviewError('')
     if (!hasQuoteInput) {
       setPreviewState('idle')
@@ -350,6 +361,7 @@ export function PromoteDialog({
         type: 'preview-promote-tweet-pricing',
         tweetUrl,
         actions: payloadActions,
+        lighthouseSelectedOnly,
       })
         .then((response) => {
           if (
@@ -363,6 +375,7 @@ export function PromoteDialog({
               automaticRefreshPending.current = false
             }
             setQuote(response.quote)
+            setPayment(response.payment)
             setPreviewState('ready')
             return
           }
@@ -394,12 +407,19 @@ export function PromoteDialog({
       controller.abort()
       clearTimeout(timer)
     }
-  }, [hasQuoteInput, payloadActions, refreshKey, tweetUrl])
+  }, [
+    hasQuoteInput,
+    lighthouseSelectedOnly,
+    payloadActions,
+    refreshKey,
+    tweetUrl,
+  ])
 
   React.useEffect(() => {
     if (!quote || Date.parse(quote.expiresAt) > nowMs) return
     previewSequence.current += 1
     setQuote(null)
+    setPayment(null)
     setPreviewState('error')
     setPreviewError('报价已过期，正在获取最新报价…')
     setRetryRequest(null)
@@ -412,11 +432,15 @@ export function PromoteDialog({
     phase === 'form' &&
     previewState === 'ready' &&
     quote !== null &&
+    payment !== null &&
     Date.parse(quote.expiresAt) > nowMs
 
   const refreshQuote = () => {
     if (submittingRef.current) return
     automaticRefreshPending.current = false
+    setQuote(null)
+    setPayment(null)
+    setPreviewState('loading')
     setPhase('form')
     setErrMsg('')
     setRetryRequest(null)
@@ -428,6 +452,7 @@ export function PromoteDialog({
     if (!sameRequest && (!quote || Date.parse(quote.expiresAt) <= Date.now())) {
       setPreviewError('报价已过期，正在获取最新报价…')
       setQuote(null)
+      setPayment(null)
       setPreviewState('error')
       automaticRefreshPending.current = true
       setRefreshKey((value) => value + 1)
@@ -442,6 +467,10 @@ export function PromoteDialog({
         quoteId: quote!.quoteId,
         reinvestCount: reinvest ? reinvestCount : 0,
         lighthouseSelectedOnly,
+        paymentConfirmations: payment!.items.map((item, index) => ({
+          requestKey: `promote:${quote!.quoteId}:${index}`,
+          paymentPreviewToken: item.paymentPreviewToken,
+        })),
       } satisfies PromoteRequest)
     submittingRef.current = true
     const sequence = ++submitSequence.current
@@ -478,6 +507,7 @@ export function PromoteDialog({
       if (QUOTE_REFRESH_CODES.has(r.code)) {
         setPhase('form')
         setQuote(null)
+        setPayment(null)
         setPreviewState('error')
         setPreviewError(
           `${pricingErrorMessage(r.code, r.message)}正在获取最新报价…`,
@@ -724,6 +754,13 @@ export function PromoteDialog({
                     <span className="lh-bal"> · 余额 {balance.toFixed(1)}</span>
                   )}
                 </div>
+                {payment && (
+                  <div className="lh-quote-meta">
+                    付款来源：LUX {formatMoney(payment.totals.oldLux)} · 新 LUX{' '}
+                    {formatMoney(payment.totals.newLux)} · 积分{' '}
+                    {formatMoney(payment.totals.pointsCover)}
+                  </div>
+                )}
                 <div className="lh-quote-expiry">
                   {new Date(quote.expiresAt).toISOString()} UTC 前有效 · 剩余{' '}
                   {remainingTime(quote.expiresAt, nowMs)}

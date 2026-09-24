@@ -41,6 +41,19 @@ const quote = {
   ],
 }
 
+const payment = {
+  canSubmit: true,
+  reasons: [],
+  totals: {
+    budget: '2.00000000',
+    fee: '0.20000000',
+    pointsCover: '0.00000000',
+    oldLux: '2.20000000',
+    newLux: '0.00000000',
+  },
+  items: [{ paymentPreviewToken: 'a'.repeat(64) }],
+}
+
 const currentPrices = {
   asOf: '2026-08-30T06:32:00.000Z',
   currency: 'LUX' as const,
@@ -100,6 +113,7 @@ describe('PromoteDialog device recovery', () => {
       type: 'promote-pricing-result',
       ok: true,
       quote,
+      payment,
     })
     promoteResponse = () => ({
       type: 'promote-result',
@@ -210,9 +224,11 @@ describe('PromoteDialog device recovery', () => {
         type: 'preview-promote-tweet-pricing',
         tweetUrl: 'https://x.com/lighthouse/status/1',
         actions: [{ actionType: 'LIKE', tierSlots: { A: 5 } }],
+        lighthouseSelectedOnly: false,
       })
       expect(container.textContent).toContain('2.20 LUX')
       expect(container.textContent).toContain('手续费 0.20 LUX')
+      expect(container.textContent).toContain('付款来源：LUX 2.20')
       expect(container.textContent).toContain('LIKE/A')
       expect(container.textContent).toContain('0.39')
       expect(container.textContent).toContain('LIKE/D')
@@ -255,6 +271,12 @@ describe('PromoteDialog device recovery', () => {
         quoteId: 'quote-plugin-1',
         reinvestCount: 0,
         lighthouseSelectedOnly: false,
+        paymentConfirmations: [
+          {
+            requestKey: 'promote:quote-plugin-1:0',
+            paymentPreviewToken: 'a'.repeat(64),
+          },
+        ],
       })
     })
   })
@@ -322,6 +344,7 @@ describe('PromoteDialog device recovery', () => {
         type: 'promote-pricing-result',
         ok: true,
         quote: { ...quote, quoteId: `quote-plugin-${previewCount}` },
+        payment,
       }
     }
     root = createRoot(container)
@@ -397,6 +420,7 @@ describe('PromoteDialog device recovery', () => {
         type: 'promote-pricing-result',
         ok: true,
         quote: { ...quote, quoteId: `quote-plugin-${previewCount}` },
+        payment,
       }
     }
     promoteFailure = {
@@ -446,6 +470,7 @@ describe('PromoteDialog device recovery', () => {
           quoteId: 'quote-new',
           totalCost: '3.30000000',
         },
+        payment,
       }
     }
     root = createRoot(container)
@@ -475,6 +500,7 @@ describe('PromoteDialog device recovery', () => {
         type: 'promote-pricing-result',
         ok: true,
         quote: { ...quote, quoteId: 'quote-old' },
+        payment,
       })
       await Promise.resolve()
     })
@@ -494,6 +520,7 @@ describe('PromoteDialog device recovery', () => {
           previewCount === 1
             ? { ...quote, expiresAt }
             : { ...quote, quoteId: 'quote-after-expiry' },
+        payment,
       }
     }
     root = createRoot(container)
@@ -529,6 +556,7 @@ describe('PromoteDialog device recovery', () => {
         type: 'promote-pricing-result',
         ok: true,
         quote: { ...quote, quoteId: `expired-${previewCount}`, expiresAt },
+        payment,
       }
     }
     root = createRoot(container)

@@ -659,6 +659,7 @@ export const PREVIEW_PROMOTE_TWEET_PRICING_QUERY = `
       feeRate
       promotionFee
       totalCost
+      paymentPreview
       lines {
         campaignIndex
         actionType
@@ -671,6 +672,19 @@ export const PREVIEW_PROMOTE_TWEET_PRICING_QUERY = `
     }
   }
 `
+
+export interface PromoteTweetPaymentPreview {
+  canSubmit: boolean
+  reasons: string[]
+  totals: {
+    budget: string
+    fee: string
+    pointsCover: string
+    oldLux: string
+    newLux: string
+  }
+  items: { paymentPreviewToken: string }[]
+}
 
 export interface EngagementCurrentMarketPrices {
   asOf: string
@@ -703,6 +717,7 @@ export interface PromoteTweetPricingQuote {
   feeRate: string
   promotionFee: string
   totalCost: string
+  paymentPreview: PromoteTweetPaymentPreview
   lines: {
     campaignIndex: number
     actionType: string
@@ -718,6 +733,7 @@ export interface PreviewPromoteTweetPricingVars {
   input: {
     tweetUrl: string
     actions: { actionType: string; tierSlots: Record<string, number> }[]
+    lighthouseSelectedOnly: boolean
   }
 }
 
@@ -739,6 +755,10 @@ export interface PromoteTweetVars {
     tweetUrl: string
     actions: { actionType: string; tierSlots: Record<string, number> }[]
     lighthouseSelectedOnly: boolean
+    paymentConfirmations?: {
+      requestKey: string
+      paymentPreviewToken: string
+    }[]
   }
 }
 

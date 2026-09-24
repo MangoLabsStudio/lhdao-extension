@@ -61,6 +61,19 @@ const quote = {
   ],
 }
 
+const payment = {
+  canSubmit: true,
+  reasons: [],
+  totals: {
+    budget: '2.00000000',
+    fee: '0.20000000',
+    pointsCover: '0.00000000',
+    oldLux: '2.20000000',
+    newLux: '0.00000000',
+  },
+  items: [{ paymentPreviewToken: 'a'.repeat(64) }],
+}
+
 const requestedCurrentActions = ['LIKE', 'RT', 'COMMENT'] as const
 const currentPriceTiers = ['S', 'A', 'B', 'C', 'D'] as const
 const currentUnitPrices = {
@@ -258,9 +271,11 @@ describe('plugin promote pricing background handlers', () => {
     expect(gqlMock).not.toHaveBeenCalled()
   })
 
-  it('uses the signed preview operation and returns only its server quote', async () => {
+  it('fetches a signed quote with its payment confirmation', async () => {
     await localStore.set('apiToken', 'lhdao_pk_test')
-    gqlMock.mockResolvedValue({ previewPromoteTweetPricing: quote })
+    gqlMock.mockResolvedValueOnce({
+      previewPromoteTweetPricing: { ...quote, paymentPreview: payment },
+    })
 
     await expect(
       previewPromoteTweetPricingHandler({
@@ -270,14 +285,17 @@ describe('plugin promote pricing background handlers', () => {
     ).resolves.toEqual({
       type: 'promote-pricing-result',
       ok: true,
-      quote,
+      quote: { ...quote, paymentPreview: payment },
+      payment,
     })
     expect(gqlMock).toHaveBeenCalledWith(PREVIEW_PROMOTE_TWEET_PRICING_QUERY, {
       input: {
         tweetUrl: 'https://x.com/lighthouse/status/1',
         actions,
+        lighthouseSelectedOnly: false,
       },
     })
+    expect(gqlMock).toHaveBeenCalledTimes(1)
   })
 
   it('drives preview variables from the byte-identical Web parity fixture', async () => {
@@ -320,6 +338,7 @@ describe('plugin promote pricing background handlers', () => {
             tierSlots: { S: 0, A: 2, B: 0, C: 0, D: 0 },
           },
         ],
+        lighthouseSelectedOnly: false,
       },
     })
   })
@@ -433,5 +452,49 @@ describe('plugin promote pricing background handlers', () => {
       ok: false,
       code: 'PLUGIN_UPGRADE_REQUIRED',
     })
+  })
+
+  it('turns a gateway 429 into an actionable promotion error', async () => {
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    gqlMock.mockRejectedValue(
+      new GqlError('HTTP 429: <!doctype html>', undefined, 429, 'HTTP', true),
+    )
+
+    await expect(
+      previewPromoteTweetPricingHandler({
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions,
+      }),
+    ).resolves.toMatchObject({
+      type: 'promote-pricing-result',
+      ok: false,
+      code: 'RATE_LIMITED',
+      message: '请求过于频繁，请稍后重试。',
+    })
+
+    await expect(
+      promoteTweetHandler({
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions,
+        quoteId: 'quote-plugin-1',
+      }),
+    ).resolves.toMatchObject({
+      type: 'promote-result',
+      ok: false,
+      code: 'RATE_LIMITED',
+      message: '请求过于频繁，请稍后重试。',
+    })
+    await promoteTweetHandler({
+      tweetUrl: 'https://x.com/lighthouse/status/1',
+      actions,
+      quoteId: 'quote-plugin-1',
+    })
+    const promoteCalls = gqlMock.mock.calls.filter(
+      ([document]) => document === PROMOTE_TWEET_MUTATION,
+    )
+    expect(promoteCalls).toHaveLength(2)
+    expect(promoteCalls[1]?.[2]?.idempotencyKey).toBe(
+      promoteCalls[0]?.[2]?.idempotencyKey,
+    )
   })
 })
