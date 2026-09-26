@@ -168,6 +168,46 @@ describe('current-task comment guide', () => {
     expect(container.textContent).toContain('奖励发放中')
   })
 
+  it('keeps B verification card when A finishes after switching accounts', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    rows[0].actionType = 'LIKE'
+    const complete = new Map<string, (response: MsgResponse) => void>()
+    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+      if (req.type === 'get-captured-actions')
+        return { type: 'captured-actions', actions: ['LIKE'] }
+      if (req.type === 'verify-task')
+        return new Promise((resolve) => {
+          complete.set(req.campaignId, resolve)
+        })
+      return previous(req)
+    })
+    await render()
+    await act(async () => vi.advanceTimersByTime(10_000))
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('.lh-cur-btn')!.click(),
+    )
+    expect(complete.has('a')).toBe(true)
+
+    rows = [{ ...rows[0], campaignId: 'b' }]
+    await act(async () =>
+      accountChanged({ apiToken: { oldValue: 'A', newValue: 'B' } }, 'local'),
+    )
+    await act(async () => vi.advanceTimersByTime(10_000))
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('.lh-cur-btn')!.click(),
+    )
+    expect(complete.has('b')).toBe(true)
+
+    await act(async () =>
+      complete.get('a')!({ type: 'verify-result', ok: true, reward: 0 }),
+    )
+    rows = []
+    await act(async () => updated({ type: 'tasks-updated' }))
+    expect(container.querySelector('.lh-cur-card')).not.toBeNull()
+  })
+
   it('shows the reserved comment instead of a higher reward unreserved like', async () => {
     rows = [
       {

@@ -2141,14 +2141,6 @@ async function reserveOnly(
   } catch (e) {
     if (e instanceof GqlError) {
       if (/Already participated/i.test(e.message)) {
-        await updateCachedEngagement(
-          campaignId,
-          'reserve',
-          token,
-          generation,
-        ).catch((error) =>
-          console.warn('[lhdao] cache reservation failed', error),
-        )
         return { type: 'reserve-result', ok: true } // 幂等成功
       }
       const { code, message } = reserveErrorCode(e.message, e.httpStatus)

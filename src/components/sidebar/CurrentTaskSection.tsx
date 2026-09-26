@@ -409,8 +409,10 @@ export function CurrentTaskSection({
     } catch {
       if (isCurrent()) setErrorMsg('验证失败,请重试')
     } finally {
-      verifyingRef.current = false
-      if (isCurrent()) setBusy(false)
+      if (isCurrent()) {
+        verifyingRef.current = false
+        setBusy(false)
+      }
     }
   }, [campaign, busy, focalId, onRewarded])
 
