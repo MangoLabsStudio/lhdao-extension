@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing'
 import { sha256Hex } from '@/lib/canonical-json'
+import { GqlError } from '@/lib/gql'
 import * as messaging from '@/lib/messaging'
 import type { AvailableEngagement } from '@/lib/queries'
 import {
@@ -289,6 +290,28 @@ describe('reserveOnly mutation routing', () => {
       {} as chrome.runtime.MessageSender,
     )
     expect(result).toMatchObject({ type: 'reserve-result', ok: false })
+    expect(
+      (await background.readTasksSnapshot()).byTweet['123'][0].reserved,
+    ).toBeUndefined()
+    expect(sessionData.engagementSources).toMatchObject({
+      available: [{ id: 'c-tl' }],
+      reserved: [],
+    })
+    expect(messaging.broadcastToContent).not.toHaveBeenCalled()
+  })
+
+  it('does not mark an already participated task as reserved', async () => {
+    await cacheSources([source('c-tl')])
+    sessionData.tasksByTweetId = {
+      '123': [task({ campaignId: 'c-tl', timelineOnly: true })],
+    }
+    gqlMock.mockRejectedValue(new GqlError('Already participated'))
+
+    const result = await handler(
+      { type: 'reserve-task', campaignId: 'c-tl' },
+      {} as chrome.runtime.MessageSender,
+    )
+    expect(result).toMatchObject({ type: 'reserve-result', ok: true })
     expect(
       (await background.readTasksSnapshot()).byTweet['123'][0].reserved,
     ).toBeUndefined()
