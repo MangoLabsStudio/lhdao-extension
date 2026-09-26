@@ -162,38 +162,23 @@ describe('content script focal task host', () => {
     expect(document.querySelector('.lhdao-inline-task')).toBe(host)
   })
 
-  it('recovers silently on a cold empty snapshot and first-sync failure', async () => {
+  it('keeps a cold empty snapshot hidden without automatic task sync', async () => {
     syncFailed = true
     await act(async () => scanTimeline())
     expect(panel()).toBeNull()
-    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
     vi.mocked(messaging.sendMessage).mockClear()
     await act(async () => window.dispatchEvent(new Event('online')))
-    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
     vi.mocked(messaging.sendMessage).mockClear()
     await act(async () => window.dispatchEvent(new Event('pageshow')))
-    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
-  })
-
-  it('finds a newly reserved task on initial forced synchronization', async () => {
-    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
-    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
-      if (req.type === 'force-sync')
-        rows = [
-          {
-            campaignId: 'just-reserved',
-            tweetId: '123456',
-            actionType: 'COMMENT',
-            expectedReward: 1,
-            reserved: true,
-            commentGuide: '刚接单的方向',
-            commentGuideStatus: 'ready',
-          },
-        ]
-      return previous(req)
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
     })
-    await act(async () => scanTimeline())
-    expect(panel()?.textContent ?? '').toContain('刚接单的方向')
   })
 
   it('unmounts the focal task panel when leaving the detail page', async () => {
@@ -205,9 +190,11 @@ describe('content script focal task host', () => {
     expect(document.querySelector('.lhdao-inline-task')).toBeNull()
   })
 
-  it('keeps an empty snapshot hidden during the reservation arrival window', async () => {
+  it('keeps an empty cached snapshot hidden', async () => {
     await act(async () => scanTimeline())
-    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
     expect(panel()).toBeNull()
     expect(
       document.querySelector('article')?.hasAttribute('data-lhdao-active'),

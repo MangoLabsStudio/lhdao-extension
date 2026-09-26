@@ -160,11 +160,9 @@ export function CurrentTaskSection({
     const generation = accountVersion
     let loadSequence = 0
     // 本 focal 会话是否已拿到任务。拿到后,后续空快照(任务完成/名额变动暂时
-    // 从快照消失,或 verify 成功后 force-sync 触发的 tasks-updated 回拉)不再
+    // 从快照消失,或手动同步后的 tasks-updated 回拉)不再
     // 把它清成 null —— 否则会把「进行中卡 / 成功庆祝」误清掉(自身引入的回归)。
     let gotTask = false
-    let arrivalExpired = false
-    let forceSyncFailed = false
     const showReadFailure = () => {
       if (cancelled || generation !== accountGeneration.current) return
       setCampaign((current) =>
@@ -207,10 +205,7 @@ export function CurrentTaskSection({
       }
     }
     // 拉快照 + 归并当前推文任务。
-    const load = async (
-      afterSync = false,
-      finalAttempt = false,
-    ): Promise<void> => {
+    const load = async (): Promise<void> => {
       const sequence = ++loadSequence
       try {
         const snap = await sendMessage({ type: 'get-tasks-snapshot' })
@@ -228,11 +223,6 @@ export function CurrentTaskSection({
           setCampaign(null)
           setStatus('ready')
           return
-        }
-        // Only a completed background refresh can clear a failed sync RPC;
-        // ordinary cache reads must keep the failure visible.
-        if (afterSync && snap.ready !== false && !snap.syncFailed) {
-          forceSyncFailed = false
         }
         const author = focalAuthorFromUrl()
         // byTweet(该推文的互动单)+ byAuthor(以本推作者为目标的 FOLLOW 单);
@@ -260,7 +250,7 @@ export function CurrentTaskSection({
           }
           selectedCampaignId.current = hit.campaignId
           setCampaign(
-            forceSyncFailed
+            snap.syncFailed
               ? {
                   ...hit,
                   commentGuideStatus:
@@ -275,10 +265,7 @@ export function CurrentTaskSection({
         }
         // Preserve success and incomplete reads. A complete read without an
         // active reservation must remove the old verification card.
-        if (
-          gotTask &&
-          (phaseRef.current === 'success' || snap.syncFailed || forceSyncFailed)
-        ) {
+        if (gotTask && (phaseRef.current === 'success' || snap.syncFailed)) {
           setStatus('ready')
           return
         }
@@ -287,56 +274,19 @@ export function CurrentTaskSection({
           selectedCampaignId.current = null
           setCampaign(null)
         }
-        if (snap.syncFailed || forceSyncFailed) {
+        if (snap.syncFailed) {
           setStatus('error')
           return
         }
-        // 预约写入和插件查询之间可能存在短暂延迟。成功的空快照不能立即
-        // 判定“无任务”,否则面板会静默消失。保留加载态直到最后一次同步。
-        if (finalAttempt) arrivalExpired = true
         setCampaign(null)
-        setStatus(arrivalExpired ? 'missing' : 'loading')
+        setStatus('ready')
       } catch {
         if (sequence === loadSequence) showReadFailure()
       }
     }
 
-    const refresh = (finalAttempt = false) => {
-      void sendMessage({ type: 'force-sync' })
-        .then((response) => {
-          if (cancelled || generation !== accountGeneration.current) return
-          if (response.type === 'sync-result' && !response.ok) {
-            forceSyncFailed = true
-            showReadFailure()
-            return
-          }
-          forceSyncFailed = false
-          return load(true, finalAttempt)
-        })
-        .catch(() => {
-          forceSyncFailed = true
-          showReadFailure()
-        })
-    }
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') refresh()
-    }
-    const onResume = () => refresh()
     void load()
-    refresh()
-    window.addEventListener('online', onResume)
-    window.addEventListener('pageshow', onResume)
-    window.addEventListener('focus', onResume)
-    document.addEventListener('visibilitychange', onVisible)
-    // 预约数据到达窗口:每次都要求 BG 刷新,即使 tasks-updated 广播丢失也能
-    // 自愈。无匹配任务时保持隐藏，不打扰普通推文浏览。
-    const timers = [1_000, 3_000, 7_000, 15_000].map((delay) =>
-      setTimeout(() => {
-        if (!cancelled && !gotTask) refresh(delay === 15_000)
-      }, delay),
-    )
-    // BG 每次 syncTasks 完成广播 tasks-updated(如刚在网页预约完 → 同步 → 任务
-    // 出现)。收到就对当前焦点重新归并,让卡片适时浮现 / 更新。
+    // BG 手动同步完成后广播 tasks-updated。收到后只读缓存并更新卡片。
     const onMsg = (m: unknown): void => {
       if (
         !cancelled &&
@@ -344,7 +294,7 @@ export function CurrentTaskSection({
         m !== null &&
         (m as { type?: string }).type === 'tasks-updated'
       ) {
-        void load(true)
+        void load()
       }
     }
     try {
@@ -354,11 +304,6 @@ export function CurrentTaskSection({
     }
     return () => {
       cancelled = true
-      window.removeEventListener('online', onResume)
-      window.removeEventListener('pageshow', onResume)
-      window.removeEventListener('focus', onResume)
-      document.removeEventListener('visibilitychange', onVisible)
-      for (const t of timers) clearTimeout(t)
       try {
         chrome.runtime.onMessage.removeListener(onMsg)
       } catch {
@@ -445,12 +390,10 @@ export function CurrentTaskSection({
       if (r.type === 'verify-result' && r.ok) {
         phaseRef.current = 'success'
         setPhase('success')
-        void sendMessage({ type: 'force-sync' })
         onRewarded?.()
       } else if (r.type === 'verify-result') {
         if (/NO_ACTIVE_RESERVATION|无有效预约/.test(r.message)) {
           setErrorMsg('当前任务的预约已失效，请在任务广场重新领取后同步。')
-          void sendMessage({ type: 'force-sync' }).catch(() => {})
         } else {
           setErrorMsg(r.message)
         }
@@ -531,9 +474,19 @@ export function CurrentTaskSection({
       if (!isCurrent()) return
       if (r.type === 'reserve-result' && r.ok) {
         setCascadeOffer(null)
-        // force-sync → tasks-updated 回拉 → groupCampaigns 标 reserved,
-        // 卡片自动从领取态切到检测态。
-        void sendMessage({ type: 'force-sync' }).catch(() => {})
+        // 后端已确认预约，当前卡片直接进入检测态；任务列表留待手动同步。
+        setCampaign((current) =>
+          current?.campaignId === campaign.campaignId
+            ? { ...current, reserved: true }
+            : current,
+        )
+        setCampaignChoices((choices) =>
+          choices.map((item) =>
+            item.campaignId === campaign.campaignId
+              ? { ...item, reserved: true }
+              : item,
+          ),
+        )
       } else if (r.type === 'reserve-result') {
         setCascadeOffer(
           r.cascadeWarning

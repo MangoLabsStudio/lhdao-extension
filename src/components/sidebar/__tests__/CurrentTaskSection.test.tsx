@@ -74,6 +74,67 @@ afterEach(async () => {
 const render = async () => act(async () => root.render(<CurrentTaskSection />))
 
 describe('current-task comment guide', () => {
+  it('reads cached tasks without syncing when a page opens, resumes, or waits', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const reserved = rows
+    rows = []
+    await render()
+    const reads = vi
+      .mocked(messaging.sendMessage)
+      .mock.calls.filter(
+        ([message]) => message.type === 'get-tasks-snapshot',
+      ).length
+    await act(async () => {
+      window.dispatchEvent(new Event('online'))
+      window.dispatchEvent(new Event('pageshow'))
+      window.dispatchEvent(new Event('focus'))
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
+    expect(
+      vi
+        .mocked(messaging.sendMessage)
+        .mock.calls.filter(
+          ([message]) => message.type === 'get-tasks-snapshot',
+        ),
+    ).toHaveLength(reads)
+    rows = reserved
+    await act(async () => updated({ type: 'tasks-updated' }))
+    expect(container.textContent).toContain('完整原文')
+  })
+
+  it('keeps successful verification without automatically syncing tasks', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    rows[0].actionType = 'LIKE'
+    const rewarded = vi.fn()
+    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+      if (req.type === 'get-captured-actions')
+        return { type: 'captured-actions', actions: ['LIKE'] }
+      if (req.type === 'verify-task')
+        return { type: 'verify-result', ok: true, reward: 0 }
+      return previous(req)
+    })
+    await act(async () =>
+      root.render(<CurrentTaskSection onRewarded={rewarded} />),
+    )
+    await act(async () => vi.advanceTimersByTime(10_000))
+    vi.mocked(messaging.sendMessage).mockClear()
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('.lh-cur-btn')!.click(),
+    )
+    expect(rewarded).toHaveBeenCalledOnce()
+    expect(container.textContent).toContain('奖励发放中')
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
+  })
+
   it('shows the reserved comment instead of a higher reward unreserved like', async () => {
     rows = [
       {
@@ -150,7 +211,7 @@ describe('current-task comment guide', () => {
     })
   })
 
-  it('refreshes an invalid reservation and shows actionable feedback', async () => {
+  it('shows an invalid reservation without automatically syncing', async () => {
     vi.useFakeTimers()
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     rows[0].actionType = 'LIKE'
@@ -175,7 +236,9 @@ describe('current-task comment guide', () => {
     )
     expect(container.textContent).toContain('请在任务广场重新领取')
     expect(container.textContent).not.toContain('NO_ACTIVE_RESERVATION')
-    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
   })
 
   it('shows claim-time identity only for an explicit true snapshot', async () => {
@@ -242,33 +305,6 @@ describe('current-task comment guide', () => {
     expect(container.textContent).toBe('')
   })
 
-  it('recovers silently after force-sync fails without a task', async () => {
-    const recovered = [{ ...rows[0], actionType: 'LIKE' as const }]
-    rows = []
-    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
-    let failed = true
-    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
-      if (req.type === 'force-sync') {
-        if (failed) return { type: 'sync-result', ok: false, error: 'offline' }
-        rows = recovered
-        return {
-          type: 'sync-result',
-          ok: true,
-          lastSyncAt: Date.now(),
-          taskCount: 1,
-          tweetCount: 1,
-        }
-      }
-      return previous(req)
-    })
-    await render()
-    expect(container.textContent).toBe('')
-    failed = false
-    await act(async () => window.dispatchEvent(new Event('online')))
-    expect(container.textContent).toContain('点赞')
-    expect(container.textContent).not.toContain('任务暂时无法加载')
-  })
-
   for (const change of ['account', 'route'] as const) {
     it(`ignores verification completion after ${change} changes`, async () => {
       vi.useFakeTimers()
@@ -325,34 +361,7 @@ describe('current-task comment guide', () => {
     expect(container.textContent).not.toContain('重试加载')
   })
 
-  it('forces synchronization on opening an uncached task, reconnect and wake', async () => {
-    rows = []
-    await render()
-    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
-    vi.mocked(messaging.sendMessage).mockClear()
-    await act(async () => window.dispatchEvent(new Event('online')))
-    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
-    vi.mocked(messaging.sendMessage).mockClear()
-    await act(async () => window.dispatchEvent(new Event('pageshow')))
-    expect(messaging.sendMessage).toHaveBeenCalledWith({ type: 'force-sync' })
-  })
-
-  it('keeps syncing until a reserved task arrives after the old retry window', async () => {
-    vi.useFakeTimers()
-    const reservedTask = { ...rows[0], reserved: true }
-    rows = []
-
-    await render()
-    await act(async () => vi.advanceTimersByTimeAsync(7_000))
-    expect(container.textContent).toBe('')
-
-    rows = [reservedTask]
-    await act(async () => vi.advanceTimersByTimeAsync(8_000))
-
-    expect(container.textContent).toContain('评论')
-  })
-
-  it('stays hidden after the task arrival window expires', async () => {
+  it('stays hidden without a matching cached task', async () => {
     vi.useFakeTimers()
     rows = []
 
@@ -393,7 +402,7 @@ describe('current-task comment guide', () => {
     )
     expect(container.textContent).not.toContain('完整原文')
   })
-  for (const requestType of ['get-tasks-snapshot', 'force-sync'] as const) {
+  for (const requestType of ['get-tasks-snapshot'] as const) {
     it(`${requestType} failure without a cache stays hidden`, async () => {
       const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
       rows = []
@@ -412,7 +421,7 @@ describe('current-task comment guide', () => {
         if (req.type === requestType) throw new Error('RPC disconnected')
         return previous(req)
       })
-      await act(async () => window.dispatchEvent(new Event('online')))
+      await act(async () => updated({ type: 'tasks-updated' }))
       expect(container.textContent).toContain('完整原文')
       expect(container.textContent).toContain('更新失败')
     })
@@ -426,13 +435,12 @@ describe('current-task comment guide', () => {
       const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
       let syncFailed = true
       vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
-        if (req.type === 'force-sync') throw new Error('RPC disconnected')
         const response = await previous(req)
         return response.type === 'tasks-snapshot'
           ? { ...response, syncFailed }
           : response
       })
-      await act(async () => window.dispatchEvent(new Event('online')))
+      await act(async () => updated({ type: 'tasks-updated' }))
       const failureText = hasCache ? '更新失败' : ''
       expect(container.textContent).toContain(failureText)
 
