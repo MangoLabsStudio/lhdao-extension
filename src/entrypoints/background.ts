@@ -535,7 +535,18 @@ export default defineBackground(() => {
       return { type: 'ack' }
     }
     if (req.type === 'force-sync') {
-      // popup 手动同步入口，等结果落入缓存后再返回。
+      // 只有弹窗的手动按钮能触发这四项完整任务查询。
+      if (
+        sender.id !== chrome.runtime.id ||
+        sender.tab ||
+        sender.url !== chrome.runtime.getURL('popup.html')
+      ) {
+        return {
+          type: 'sync-result',
+          ok: false,
+          error: '请在插件弹窗中点击同步任务',
+        }
+      }
       await syncTasks()
       const err = await sessionStore.get('lastSyncError')
       const httpStatus = await sessionStore.get('lastSyncHttpStatus')

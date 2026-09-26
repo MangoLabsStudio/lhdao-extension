@@ -127,8 +127,12 @@ describe('timelineOnly claim button in current-task panel', () => {
     expect((reserveCall?.[0] as { campaignId: string }).campaignId).toBe(
       'timeline-like',
     )
-    // 领取成功后 force-sync 触发 tasks-updated 回拉,卡片切到检测态。
-    expect(types).toContain('force-sync')
+    // 领取成功即在本地切到检测态，任务列表由弹窗手动同步。
+    expect(types).not.toContain('force-sync')
+    expect(claimButton()).toBeNull()
+    expect(panel()?.textContent).toContain('完成上面步骤解锁')
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(claimButton()).toBeNull()
   })
 
   it('shows the offered tier and reward, then explicitly confirms that exact tier', async () => {
