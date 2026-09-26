@@ -794,6 +794,91 @@ export function handleTaskTokenChange(): Promise<void> {
   return syncReset
 }
 
+/** Apply a successful mutation to the owned snapshot without another GraphQL sync. */
+function updateCachedEngagement(
+  campaignId: string,
+  change: 'reserve' | 'verify',
+  token: string | null,
+  generation: number,
+): Promise<void> {
+  const update = syncReset.then(async () => {
+    if (!token || generation !== syncGeneration) return
+    if (syncInFlight?.token === token) await syncInFlight.promise
+    if (
+      generation !== syncGeneration ||
+      (await localStore.get('apiToken')) !== token
+    )
+      return
+    const [sources, byTweet, byAuthor, activeCampaigns] = await Promise.all([
+      sessionStore.get('engagementSources'),
+      sessionStore.get('tasksByTweetId'),
+      sessionStore.get('tasksByAuthorHandle'),
+      sessionStore.get('activeCampaigns'),
+    ])
+    if (sources?.owner !== (await sha256Hex(token))) return
+    const matching =
+      sources.reserved.find((item) => item.id === campaignId) ??
+      sources.available.find((item) => item.id === campaignId)
+    const updateIndex = (index: Record<string, CampaignTaskCache[]>) => {
+      const next: Record<string, CampaignTaskCache[]> = {}
+      for (const [key, rows] of Object.entries(index)) {
+        const updated =
+          change === 'reserve'
+            ? rows.map((row) =>
+                row.campaignId === campaignId
+                  ? { ...row, reserved: true }
+                  : row,
+              )
+            : rows.filter((row) => row.campaignId !== campaignId)
+        if (updated.length) next[key] = updated
+      }
+      return next
+    }
+    if (
+      !matching &&
+      ![...Object.values(byTweet ?? {}), ...Object.values(byAuthor ?? {})]
+        .flat()
+        .some((row) => row.campaignId === campaignId)
+    )
+      return
+    if (
+      generation !== syncGeneration ||
+      (await localStore.get('apiToken')) !== token
+    )
+      return
+    await sessionStore.patch({
+      engagementSources: {
+        owner: sources.owner,
+        available: sources.available.filter((item) => item.id !== campaignId),
+        reserved:
+          change === 'reserve'
+            ? matching
+              ? [
+                  ...sources.reserved.filter((item) => item.id !== campaignId),
+                  matching,
+                ]
+              : sources.reserved
+            : sources.reserved.filter((item) => item.id !== campaignId),
+      },
+      tasksByTweetId: updateIndex(byTweet ?? {}),
+      tasksByAuthorHandle: updateIndex(byAuthor ?? {}),
+      activeCampaigns:
+        change === 'verify'
+          ? (activeCampaigns ?? []).filter(
+              (item) => item.campaignId !== campaignId,
+            )
+          : (activeCampaigns ?? []),
+    })
+    if (
+      generation === syncGeneration &&
+      (await localStore.get('apiToken')) === token
+    )
+      broadcastToContent({ type: 'tasks-updated' })
+  })
+  syncReset = update.catch(() => {})
+  return update
+}
+
 export async function syncTasks(): Promise<void> {
   const generation = syncGeneration
   await syncReset
@@ -1975,6 +2060,8 @@ async function reserveOnly(
   confirmCascade?: boolean,
   confirmedCascadeTier?: string,
 ): Promise<MsgResponse> {
+  const generation = syncGeneration
+  const token = await localStore.get('apiToken')
   try {
     // timelineOnly 任务走插件专用签名预约口;普通任务维持旧 mutation
     // (旧口对 plugin token 403 是后端既有姿态,普通单预约仍在网页)。
@@ -1999,6 +2086,14 @@ async function reserveOnly(
     const r = data.reserveEngagementSlot ?? data.reserveTimelineEngagementSlot
 
     if (r?.reserved) {
+      await updateCachedEngagement(
+        campaignId,
+        'reserve',
+        token,
+        generation,
+      ).catch((error) =>
+        console.warn('[lhdao] cache reservation failed', error),
+      )
       return {
         type: 'reserve-result',
         ok: true,
@@ -2046,6 +2141,14 @@ async function reserveOnly(
   } catch (e) {
     if (e instanceof GqlError) {
       if (/Already participated/i.test(e.message)) {
+        await updateCachedEngagement(
+          campaignId,
+          'reserve',
+          token,
+          generation,
+        ).catch((error) =>
+          console.warn('[lhdao] cache reservation failed', error),
+        )
         return { type: 'reserve-result', ok: true } // 幂等成功
       }
       const { code, message } = reserveErrorCode(e.message, e.httpStatus)
@@ -2069,6 +2172,8 @@ async function reserveOnly(
  * accepted/status,不返 reward —— UI 显"已提交,发放中",余额由 syncTasks 稍后刷新。
  */
 async function verifyOnly(campaignId: string): Promise<MsgResponse> {
+  const generation = syncGeneration
+  const token = await localStore.get('apiToken')
   try {
     // 验证前先尝试把短缓存里的原始捕获重放一次,避免"刚完成动作但
     // capturedActions 还没落 campaignId"时提交空 proof。
@@ -2141,6 +2246,14 @@ async function verifyOnly(campaignId: string): Promise<MsgResponse> {
     )
     const r = res.submitEngagementProof
     if (r.accepted) {
+      await updateCachedEngagement(
+        campaignId,
+        'verify',
+        token,
+        generation,
+      ).catch((error) =>
+        console.warn('[lhdao] cache verification failed', error),
+      )
       // reward 异步发放,submit 不返金额 → reward:0,UI 回退显示预期奖励/发放中。
       return { type: 'verify-result', ok: true, reward: 0 }
     }

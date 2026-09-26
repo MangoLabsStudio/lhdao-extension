@@ -135,6 +135,39 @@ describe('current-task comment guide', () => {
     })
   })
 
+  it('keeps the success card when the accepted task leaves cache before verify returns', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    rows[0].actionType = 'LIKE'
+    let complete!: (response: MsgResponse) => void
+    const rewarded = vi.fn()
+    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+      if (req.type === 'get-captured-actions')
+        return { type: 'captured-actions', actions: ['LIKE'] }
+      if (req.type === 'verify-task')
+        return new Promise((resolve) => {
+          complete = resolve
+        })
+      return previous(req)
+    })
+    await act(async () =>
+      root.render(<CurrentTaskSection onRewarded={rewarded} />),
+    )
+    await act(async () => vi.advanceTimersByTime(10_000))
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('.lh-cur-btn')!.click(),
+    )
+    rows = []
+    await act(async () => updated({ type: 'tasks-updated' }))
+    expect(container.querySelector('.lh-cur-card')).not.toBeNull()
+    await act(async () =>
+      complete({ type: 'verify-result', ok: true, reward: 0 }),
+    )
+    expect(rewarded).toHaveBeenCalledOnce()
+    expect(container.textContent).toContain('奖励发放中')
+  })
+
   it('shows the reserved comment instead of a higher reward unreserved like', async () => {
     rows = [
       {

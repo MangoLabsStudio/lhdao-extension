@@ -72,6 +72,7 @@ export function CurrentTaskSection({
   >([])
   const selectedCampaignId = React.useRef<string | null>(null)
   const verificationGeneration = React.useRef(0)
+  const verifyingRef = React.useRef(false)
   // 显式加载态:'loading' = 正在为当前焦点推文拉/归并任务(显骨架);
   // 'ready' = 已尘埃落定(拿到任务 or 确认无任务)。此前用 campaign===null
   // 兼表两义 → 拉取窗口整段空白(「偶发性不显示加载」)。
@@ -92,6 +93,7 @@ export function CurrentTaskSection({
   // biome-ignore lint/correctness/useExhaustiveDependencies: these values define which task owns an in-flight verification.
   React.useEffect(() => {
     setBusy(false)
+    verifyingRef.current = false
     setCascadeOffer(null)
     return () => {
       verificationGeneration.current++
@@ -265,7 +267,12 @@ export function CurrentTaskSection({
         }
         // Preserve success and incomplete reads. A complete read without an
         // active reservation must remove the old verification card.
-        if (gotTask && (phaseRef.current === 'success' || snap.syncFailed)) {
+        if (
+          gotTask &&
+          (phaseRef.current === 'success' ||
+            snap.syncFailed ||
+            verifyingRef.current)
+        ) {
           setStatus('ready')
           return
         }
@@ -379,6 +386,7 @@ export function CurrentTaskSection({
       generation === verificationGeneration.current &&
       account === accountGeneration.current &&
       focalIdFromUrl() === focalId
+    verifyingRef.current = true
     setBusy(true)
     setErrorMsg(undefined)
     try {
@@ -401,6 +409,7 @@ export function CurrentTaskSection({
     } catch {
       if (isCurrent()) setErrorMsg('验证失败,请重试')
     } finally {
+      verifyingRef.current = false
       if (isCurrent()) setBusy(false)
     }
   }, [campaign, busy, focalId, onRewarded])
