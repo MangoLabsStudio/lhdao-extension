@@ -61,6 +61,9 @@ describe('PLUGIN_OPERATIONS', () => {
       'AvailableEngagements',
       'MyReservedEngagements',
       'AvailableTweets',
+      'ManualAvailableEngagements',
+      'ManualMyReservedEngagements',
+      'ManualAvailableTweets',
       'LighthouseMembers',
       'RecordTweetDwell',
       'ReportEngagementCapture',
@@ -115,6 +118,48 @@ describe('PLUGIN_OPERATIONS', () => {
       getPluginOperationByDocument(AVAILABLE_TWEETS_QUERY, 'AvailableTweets')
         ?.id,
     ).toBe('tweet.available.v2')
+  })
+
+  it('pins distinct manual task reads while retaining legacy documents', async () => {
+    const manualReads = [
+      [
+        'engagement.available.manual.v1',
+        'ManualAvailableEngagements',
+        AVAILABLE_ENGAGEMENTS_QUERY,
+        'AvailableEngagements',
+        'a2d47a5b59defb7f5751ac60a89e89fa3ee9a67c36f12108d377ff4591038540',
+      ],
+      [
+        'engagement.reserved.manual.v1',
+        'ManualMyReservedEngagements',
+        MY_RESERVED_ENGAGEMENTS_QUERY,
+        'MyReservedEngagements',
+        '07ea97de1d7d38fb3fa3233ed5121359ecbd5a63d8142146d18167a1cdf33f37',
+      ],
+      [
+        'tweet.available.manual.v1',
+        'ManualAvailableTweets',
+        AVAILABLE_TWEETS_QUERY,
+        'AvailableTweets',
+        '33ef37f38699000c40a4279b4485f1f5c4fa756f79720b363ba291476e877f09',
+      ],
+    ] as const
+    for (const [id, name, legacyDocument, legacyName, sha256] of manualReads) {
+      const document = legacyDocument.replace(
+        `query ${legacyName} {`,
+        `query ${name} {`,
+      )
+      expect(
+        PLUGIN_OPERATIONS.find((operation) => operation.id === id),
+      ).toMatchObject({
+        operationName: name,
+        permission: 'read',
+        document,
+        documentSha256: sha256,
+      })
+      expect(getPluginOperationByDocument(document, name)?.id).toBe(id)
+      await expect(sha256Hex(document)).resolves.toBe(sha256)
+    }
   })
 
   it('does not match a document with an added field or alias', () => {

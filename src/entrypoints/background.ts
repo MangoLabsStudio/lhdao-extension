@@ -23,8 +23,6 @@ import {
   randomProofNonce,
 } from '@/lib/proof'
 import {
-  AVAILABLE_ENGAGEMENTS_QUERY,
-  AVAILABLE_TWEETS_QUERY,
   type AvailableEngagementsResult,
   type AvailableTweet,
   type AvailableTweetsResult,
@@ -40,11 +38,13 @@ import {
   LIGHTHOUSE_MEMBERS_QUERY,
   type LighthouseMember,
   type LighthouseMembersResult,
+  MANUAL_AVAILABLE_ENGAGEMENTS_QUERY,
+  MANUAL_AVAILABLE_TWEETS_QUERY,
+  MANUAL_MY_RESERVED_ENGAGEMENTS_QUERY,
   ME_QUERY,
   type MeResult,
   MINT_ENGAGEMENT_TICKET_MUTATION,
   type MintEngagementTicketResult,
-  MY_RESERVED_ENGAGEMENTS_QUERY,
   MY_X_ANALYTICS_QUERY,
   type MyReservedEngagementsResult,
   POLL_EXTENSION_PAIRING_QUERY,
@@ -924,9 +924,9 @@ async function performSyncTasks(
   const cachedProfile = await sessionStore.get('userProfile')
 
   const [engRes, reservedRes, tweetsRes, meRes] = await Promise.allSettled([
-    gql<AvailableEngagementsResult>(AVAILABLE_ENGAGEMENTS_QUERY),
-    gql<MyReservedEngagementsResult>(MY_RESERVED_ENGAGEMENTS_QUERY),
-    gql<AvailableTweetsResult>(AVAILABLE_TWEETS_QUERY),
+    gql<AvailableEngagementsResult>(MANUAL_AVAILABLE_ENGAGEMENTS_QUERY),
+    gql<MyReservedEngagementsResult>(MANUAL_MY_RESERVED_ENGAGEMENTS_QUERY),
+    gql<AvailableTweetsResult>(MANUAL_AVAILABLE_TWEETS_QUERY),
     gql<MeResult>(ME_QUERY),
   ])
   if (!(await isCurrent())) return

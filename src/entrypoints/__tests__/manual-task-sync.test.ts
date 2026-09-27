@@ -71,6 +71,16 @@ it('only fetches task data when the popup requests one sync', async () => {
   )
   expect(response).toMatchObject({ type: 'sync-result', ok: true })
   expect(gql).toHaveBeenCalledTimes(4)
+  expect(
+    vi
+      .mocked(gql)
+      .mock.calls.map(([document]) => document.match(/\bquery\s+(\w+)/)?.[1]),
+  ).toEqual([
+    'ManualAvailableEngagements',
+    'ManualMyReservedEngagements',
+    'ManualAvailableTweets',
+    'Me',
+  ])
 })
 
 it('ignores task sync requests from content scripts', async () => {
