@@ -3,11 +3,11 @@ import { fakeBrowser } from 'wxt/testing'
 import * as gqlApi from '@/lib/gql'
 import * as messaging from '@/lib/messaging'
 import {
-  AVAILABLE_ENGAGEMENTS_QUERY,
-  AVAILABLE_TWEETS_QUERY,
   type AvailableEngagement,
+  MANUAL_AVAILABLE_ENGAGEMENTS_QUERY,
+  MANUAL_AVAILABLE_TWEETS_QUERY,
+  MANUAL_MY_RESERVED_ENGAGEMENTS_QUERY,
   ME_QUERY,
-  MY_RESERVED_ENGAGEMENTS_QUERY,
 } from '@/lib/queries'
 import { localStore, sessionStore } from '@/lib/storage'
 import {
@@ -58,15 +58,15 @@ beforeEach(async () => {
   vi.spyOn(messaging, 'broadcastToContent').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(gqlApi, 'gql').mockImplementation(async (query) => {
-    if (query === AVAILABLE_ENGAGEMENTS_QUERY) {
+    if (query === MANUAL_AVAILABLE_ENGAGEMENTS_QUERY) {
       if (available instanceof Error) throw available
       return { availableEngagements: available }
     }
-    if (query === MY_RESERVED_ENGAGEMENTS_QUERY) {
+    if (query === MANUAL_MY_RESERVED_ENGAGEMENTS_QUERY) {
       if (reserved instanceof Error) throw reserved
       return { myReservedEngagements: reserved }
     }
-    if (query === AVAILABLE_TWEETS_QUERY) return { availableTweets: [] }
+    if (query === MANUAL_AVAILABLE_TWEETS_QUERY) return { availableTweets: [] }
     if (query === ME_QUERY) {
       if (me instanceof Error) throw me
       return { me }
@@ -382,11 +382,12 @@ describe('comment guide sync', () => {
     let resolveNewMe!: (value: unknown) => void
     await localStore.set('apiToken', 'account-b')
     vi.mocked(gqlApi.gql).mockImplementation(async (query) => {
-      if (query === AVAILABLE_ENGAGEMENTS_QUERY)
+      if (query === MANUAL_AVAILABLE_ENGAGEMENTS_QUERY)
         return { availableEngagements: [] }
-      if (query === MY_RESERVED_ENGAGEMENTS_QUERY)
+      if (query === MANUAL_MY_RESERVED_ENGAGEMENTS_QUERY)
         return { myReservedEngagements: [] }
-      if (query === AVAILABLE_TWEETS_QUERY) return { availableTweets: [] }
+      if (query === MANUAL_AVAILABLE_TWEETS_QUERY)
+        return { availableTweets: [] }
       if (query === ME_QUERY) {
         return new Promise((resolve) => {
           resolveNewMe = resolve

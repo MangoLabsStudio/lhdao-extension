@@ -144,6 +144,12 @@ export const AVAILABLE_ENGAGEMENTS_QUERY = `
   }
 `
 
+export const MANUAL_AVAILABLE_ENGAGEMENTS_QUERY =
+  AVAILABLE_ENGAGEMENTS_QUERY.replace(
+    'query AvailableEngagements {',
+    'query ManualAvailableEngagements {',
+  )
+
 export type EngagementActionType =
   | 'LIKE'
   | 'RT'
@@ -238,6 +244,12 @@ export const MY_RESERVED_ENGAGEMENTS_QUERY = `
   }
 `
 
+export const MANUAL_MY_RESERVED_ENGAGEMENTS_QUERY =
+  MY_RESERVED_ENGAGEMENTS_QUERY.replace(
+    'query MyReservedEngagements {',
+    'query ManualMyReservedEngagements {',
+  )
+
 export interface MyReservedEngagementsResult {
   myReservedEngagements: AvailableEngagement[]
 }
@@ -274,6 +286,11 @@ export const AVAILABLE_TWEETS_QUERY = `
     }
   }
 `
+
+export const MANUAL_AVAILABLE_TWEETS_QUERY = AVAILABLE_TWEETS_QUERY.replace(
+  'query AvailableTweets {',
+  'query ManualAvailableTweets {',
+)
 
 export interface AvailableTweet {
   id: string
