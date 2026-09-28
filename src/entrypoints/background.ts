@@ -309,14 +309,14 @@ function maskToken(token: string): string {
 /**
  * Background service worker.
  *
- *   - popup 手动同步 → syncTasks() 拉取可参与任务,扁平化进 sessionStore
+ *   - 首次自动加载 / popup 手动同步 → syncTasks() 拉取任务进 sessionStore
  *   - content script 来 RPC → 响应任务查询 / 处理 chip 点击 reserve+verify
  *   - 任务列表更新后广播 'tasks-updated',content script 收到立刻 rescan
  */
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
-  // 清除旧版本留下的定时器。任务数据只在用户点击同步时拉取。
+  // 清除旧版本的轮询；首次进入 X 读取任务时才初始化。
   void chrome.alarms.clear(ALARM_NAME)
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
@@ -430,6 +430,12 @@ export default defineBackground(() => {
       return { type: 'tasks', tasks: snapshot.byAuthor[handle] ?? [] }
     }
     if (req.type === 'get-tasks-snapshot') {
+      if (
+        sender.id === chrome.runtime.id &&
+        sender.tab &&
+        /^https:\/\/(?:x|twitter)\.com\//.test(sender.url ?? '')
+      )
+        await syncInitialTasks()
       return readTasksSnapshot()
     }
     if (req.type === 'get-captured-actions') {
@@ -535,7 +541,7 @@ export default defineBackground(() => {
       return { type: 'ack' }
     }
     if (req.type === 'force-sync') {
-      // 只有弹窗的手动按钮能触发这四项完整任务查询。
+      // 显式刷新只接受弹窗按钮，网页不能触发重复完整查询。
       if (
         sender.id !== chrome.runtime.id ||
         sender.tab ||
@@ -596,7 +602,7 @@ export default defineBackground(() => {
     return { type: 'ack' }
   })
 
-  // token 切换时清理旧账户缓存，等待用户手动同步。
+  // token 切换时清理旧账户缓存；X 页面重新读取时加载新账户快照。
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && 'apiToken' in changes) {
       void handleTaskTokenChange()
@@ -766,6 +772,29 @@ let syncInFlight: {
   promise: Promise<void>
 } | null = null
 let syncReset: Promise<void> = Promise.resolve()
+let initialTaskLoad: Promise<void> | null = null
+
+function syncInitialTasks(): Promise<void> {
+  initialTaskLoad ??= loadInitialTasks()
+  return initialTaskLoad
+}
+
+async function loadInitialTasks(): Promise<void> {
+  const generation = syncGeneration
+  await syncReset
+  const token = await localStore.get('apiToken')
+  if (!token) return
+  const owner = await sha256Hex(token)
+  const cached = await sessionStore.get('engagementSources')
+  if (
+    generation !== syncGeneration ||
+    (await localStore.get('apiToken')) !== token ||
+    cached?.owner === owner
+  )
+    return
+  // Sources also record an empty or failed attempt; worker wakes must not retry it.
+  await syncTasks()
+}
 
 async function clearTaskCache(): Promise<void> {
   await sessionStore.patch({
@@ -790,6 +819,7 @@ async function clearTaskCache(): Promise<void> {
 export function handleTaskTokenChange(): Promise<void> {
   syncGeneration++
   syncInFlight = null
+  initialTaskLoad = null
   syncReset = syncReset.then(clearTaskCache)
   return syncReset
 }
