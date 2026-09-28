@@ -206,11 +206,15 @@ export function CurrentTaskSection({
         // 捕获回填失败不影响实时监听;用户后续动作仍会通过 __lhcap 解锁。
       }
     }
-    // 拉快照 + 归并当前推文任务。
-    const load = async (): Promise<void> => {
+    // 首次打开详情页时刷新已接任务；广播更新只读后台已写好的缓存。
+    const load = async (refresh = false): Promise<void> => {
       const sequence = ++loadSequence
       try {
-        const snap = await sendMessage({ type: 'get-tasks-snapshot' })
+        const snap = await sendMessage(
+          refresh
+            ? { type: 'get-current-task-snapshot', tweetId: focalId }
+            : { type: 'get-tasks-snapshot' },
+        )
         if (
           cancelled ||
           generation !== accountGeneration.current ||
@@ -292,7 +296,7 @@ export function CurrentTaskSection({
       }
     }
 
-    void load()
+    void load(true)
     // BG 手动同步完成后广播 tasks-updated。收到后只读缓存并更新卡片。
     const onMsg = (m: unknown): void => {
       if (

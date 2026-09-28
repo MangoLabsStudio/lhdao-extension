@@ -445,6 +445,19 @@ export default defineBackground(() => {
     if (req.type === 'get-tasks-snapshot') {
       return readTasksSnapshot()
     }
+    if (req.type === 'get-current-task-snapshot') {
+      const url = sender.tab?.url ?? sender.url ?? ''
+      if (
+        sender.id !== chrome.runtime.id ||
+        !sender.tab ||
+        sender.frameId !== 0 ||
+        !/^https:\/\/(?:x|twitter)\.com\//.test(url) ||
+        extractTweetIdFromUrl(url) !== req.tweetId
+      )
+        return { type: 'ack' }
+      await syncTasks(true)
+      return readTasksSnapshot()
+    }
     if (req.type === 'get-captured-actions') {
       // [网页 gate] 返回某 campaign 已捕获的动作类型。网页验证前预检:没捕获就
       // 直接判「未检测到动作」失败,不走异步乐观提交。tweetId 作别名兜底(捕获
@@ -773,9 +786,12 @@ export async function readTasksSnapshot(): Promise<
 }
 
 let syncGeneration = 0
+let syncRequestSequence = 0
 let syncInFlight: {
   token: string | null
   generation: number
+  reservedOnly: boolean
+  readStartedSequence: number | null
   promise: Promise<void>
 } | null = null
 let syncReset: Promise<void> = Promise.resolve()
@@ -916,22 +932,53 @@ function updateCachedEngagement(
   return update
 }
 
-export async function syncTasks(): Promise<void> {
+export async function syncTasks(
+  reservedOnly = false,
+  requestSequence = ++syncRequestSequence,
+): Promise<void> {
   const generation = syncGeneration
   await syncReset
   const token = await localStore.get('apiToken')
   if (generation !== syncGeneration) return
   if (syncInFlight?.token === token && syncInFlight.generation === generation) {
-    return syncInFlight.promise
+    if (
+      syncInFlight.reservedOnly === reservedOnly &&
+      (!reservedOnly ||
+        syncInFlight.readStartedSequence === null ||
+        syncInFlight.readStartedSequence >= requestSequence)
+    )
+      return syncInFlight.promise
+    // Share only reservation reads dispatched after this visit request. An
+    // earlier read can miss a website reservation made while it was in flight.
+    await syncInFlight.promise
+    if (generation !== syncGeneration) return
+    return syncTasks(reservedOnly, requestSequence)
+  }
+  if (reservedOnly && token) {
+    const cached = await sessionStore.get('engagementSources')
+    if (cached?.owner !== (await sha256Hex(token))) reservedOnly = false
+    if (generation !== syncGeneration) return
+    // Another caller may have started a sync while storage/hash were awaited.
+    if (syncInFlight?.token === token && syncInFlight.generation === generation)
+      return syncTasks(reservedOnly, requestSequence)
   }
   // A force-sync can arrive before storage.onChanged is delivered.
   if (syncInFlight && syncInFlight.token !== token) syncGeneration++
   const flight = {
     token,
     generation: syncGeneration,
+    reservedOnly,
+    readStartedSequence: null as number | null,
     promise: Promise.resolve(),
   }
-  flight.promise = performSyncTasks(token, flight.generation).finally(() => {
+  flight.promise = performSyncTasks(
+    token,
+    flight.generation,
+    reservedOnly,
+    () => {
+      flight.readStartedSequence = syncRequestSequence
+    },
+  ).finally(() => {
     if (syncInFlight === flight) syncInFlight = null
   })
   syncInFlight = flight
@@ -941,6 +988,8 @@ export async function syncTasks(): Promise<void> {
 async function performSyncTasks(
   token: string | null,
   generation: number,
+  reservedOnly: boolean,
+  onReadStarted: () => void,
 ): Promise<void> {
   const isCurrent = async () => {
     const currentToken = await localStore.get('apiToken')
@@ -959,12 +1008,33 @@ async function performSyncTasks(
     return
   }
   const cachedProfile = await sessionStore.get('userProfile')
+  const cachedGuideStatuses = new Map(
+    reservedOnly
+      ? (
+          await Promise.all([
+            sessionStore.get('tasksByTweetId'),
+            sessionStore.get('tasksByAuthorHandle'),
+            sessionStore.get('activeCampaigns'),
+          ])
+        ).flatMap((index) =>
+          (Array.isArray(index)
+            ? index
+            : Object.values(index ?? {}).flat()
+          ).map((task) => [task.campaignId, task.commentGuideStatus] as const),
+        )
+      : [],
+  )
 
+  onReadStarted()
   const [engRes, reservedRes, tweetsRes, meRes] = await Promise.allSettled([
-    gql<AvailableEngagementsResult>(MANUAL_AVAILABLE_ENGAGEMENTS_QUERY),
+    reservedOnly
+      ? Promise.resolve({ availableEngagements: cached?.available ?? [] })
+      : gql<AvailableEngagementsResult>(MANUAL_AVAILABLE_ENGAGEMENTS_QUERY),
     gql<MyReservedEngagementsResult>(MANUAL_MY_RESERVED_ENGAGEMENTS_QUERY),
-    gql<AvailableTweetsResult>(MANUAL_AVAILABLE_TWEETS_QUERY),
-    gql<MeResult>(ME_QUERY),
+    reservedOnly
+      ? Promise.resolve({ availableTweets: [] })
+      : gql<AvailableTweetsResult>(MANUAL_AVAILABLE_TWEETS_QUERY),
+    reservedOnly ? Promise.resolve({ me: null }) : gql<MeResult>(ME_QUERY),
   ])
   if (!(await isCurrent())) return
 
@@ -985,7 +1055,7 @@ async function performSyncTasks(
   // A fresh order wins over a failed source's old copy during reservation changes.
   const fresh = new Set(
     [
-      ...(engRes.status === 'fulfilled' ? available : []),
+      ...(!reservedOnly && engRes.status === 'fulfilled' ? available : []),
       ...(reservedRes.status === 'fulfilled' ? reserved : []),
     ].map((c) => c.id),
   )
@@ -1020,6 +1090,12 @@ async function performSyncTasks(
     if (stale.has(task.campaignId)) {
       task.commentGuideStatus =
         task.commentGuide === undefined ? 'unavailable' : 'stale'
+    } else if (
+      reservedOnly &&
+      !reservedIds.has(task.campaignId) &&
+      cachedGuideStatuses.has(task.campaignId)
+    ) {
+      task.commentGuideStatus = cachedGuideStatuses.get(task.campaignId)
     }
   }
   const failure =
@@ -1061,19 +1137,24 @@ async function performSyncTasks(
       : null,
     lastSyncHttpStatus:
       reason instanceof GqlError ? (reason.httpStatus ?? null) : null,
-    lighthouseSelectedStatus:
+  }
+  if (
+    (!reservedOnly && engRes.status === 'fulfilled') ||
+    reservedRes.status === 'fulfilled'
+  )
+    values.lastSyncAt = Date.now()
+  if (!reservedOnly) {
+    values.lighthouseSelectedStatus =
       meRes.status === 'fulfilled' &&
       typeof meRes.value.me?.lighthouseSelected === 'boolean'
         ? 'available'
-        : 'unavailable',
+        : 'unavailable'
   }
-  if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
-    values.lastSyncAt = Date.now()
-  if (tweetsRes.status === 'fulfilled')
+  if (!reservedOnly && tweetsRes.status === 'fulfilled')
     values.tweetCampaigns = buildTweetCampaignSummaries(
       tweetsRes.value.availableTweets,
     )
-  if (meRes.status === 'fulfilled' && meRes.value.me) {
+  if (!reservedOnly && meRes.status === 'fulfilled' && meRes.value.me) {
     const m = meRes.value.me
     values.userProfile = {
       id: m.id,
@@ -1087,18 +1168,21 @@ async function performSyncTasks(
         ? { lighthouseSelected: m.lighthouseSelected }
         : {}),
     }
-  } else if (meRes.status === 'rejected' && cachedProfile) {
+  } else if (!reservedOnly && meRes.status === 'rejected' && cachedProfile) {
     const { lighthouseSelected: _staleQualification, ...ordinaryProfile } =
       cachedProfile
     values.userProfile = ordinaryProfile
-  } else if (meRes.status === 'fulfilled') {
+  } else if (!reservedOnly && meRes.status === 'fulfilled') {
     values.userProfile = null
   }
   // One storage write: no old-session continuation can write another field after reset.
   if (!(await isCurrent())) return
   await sessionStore.patch(values)
   if (!(await isCurrent())) return
-  if (engRes.status === 'fulfilled' || reservedRes.status === 'fulfilled')
+  if (
+    (!reservedOnly && engRes.status === 'fulfilled') ||
+    reservedRes.status === 'fulfilled'
+  )
     queueRawCaptureReconcile()
   broadcastToContent({ type: 'tasks-updated' })
 }

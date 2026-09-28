@@ -61,7 +61,10 @@ beforeEach(() => {
     height: 200,
   } as DOMRect)
   vi.spyOn(messaging, 'sendMessage').mockImplementation(async (req) => {
-    if (req.type === 'get-tasks-snapshot') {
+    if (
+      req.type === 'get-tasks-snapshot' ||
+      req.type === 'get-current-task-snapshot'
+    ) {
       return {
         type: 'tasks-snapshot',
         byTweet: { '123456': [task] },
@@ -104,6 +107,13 @@ describe('focused tweet verification panel host', () => {
 
     expect(document.querySelector('.lhdao-inline-task')).toBe(host)
     expect(panel()).toBe(section)
+    expect(
+      vi
+        .mocked(messaging.sendMessage)
+        .mock.calls.filter(
+          ([message]) => message.type === 'get-current-task-snapshot',
+        ),
+    ).toEqual([[{ type: 'get-current-task-snapshot', tweetId: '123456' }]])
   })
 
   it('mounts when the action controls arrive after the first scan', async () => {

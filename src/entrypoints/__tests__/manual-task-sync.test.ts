@@ -1,19 +1,13 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { fakeBrowser } from 'wxt/testing'
 import { gql } from '@/lib/gql'
+import type { MsgRequest } from '@/types/messages'
 
 const registered = vi.hoisted(() => ({
   handler: null as
     | null
     | ((
-        req: {
-          type:
-            | 'force-sync'
-            | 'get-tasks-snapshot'
-            | 'get-popup-data'
-            | 'get-sidebar-data'
-            | 'get-balance'
-        },
+        req: MsgRequest,
         sender: chrome.runtime.MessageSender,
       ) => Promise<unknown>),
 }))
@@ -72,7 +66,11 @@ const loadSnapshot = () =>
 
 const xSender = () => ({
   id: fakeBrowser.runtime.id,
-  tab: { id: 1 } as chrome.tabs.Tab,
+  tab: {
+    id: 1,
+    url: 'https://x.com/user/status/123456',
+  } as chrome.tabs.Tab,
+  frameId: 0,
   url: 'https://x.com/user/status/123456',
 })
 const popupSender = () => ({
@@ -306,4 +304,253 @@ it('returns the reserved comment task on the first X read without a manual sync'
     },
   })
   expect(gql).toHaveBeenCalledTimes(4)
+})
+
+const newlyReservedComment = {
+  id: 'new-comment',
+  type: 'ENGAGEMENT',
+  mode: 'OPEN',
+  platform: 'X',
+  targetUrl: 'https://x.com/user/status/123456',
+  tweetId: '123456',
+  keywords: [],
+  myExpectedReward: 0.8,
+  actions: [{ actionType: 'COMMENT', baseReward: 0.8, targetCount: 1 }],
+}
+
+const loadCurrentTask = (sender = xSender()) =>
+  registered.handler?.(
+    { type: 'get-current-task-snapshot', tweetId: '123456' },
+    sender,
+  )
+
+it('loads a website reservation made after the initial popup snapshot without refreshing personal or available data', async () => {
+  vi.mocked(gql).mockResolvedValue({
+    availableEngagements: [],
+    myReservedEngagements: [],
+    availableTweets: [],
+    me: { ...personalMe, lighthouseSelected: true },
+  })
+  const background = await import('../background')
+  background.default.main()
+  await registered.handler?.({ type: 'get-popup-data' }, popupSender())
+  expect(await background.readTasksSnapshot()).toMatchObject({ byTweet: {} })
+
+  vi.mocked(gql)
+    .mockClear()
+    .mockResolvedValue({
+      myReservedEngagements: [newlyReservedComment],
+    })
+  const results = await Promise.all([loadCurrentTask(), loadCurrentTask()])
+  for (const response of results)
+    expect(response).toMatchObject({
+      byTweet: {
+        '123456': [
+          expect.objectContaining({
+            campaignId: 'new-comment',
+            actionType: 'COMMENT',
+            reserved: true,
+          }),
+        ],
+      },
+    })
+  expect(gql).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(gql).mock.calls[0][0]).toContain(
+    'query ManualMyReservedEngagements',
+  )
+  expect(await background.readSidebarData()).toMatchObject({
+    profile: { id: 'user-a', newLux: 50.3, lighthouseSelected: true },
+    lighthouseSelectedStatus: 'available',
+  })
+  await loadSnapshot()
+  await registered.handler?.({ type: 'get-popup-data' }, popupSender())
+  expect(gql).toHaveBeenCalledTimes(1)
+})
+
+it('preserves the old guide state of discovery data that was not refreshed', async () => {
+  vi.mocked(gql).mockResolvedValue({
+    availableEngagements: [
+      {
+        ...newlyReservedComment,
+        id: 'available-comment',
+        commentGuide: 'guide',
+      },
+    ],
+    myReservedEngagements: [],
+    availableTweets: [],
+    me: null,
+  })
+  const background = await import('../background')
+  background.default.main()
+  await loadSnapshot()
+  vi.mocked(gql).mockImplementation(async (document) => {
+    if (document.includes('query ManualAvailableEngagements'))
+      throw new Error('discovery offline')
+    return { myReservedEngagements: [], availableTweets: [], me: null }
+  })
+  await background.syncTasks()
+  expect(
+    (await background.readTasksSnapshot()).byTweet['123456'][0],
+  ).toMatchObject({
+    commentGuideStatus: 'stale',
+  })
+  vi.mocked(gql).mockResolvedValue({ myReservedEngagements: [] })
+  expect(await loadCurrentTask()).toMatchObject({
+    byTweet: {
+      '123456': [expect.objectContaining({ commentGuideStatus: 'stale' })],
+    },
+  })
+})
+
+it('keeps reservations and the last successful timestamp when the detail refresh fails', async () => {
+  vi.mocked(gql).mockResolvedValue({
+    availableEngagements: [],
+    myReservedEngagements: [newlyReservedComment],
+    availableTweets: [],
+    me: null,
+  })
+  const background = await import('../background')
+  background.default.main()
+  await loadSnapshot()
+  const { lastSyncAt } = await fakeBrowser.storage.session.get('lastSyncAt')
+  vi.mocked(gql).mockRejectedValue(new Error('offline'))
+  expect(await loadCurrentTask()).toMatchObject({
+    syncFailed: true,
+    byTweet: { '123456': [expect.objectContaining({ reserved: true })] },
+  })
+  expect((await fakeBrowser.storage.session.get('lastSyncAt')).lastSyncAt).toBe(
+    lastSyncAt,
+  )
+})
+
+it('does a complete manual sync after a reservation-only refresh already in progress', async () => {
+  const background = await import('../background')
+  background.default.main()
+  await loadSnapshot()
+  let finish!: (value: unknown) => void
+  vi.mocked(gql)
+    .mockClear()
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+  const detail = loadCurrentTask()
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+  const manual = background.syncTasks()
+  vi.mocked(gql).mockResolvedValue({
+    availableEngagements: [],
+    myReservedEngagements: [newlyReservedComment],
+    availableTweets: [],
+    me: personalMe,
+  })
+  finish({ myReservedEngagements: [] })
+  await Promise.all([detail, manual])
+  expect(gql).toHaveBeenCalledTimes(5)
+  expect(await background.readPopupData()).toMatchObject({
+    profile: { id: 'user-a', newLux: 50.3 },
+  })
+})
+
+it('rejects an old reservation response after an A to B to A account change', async () => {
+  const background = await import('../background')
+  background.default.main()
+  await loadSnapshot()
+  let finish!: (value: unknown) => void
+  vi.mocked(gql).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  const oldDetail = loadCurrentTask()
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+  await fakeBrowser.storage.local.set({ apiToken: 'lhdao_pk_B' })
+  await fakeBrowser.storage.local.set({ apiToken: 'lhdao_pk_test_token' })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  finish({ myReservedEngagements: [newlyReservedComment] })
+  await oldDetail
+  expect(await background.readTasksSnapshot()).toMatchObject({ byTweet: {} })
+})
+
+it('initializes all data when a task detail is the first read', async () => {
+  const background = await import('../background')
+  background.default.main()
+  expect(await loadCurrentTask()).toMatchObject({ ready: true })
+  expect(gql).toHaveBeenCalledTimes(4)
+})
+
+it('fetches reservations again if a full sync started before the new task detail opened', async () => {
+  let finishReserved!: (value: unknown) => void
+  vi.mocked(gql).mockImplementation(async (document) => {
+    if (document.includes('query ManualMyReservedEngagements'))
+      return new Promise((resolve) => {
+        finishReserved = resolve
+      })
+    return { availableEngagements: [], availableTweets: [], me: null }
+  })
+  const background = await import('../background')
+  background.default.main()
+  const oldLoad = loadSnapshot()
+  await vi.waitFor(() => expect(finishReserved).toBeTypeOf('function'))
+  const detailLoad = loadCurrentTask()
+  vi.mocked(gql).mockResolvedValue({
+    myReservedEngagements: [newlyReservedComment],
+  })
+  finishReserved({ myReservedEngagements: [] })
+  await oldLoad
+  expect(await detailLoad).toMatchObject({
+    byTweet: { '123456': [expect.objectContaining({ reserved: true })] },
+  })
+  expect(gql).toHaveBeenCalledTimes(5)
+})
+
+it('shares one follow-up read for new detail visits arriving after an older reserved request started', async () => {
+  const background = await import('../background')
+  background.default.main()
+  await loadSnapshot()
+  let finish!: (value: unknown) => void
+  vi.mocked(gql)
+    .mockClear()
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+  const oldDetail = loadCurrentTask()
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+  const newDetails = [loadCurrentTask(), loadCurrentTask(), loadCurrentTask()]
+  vi.mocked(gql).mockResolvedValue({
+    myReservedEngagements: [newlyReservedComment],
+  })
+  finish({ myReservedEngagements: [] })
+  await oldDetail
+  for (const result of await Promise.all(newDetails))
+    expect(result).toMatchObject({
+      byTweet: { '123456': [expect.objectContaining({ reserved: true })] },
+    })
+  expect(gql).toHaveBeenCalledTimes(2)
+})
+
+it.each([
+  { ...xSender(), id: 'another-extension' },
+  { ...xSender(), frameId: 1 },
+  {
+    ...xSender(),
+    tab: {
+      id: 1,
+      url: 'https://example.test/user/status/123456',
+    } as chrome.tabs.Tab,
+  },
+  {
+    ...xSender(),
+    tab: { id: 1, url: 'https://x.com/user/status/654321' } as chrome.tabs.Tab,
+  },
+])('does not refresh from an untrusted or mismatched task detail', async (sender) => {
+  const background = await import('../background')
+  background.default.main()
+  await loadCurrentTask(sender)
+  expect(gql).not.toHaveBeenCalled()
 })

@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const EXPECTED_EXTENSION_VERSION = '0.4.5'
+const EXPECTED_EXTENSION_VERSION = '0.4.6'
 const BASE_PERMISSIONS = ['storage', 'alarms']
 const FIXED_HOST_PERMISSIONS = [
   'https://x.com/*',
