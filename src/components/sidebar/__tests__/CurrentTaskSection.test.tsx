@@ -50,7 +50,10 @@ beforeEach(() => {
     () => {},
   )
   vi.spyOn(messaging, 'sendMessage').mockImplementation(async (req) => {
-    if (req.type === 'get-tasks-snapshot')
+    if (
+      req.type === 'get-tasks-snapshot' ||
+      req.type === 'get-current-task-snapshot'
+    )
       return {
         type: 'tasks-snapshot',
         byTweet: { '123456': rows },
@@ -74,17 +77,53 @@ afterEach(async () => {
 const render = async () => act(async () => root.render(<CurrentTaskSection />))
 
 describe('current-task comment guide', () => {
-  it('reads cached tasks without syncing when a page opens, resumes, or waits', async () => {
+  it('loads a newly reserved comment when the initial session snapshot is empty', async () => {
+    const reserved = rows
+    rows = []
+    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+      if (req.type === 'get-current-task-snapshot')
+        return {
+          type: 'tasks-snapshot',
+          byTweet: { '123456': reserved },
+          byAuthor: {},
+          ready: true,
+        }
+      return previous(req)
+    })
+
+    await render()
+
+    expect(container.querySelector('.lh-cur-card')).not.toBeNull()
+    expect(container.querySelector('.lh-cur-todo')?.textContent).toContain(
+      '评论',
+    )
+    expect(messaging.sendMessage).toHaveBeenCalledWith({
+      type: 'get-current-task-snapshot',
+      tweetId: '123456',
+    })
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
+  })
+
+  it('refreshes once on detail entry and only reads cache after background updates', async () => {
     vi.useFakeTimers()
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     const reserved = rows
     rows = []
     await render()
-    const reads = vi
-      .mocked(messaging.sendMessage)
-      .mock.calls.filter(
-        ([message]) => message.type === 'get-tasks-snapshot',
-      ).length
+    const reads = () =>
+      vi
+        .mocked(messaging.sendMessage)
+        .mock.calls.filter(
+          ([message]) =>
+            message.type === 'get-tasks-snapshot' ||
+            message.type === 'get-current-task-snapshot',
+        )
+    expect(reads()).toEqual([
+      [{ type: 'get-current-task-snapshot', tweetId: '123456' }],
+    ])
     await act(async () => {
       window.dispatchEvent(new Event('online'))
       window.dispatchEvent(new Event('pageshow'))
@@ -95,16 +134,14 @@ describe('current-task comment guide', () => {
     expect(messaging.sendMessage).not.toHaveBeenCalledWith({
       type: 'force-sync',
     })
-    expect(
-      vi
-        .mocked(messaging.sendMessage)
-        .mock.calls.filter(
-          ([message]) => message.type === 'get-tasks-snapshot',
-        ),
-    ).toHaveLength(reads)
+    expect(reads()).toHaveLength(1)
     rows = reserved
     await act(async () => updated({ type: 'tasks-updated' }))
     expect(container.textContent).toContain('完整原文')
+    expect(reads()).toEqual([
+      [{ type: 'get-current-task-snapshot', tweetId: '123456' }],
+      [{ type: 'get-tasks-snapshot' }],
+    ])
   })
 
   it('keeps successful verification without automatically syncing tasks', async () => {
@@ -364,7 +401,8 @@ describe('current-task comment guide', () => {
   })
   it('stays hidden when first synchronization fails without a task', async () => {
     vi.mocked(messaging.sendMessage).mockImplementation(async (req) =>
-      req.type === 'get-tasks-snapshot'
+      req.type === 'get-tasks-snapshot' ||
+      req.type === 'get-current-task-snapshot'
         ? {
             type: 'tasks-snapshot',
             byTweet: {},
@@ -484,6 +522,7 @@ describe('current-task comment guide', () => {
         return previous(req)
       })
       await render()
+      await act(async () => updated({ type: 'tasks-updated' }))
       expect(container.textContent).toBe('')
     })
 

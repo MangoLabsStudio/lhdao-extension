@@ -70,7 +70,10 @@ function claimButton(): HTMLButtonElement | null | undefined {
 
 function mockSnapshot(tasks: CampaignTaskCache[]): void {
   vi.spyOn(messaging, 'sendMessage').mockImplementation(async (req) => {
-    if (req.type === 'get-tasks-snapshot') {
+    if (
+      req.type === 'get-tasks-snapshot' ||
+      req.type === 'get-current-task-snapshot'
+    ) {
       return {
         type: 'tasks-snapshot',
         byTweet: { '123456': tasks },
