@@ -316,10 +316,23 @@ function maskToken(token: string): string {
 export default defineBackground(() => {
   console.log('[lhdao] background worker booted')
 
-  // 清除旧版本的轮询；首次进入 X 读取任务时才初始化。
+  // 清除旧版本的轮询；首次打开弹窗或 X 页面读取数据时才初始化。
   void chrome.alarms.clear(ALARM_NAME)
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
+    if (
+      sender.id === chrome.runtime.id &&
+      ((req.type === 'get-popup-data' &&
+        !sender.tab &&
+        sender.url === chrome.runtime.getURL('popup.html')) ||
+        ((req.type === 'get-tasks-snapshot' ||
+          req.type === 'get-sidebar-data' ||
+          req.type === 'get-balance') &&
+          sender.tab &&
+          /^https:\/\/(?:x|twitter)\.com\//.test(sender.url ?? '')))
+    )
+      await syncInitialTasks()
+
     if (
       req.type === 'get-x-analytics-status' ||
       req.type === 'save-x-analytics'
@@ -430,12 +443,6 @@ export default defineBackground(() => {
       return { type: 'tasks', tasks: snapshot.byAuthor[handle] ?? [] }
     }
     if (req.type === 'get-tasks-snapshot') {
-      if (
-        sender.id === chrome.runtime.id &&
-        sender.tab &&
-        /^https:\/\/(?:x|twitter)\.com\//.test(sender.url ?? '')
-      )
-        await syncInitialTasks()
       return readTasksSnapshot()
     }
     if (req.type === 'get-captured-actions') {
@@ -602,7 +609,7 @@ export default defineBackground(() => {
     return { type: 'ack' }
   })
 
-  // token 切换时清理旧账户缓存；X 页面重新读取时加载新账户快照。
+  // token 切换时清理旧账户缓存；弹窗或 X 页面读取时加载新账户快照。
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && 'apiToken' in changes) {
       void handleTaskTokenChange()

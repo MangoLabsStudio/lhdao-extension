@@ -6,7 +6,14 @@ const registered = vi.hoisted(() => ({
   handler: null as
     | null
     | ((
-        req: { type: 'force-sync' | 'get-tasks-snapshot' },
+        req: {
+          type:
+            | 'force-sync'
+            | 'get-tasks-snapshot'
+            | 'get-popup-data'
+            | 'get-sidebar-data'
+            | 'get-balance'
+        },
         sender: chrome.runtime.MessageSender,
       ) => Promise<unknown>),
 }))
@@ -62,6 +69,88 @@ const loadSnapshot = () =>
       url: 'https://x.com/user/status/123456',
     },
   )
+
+const xSender = () => ({
+  id: fakeBrowser.runtime.id,
+  tab: { id: 1 } as chrome.tabs.Tab,
+  url: 'https://x.com/user/status/123456',
+})
+const popupSender = () => ({
+  id: fakeBrowser.runtime.id,
+  url: fakeBrowser.runtime.getURL('popup.html'),
+})
+const personalMe = {
+  id: 'user-a',
+  nickname: 'Alice',
+  twitterUsername: 'alice',
+  tier: 'A',
+  newLux: 50.3,
+  todayEarnings: 1.4,
+}
+
+it.each([
+  'get-popup-data',
+  'get-sidebar-data',
+  'get-balance',
+] as const)('automatically loads personal data on the first %s read', async (type) => {
+  vi.mocked(gql).mockResolvedValue({
+    availableEngagements: [],
+    myReservedEngagements: [],
+    availableTweets: [],
+    me: personalMe,
+  })
+  const background = await import('../background')
+  background.default.main()
+  const response = await registered.handler?.(
+    { type },
+    type === 'get-popup-data' ? popupSender() : xSender(),
+  )
+  expect(response).toMatchObject(
+    type === 'get-balance'
+      ? { balance: 50.3 }
+      : {
+          profile: {
+            id: 'user-a',
+            displayName: 'Alice',
+            twitterHandle: 'alice',
+            tier: 'A',
+            newLux: 50.3,
+            todayEarnings: 1.4,
+          },
+        },
+  )
+  expect(gql).toHaveBeenCalledTimes(4)
+})
+
+it('shares first personal and task loads and keeps popup refreshes local across worker restarts', async () => {
+  const background = await import('../background')
+  background.default.main()
+  await Promise.all([
+    registered.handler?.({ type: 'get-popup-data' }, popupSender()),
+    registered.handler?.({ type: 'get-sidebar-data' }, xSender()),
+    loadSnapshot(),
+  ])
+  for (let i = 0; i < 3; i++)
+    await registered.handler?.({ type: 'get-popup-data' }, popupSender())
+  await restartWorker()
+  await registered.handler?.({ type: 'get-popup-data' }, popupSender())
+  expect(gql).toHaveBeenCalledTimes(4)
+})
+
+it('does not initialize from a personal read on an unrelated page', async () => {
+  const background = await import('../background')
+  background.default.main()
+  for (const type of [
+    'get-popup-data',
+    'get-sidebar-data',
+    'get-balance',
+  ] as const)
+    await registered.handler?.(
+      { type },
+      { ...xSender(), url: 'https://example.test/' },
+    )
+  expect(gql).not.toHaveBeenCalled()
+})
 
 it('loads once on first X visit and account change, then refreshes manually', async () => {
   const clearAlarm = vi.spyOn(fakeBrowser.alarms, 'clear')
