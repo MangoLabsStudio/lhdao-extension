@@ -320,6 +320,68 @@ describe('PromoteDialog device recovery', () => {
     ).toBe(false)
   })
 
+  it('uses per-action Selected A counts for the quote and confirmed promotion', async () => {
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <PromoteDialog
+          tweetUrl="https://x.com/lighthouse/status/1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    await act(async () => findButton('按上次配置').click())
+    await act(async () => findButton('转发').click())
+    const selected = container.querySelector(
+      'input[name="lighthouse-selected-only"]',
+    ) as HTMLInputElement
+    await act(async () => selected.click())
+    expect(container.textContent).toContain('每个动作的严选人数')
+    expect(container.textContent).not.toContain('每档招募人数')
+
+    for (const [action, count] of [
+      ['LIKE', '5'],
+      ['RT', '2'],
+    ] as const) {
+      const input = container.querySelector(
+        `input[name="selected-count-${action}"]`,
+      ) as HTMLInputElement
+      expect(input).toBeInstanceOf(HTMLInputElement)
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        )?.set?.call(input, count)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+    const selectedActions = [
+      { actionType: 'LIKE', tierSlots: { A: 5 } },
+      { actionType: 'RT', tierSlots: { A: 2 } },
+    ]
+    await vi.waitFor(() =>
+      expect(requests).toContainEqual({
+        type: 'preview-promote-tweet-pricing',
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions: selectedActions,
+        engagementSeatMode: 'SELECTED_A',
+        lighthouseSelectedOnly: true,
+      }),
+    )
+    await vi.waitFor(() => expect(container.textContent).toContain('LIKE/严选'))
+    await act(async () => findButton('确认推广').click())
+    await vi.waitFor(() =>
+      expect(requests).toContainEqual(
+        expect.objectContaining({
+          type: 'promote-tweet',
+          actions: selectedActions,
+          engagementSeatMode: 'SELECTED_A',
+          lighthouseSelectedOnly: true,
+        }),
+      ),
+    )
+  })
+
   it('does not render a stale balance when the current account balance is unavailable', async () => {
     balanceResponse = null
     root = createRoot(container)
