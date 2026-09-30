@@ -155,6 +155,7 @@ type PromoteRequest = {
   quoteId: string
   reinvestCount: number
   lighthouseSelectedOnly: boolean
+  engagementSeatMode?: 'SELECTED_A'
   paymentConfirmations: {
     requestKey: string
     paymentPreviewToken: string
@@ -215,6 +216,9 @@ export function PromoteDialog({
   // 默认全空:不预选动作、不预填人数,让用户自己选(可用「按上次配置」一键回填)
   const [actions, setActions] = React.useState<PromoteAction[]>([])
   const [slots, setSlots] = React.useState<Record<string, number>>({})
+  const [selectedCounts, setSelectedCounts] = React.useState<
+    Partial<Record<PromoteAction, number>>
+  >({})
   const [reinvest, setReinvest] = React.useState(false)
   const [reinvestCount, setReinvestCount] = React.useState(3)
   const [lighthouseSelectedOnly, setLighthouseSelectedOnly] =
@@ -334,15 +338,25 @@ export function PromoteDialog({
   const payloadActions = React.useMemo(
     () =>
       actions.map((actionType) => {
+        if (lighthouseSelectedOnly) {
+          return {
+            actionType,
+            tierSlots: { A: selectedCounts[actionType] ?? 0 },
+          }
+        }
         const tierSlots: Record<string, number> = {}
         for (const tier of ALL_TIERS) {
           if ((slots[tier] ?? 0) > 0) tierSlots[tier] = slots[tier]
         }
         return { actionType, tierSlots }
       }),
-    [actions, slots],
+    [actions, lighthouseSelectedOnly, selectedCounts, slots],
   )
-  const hasQuoteInput = actions.length > 0 && totalSlots > 0
+  const hasQuoteInput =
+    actions.length > 0 &&
+    (lighthouseSelectedOnly
+      ? actions.every((action) => (selectedCounts[action] ?? 0) > 0)
+      : totalSlots > 0)
 
   React.useEffect(() => {
     void refreshKey
@@ -362,6 +376,9 @@ export function PromoteDialog({
         tweetUrl,
         actions: payloadActions,
         lighthouseSelectedOnly,
+        ...(lighthouseSelectedOnly
+          ? { engagementSeatMode: 'SELECTED_A' as const }
+          : {}),
       })
         .then((response) => {
           if (
@@ -467,6 +484,9 @@ export function PromoteDialog({
         quoteId: quote!.quoteId,
         reinvestCount: reinvest ? reinvestCount : 0,
         lighthouseSelectedOnly,
+        ...(lighthouseSelectedOnly
+          ? { engagementSeatMode: 'SELECTED_A' as const }
+          : {}),
         paymentConfirmations: payment!.items.map((item, index) => ({
           requestKey: `promote:${quote!.quoteId}:${index}`,
           paymentPreviewToken: item.paymentPreviewToken,
@@ -606,37 +626,39 @@ export function PromoteDialog({
               </button>
             )}
 
-            <section
-              className="lh-current"
-              aria-labelledby="lh-promote-current-title"
-            >
-              <div id="lh-promote-current-title" className="lh-label">
-                当前报价
-              </div>
-              {currentPrices ? (
-                <div className="lh-current-grid">
-                  {currentPrices.lines
-                    .filter((line) => ALL_TIERS.includes(line.tier))
-                    .map((line) => (
-                      <div
-                        className="lh-current-line"
-                        key={`${line.actionType}:${line.tier}`}
-                      >
-                        <b>
-                          {line.actionType}/{line.tier}
-                        </b>
-                        <span>{formatMoney(line.unitPrice)} LUX</span>
-                      </div>
-                    ))}
+            {!lighthouseSelectedOnly && (
+              <section
+                className="lh-current"
+                aria-labelledby="lh-promote-current-title"
+              >
+                <div id="lh-promote-current-title" className="lh-label">
+                  当前报价
                 </div>
-              ) : currentPricesError ? (
-                <div className="lh-warn">{currentPricesError}</div>
-              ) : (
-                <div className="lh-quote-status" role="status">
-                  正在获取当前报价…
-                </div>
-              )}
-            </section>
+                {currentPrices ? (
+                  <div className="lh-current-grid">
+                    {currentPrices.lines
+                      .filter((line) => ALL_TIERS.includes(line.tier))
+                      .map((line) => (
+                        <div
+                          className="lh-current-line"
+                          key={`${line.actionType}:${line.tier}`}
+                        >
+                          <b>
+                            {line.actionType}/{line.tier}
+                          </b>
+                          <span>{formatMoney(line.unitPrice)} LUX</span>
+                        </div>
+                      ))}
+                  </div>
+                ) : currentPricesError ? (
+                  <div className="lh-warn">{currentPricesError}</div>
+                ) : (
+                  <div className="lh-quote-status" role="status">
+                    正在获取当前报价…
+                  </div>
+                )}
+              </section>
+            )}
 
             <div className="lh-label">互动动作(每个动作单独建单)</div>
             <div className="lh-chips">
@@ -656,23 +678,62 @@ export function PromoteDialog({
               ))}
             </div>
 
-            <div className="lh-label">每档招募人数(应用到每个动作)</div>
-            <div className="lh-tiers">
-              {ALL_TIERS.map((t) => (
-                <div key={t} className="lh-tier">
-                  <span className="lh-tier-name">{t} 档</span>
-                  <input
-                    className="lh-num"
-                    type="number"
-                    min={0}
-                    placeholder="0"
-                    value={slots[t] || ''}
-                    disabled={phase === 'loading'}
-                    onChange={(e) => setSlot(t, Number(e.currentTarget.value))}
-                  />
+            {lighthouseSelectedOnly ? (
+              <>
+                <div className="lh-label">每个动作的严选人数</div>
+                <div className="lh-tiers">
+                  {ALL_ACTIONS.filter((action) =>
+                    actions.includes(action.key),
+                  ).map((action) => (
+                    <div key={action.key} className="lh-tier">
+                      <span className="lh-tier-name">{action.label}</span>
+                      <input
+                        name={`selected-count-${action.key}`}
+                        aria-label={`${action.label}严选人数`}
+                        className="lh-num"
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        value={selectedCounts[action.key] || ''}
+                        disabled={phase === 'loading'}
+                        onChange={(e) => {
+                          invalidateQuote()
+                          setSelectedCounts((previous) => ({
+                            ...previous,
+                            [action.key]: Math.max(
+                              0,
+                              Math.trunc(Number(e.currentTarget.value)) || 0,
+                            ),
+                          }))
+                        }}
+                      />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </>
+            ) : (
+              <>
+                <div className="lh-label">每档招募人数(应用到每个动作)</div>
+                <div className="lh-tiers">
+                  {ALL_TIERS.map((t) => (
+                    <div key={t} className="lh-tier">
+                      <span className="lh-tier-name">{t} 档</span>
+                      <input
+                        className="lh-num"
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        value={slots[t] || ''}
+                        disabled={phase === 'loading'}
+                        onChange={(e) =>
+                          setSlot(t, Number(e.currentTarget.value))
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
 
             <label className="lh-reinvest">
               <input
@@ -682,6 +743,7 @@ export function PromoteDialog({
                 disabled={phase === 'loading'}
                 onChange={(e) => {
                   if (submittingRef.current) return
+                  invalidateQuote()
                   setRetryRequest(null)
                   setPhase('form')
                   setErrMsg('')
@@ -769,7 +831,7 @@ export function PromoteDialog({
                   <table className="lh-quote-table">
                     <thead>
                       <tr>
-                        <th scope="col">动作/档</th>
+                        <th scope="col">动作/席位</th>
                         <th scope="col">单价</th>
                         <th scope="col">数量</th>
                         <th scope="col">小计</th>
@@ -781,7 +843,10 @@ export function PromoteDialog({
                           key={`${line.campaignIndex}:${line.actionType}:${line.tier}`}
                         >
                           <td>
-                            {line.actionType}/{line.tier}
+                            {line.actionType}/
+                            {lighthouseSelectedOnly && line.tier === 'A'
+                              ? '严选'
+                              : line.tier}
                           </td>
                           <td>单价 {formatMoney(line.unitPrice)}</td>
                           <td>数量 {line.quantity}</td>

@@ -751,6 +751,7 @@ export interface PreviewPromoteTweetPricingVars {
     tweetUrl: string
     actions: { actionType: string; tierSlots: Record<string, number> }[]
     lighthouseSelectedOnly: boolean
+    engagementSeatMode?: 'SELECTED_A'
   }
 }
 
@@ -772,6 +773,7 @@ export interface PromoteTweetVars {
     tweetUrl: string
     actions: { actionType: string; tierSlots: Record<string, number> }[]
     lighthouseSelectedOnly: boolean
+    engagementSeatMode?: 'SELECTED_A'
     paymentConfirmations?: {
       requestKey: string
       paymentPreviewToken: string

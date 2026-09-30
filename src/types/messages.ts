@@ -75,6 +75,7 @@ export type MsgRequest =
         tierSlots: Record<string, number>
       }[]
       lighthouseSelectedOnly?: boolean
+      engagementSeatMode?: 'SELECTED_A'
     }
   | {
       type: 'promote-tweet'
@@ -89,6 +90,7 @@ export type MsgRequest =
       reinvestCount?: number
       /** Explicitly false for ordinary promotion; never inherited. */
       lighthouseSelectedOnly: boolean
+      engagementSeatMode?: 'SELECTED_A'
       paymentConfirmations: {
         requestKey: string
         paymentPreviewToken: string

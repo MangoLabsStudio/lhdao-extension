@@ -298,6 +298,46 @@ describe('plugin promote pricing background handlers', () => {
     expect(gqlMock).toHaveBeenCalledTimes(1)
   })
 
+  it('passes Selected A mode through preview and confirmed promotion', async () => {
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    gqlMock.mockResolvedValueOnce({
+      previewPromoteTweetPricing: { ...quote, paymentPreview: payment },
+    })
+    await previewPromoteTweetPricingHandler({
+      tweetUrl: 'https://x.com/lighthouse/status/1',
+      actions,
+      lighthouseSelectedOnly: true,
+      engagementSeatMode: 'SELECTED_A',
+    })
+    expect(gqlMock).toHaveBeenCalledWith(PREVIEW_PROMOTE_TWEET_PRICING_QUERY, {
+      input: {
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions,
+        lighthouseSelectedOnly: true,
+        engagementSeatMode: 'SELECTED_A',
+      },
+    })
+
+    gqlMock.mockResolvedValueOnce({ promoteTweet: [{ id: 'campaign-1' }] })
+    await promoteTweetHandler({
+      tweetUrl: 'https://x.com/lighthouse/status/1',
+      actions,
+      quoteId: quote.quoteId,
+      lighthouseSelectedOnly: true,
+      engagementSeatMode: 'SELECTED_A',
+    })
+    expect(gqlMock).toHaveBeenCalledWith(
+      PROMOTE_TWEET_MUTATION,
+      {
+        input: expect.objectContaining({
+          lighthouseSelectedOnly: true,
+          engagementSeatMode: 'SELECTED_A',
+        }),
+      },
+      expect.anything(),
+    )
+  })
+
   it('drives preview variables from the byte-identical Web parity fixture', async () => {
     await localStore.set('apiToken', 'lhdao_pk_test')
     gqlMock.mockResolvedValue({ previewPromoteTweetPricing: quote })

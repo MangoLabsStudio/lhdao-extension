@@ -1429,6 +1429,7 @@ export async function promoteTweetHandler(req: {
   quoteId: string
   reinvestCount?: number
   lighthouseSelectedOnly?: boolean
+  engagementSeatMode?: 'SELECTED_A'
   paymentConfirmations?: {
     requestKey: string
     paymentPreviewToken: string
@@ -1449,6 +1450,9 @@ export async function promoteTweetHandler(req: {
       tweetUrl: req.tweetUrl,
       actions: req.actions,
       lighthouseSelectedOnly: req.lighthouseSelectedOnly === true,
+      ...(req.engagementSeatMode === 'SELECTED_A'
+        ? { engagementSeatMode: 'SELECTED_A' as const }
+        : {}),
       ...(req.paymentConfirmations
         ? { paymentConfirmations: req.paymentConfirmations }
         : {}),
@@ -1508,6 +1512,7 @@ export async function previewPromoteTweetPricingHandler(req: {
   tweetUrl: string
   actions: { actionType: string; tierSlots: Record<string, number> }[]
   lighthouseSelectedOnly?: boolean
+  engagementSeatMode?: 'SELECTED_A'
 }): Promise<MsgResponse> {
   const token = await localStore.get('apiToken')
   if (!token) {
@@ -1523,6 +1528,9 @@ export async function previewPromoteTweetPricingHandler(req: {
       tweetUrl: req.tweetUrl,
       actions: req.actions,
       lighthouseSelectedOnly: req.lighthouseSelectedOnly === true,
+      ...(req.engagementSeatMode === 'SELECTED_A'
+        ? { engagementSeatMode: 'SELECTED_A' as const }
+        : {}),
     },
   }
   try {
