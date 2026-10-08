@@ -1594,8 +1594,8 @@ export async function previewPromoteTweetPricingHandler(req: {
 }
 
 const PROMOTE_ACTIONS = new Set<PromoteAction>(['LIKE', 'RT', 'COMMENT'])
-const CURRENT_PRICE_TIERS = ['S', 'A', 'B', 'C', 'D'] as const
-const QUOTE_TIERS = new Set(['A', 'B', 'C', 'D'])
+const CURRENT_PRICE_TIERS = ['S', 'A', 'B', 'C', 'D', 'F'] as const
+const QUOTE_TIERS = new Set(['A', 'B', 'C', 'D', 'F'])
 const MONEY_STRING = /^(?:0|[1-9]\d{0,15})\.\d{8}$/
 
 export async function currentEngagementMarketPricesHandler(req: {

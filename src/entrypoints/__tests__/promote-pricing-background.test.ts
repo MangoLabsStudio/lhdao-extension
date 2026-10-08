@@ -75,16 +75,31 @@ const payment = {
 }
 
 const requestedCurrentActions = ['LIKE', 'RT', 'COMMENT'] as const
-const currentPriceTiers = ['S', 'A', 'B', 'C', 'D'] as const
+const currentPriceTiers = ['S', 'A', 'B', 'C', 'D', 'F'] as const
 const currentUnitPrices = {
-  LIKE: ['0.00000000', '0.39000000', '0.29250000', '0.20000000', '0.10000000'],
-  RT: ['0.00000000', '19.50000000', '14.62500000', '10.00000000', '5.00000000'],
+  LIKE: [
+    '0.00000000',
+    '0.39000000',
+    '0.29250000',
+    '0.20000000',
+    '0.30000000',
+    '0.10000000',
+  ],
+  RT: [
+    '0.00000000',
+    '19.50000000',
+    '14.62500000',
+    '10.00000000',
+    '6.00000000',
+    '5.00000000',
+  ],
   COMMENT: [
     '0.00000000',
     '7.80000000',
     '5.85000000',
     '4.00000000',
-    '2.00000000',
+    '0.30000000',
+    '0.10000000',
   ],
 } as const
 const currentPrices = {
@@ -177,9 +192,9 @@ describe('plugin promote pricing background handlers', () => {
       {
         ...currentPrices,
         lines: [
-          ...currentPrices.lines.slice(5, 10),
-          ...currentPrices.lines.slice(0, 5),
-          ...currentPrices.lines.slice(10),
+          ...currentPrices.lines.slice(6, 12),
+          ...currentPrices.lines.slice(0, 6),
+          ...currentPrices.lines.slice(12),
         ],
       },
     ],
@@ -189,7 +204,7 @@ describe('plugin promote pricing background handlers', () => {
       {
         ...currentPrices,
         lines: currentPrices.lines
-          .slice(0, 10)
+          .slice(0, 12)
           .map((line, index) =>
             index === 0 ? { ...line, actionType: 'COMMENT' as const } : line,
           ),
@@ -298,6 +313,80 @@ describe('plugin promote pricing background handlers', () => {
     expect(gqlMock).toHaveBeenCalledTimes(1)
   })
 
+  it('accepts an F quote and forwards F counts unchanged to confirmed promotion', async () => {
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    const fActions = [{ actionType: 'RT', tierSlots: { D: 2, F: 3 } }]
+    const fQuote = {
+      ...quote,
+      principal: '27.00000000',
+      promotionFee: '2.70000000',
+      totalCost: '29.70000000',
+      paymentPreview: {
+        ...payment,
+        totals: {
+          ...payment.totals,
+          budget: '27.00000000',
+          fee: '2.70000000',
+          oldLux: '29.70000000',
+        },
+      },
+      lines: [
+        {
+          ...quote.lines[0]!,
+          actionType: 'RT',
+          tier: 'D',
+          quantity: 2,
+          pricingSource: 'LEGACY',
+          unitPrice: '6.00000000',
+          principal: '12.00000000',
+        },
+        {
+          ...quote.lines[0]!,
+          actionType: 'RT',
+          tier: 'F',
+          quantity: 3,
+          pricingSource: 'LEGACY',
+          unitPrice: '5.00000000',
+          principal: '15.00000000',
+        },
+      ],
+    }
+    gqlMock.mockResolvedValueOnce({ previewPromoteTweetPricing: fQuote })
+    await expect(
+      previewPromoteTweetPricingHandler({
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions: fActions,
+      }),
+    ).resolves.toMatchObject({ ok: true, quote: fQuote })
+    expect(gqlMock).toHaveBeenCalledWith(PREVIEW_PROMOTE_TWEET_PRICING_QUERY, {
+      input: {
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions: fActions,
+        lighthouseSelectedOnly: false,
+      },
+    })
+    gqlMock.mockResolvedValueOnce({ promoteTweet: [{ id: 'f-campaign' }] })
+    await expect(
+      promoteTweetHandler({
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions: fActions,
+        quoteId: fQuote.quoteId,
+      }),
+    ).resolves.toMatchObject({ ok: true, campaignIds: ['f-campaign'] })
+    expect(gqlMock).toHaveBeenCalledWith(
+      PROMOTE_TWEET_MUTATION,
+      {
+        input: {
+          tweetUrl: 'https://x.com/lighthouse/status/1',
+          actions: fActions,
+          quoteId: fQuote.quoteId,
+          lighthouseSelectedOnly: false,
+        },
+      },
+      expect.anything(),
+    )
+  })
+
   it('passes Selected A mode through preview and confirmed promotion', async () => {
     await localStore.set('apiToken', 'lhdao_pk_test')
     gqlMock.mockResolvedValueOnce({
@@ -388,6 +477,10 @@ describe('plugin promote pricing background handlers', () => {
     ['non-array lines', { ...quote, lines: {} }],
     ['empty lines', { ...quote, lines: [] }],
     ['wrong precision', { ...quote, precision: 7 }],
+    [
+      'unsupported E tier',
+      { ...quote, lines: [{ ...quote.lines[0]!, tier: 'E' }] },
+    ],
     ['non-string money', { ...quote, totalCost: 2.2 }],
     ['loose money', { ...quote, totalCost: '2.2' }],
     ['future root field', { ...quote, tomorrowExpectedPrice: '2.10000000' }],

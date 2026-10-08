@@ -6,6 +6,7 @@ import type {
   PromoteTweetPaymentPreview,
   PromoteTweetPricingQuote,
 } from '@/lib/queries'
+import { tierDisplay } from '@/lib/tier-display'
 import type { MsgResponse, PromoteAction } from '@/types/messages'
 
 /**
@@ -22,7 +23,7 @@ const ALL_ACTIONS: { key: PromoteAction; label: string }[] = [
   { key: 'RT', label: '转发' },
   { key: 'COMMENT', label: '评论' },
 ]
-const ALL_TIERS = ['A', 'B', 'C', 'D']
+const ALL_TIERS = ['A', 'B', 'C', 'D', 'F']
 
 type LastConfig = {
   actions: PromoteAction[]
@@ -644,7 +645,7 @@ export function PromoteDialog({
                           key={`${line.actionType}:${line.tier}`}
                         >
                           <b>
-                            {line.actionType}/{line.tier}
+                            {line.actionType}/{tierDisplay(line.tier)}
                           </b>
                           <span>{formatMoney(line.unitPrice)} LUX</span>
                         </div>
@@ -717,8 +718,9 @@ export function PromoteDialog({
                 <div className="lh-tiers">
                   {ALL_TIERS.map((t) => (
                     <div key={t} className="lh-tier">
-                      <span className="lh-tier-name">{t} 档</span>
+                      <span className="lh-tier-name">{tierDisplay(t)} 档</span>
                       <input
+                        aria-label={`${tierDisplay(t)}档招募人数`}
                         className="lh-num"
                         type="number"
                         min={0}
@@ -846,7 +848,7 @@ export function PromoteDialog({
                             {line.actionType}/
                             {lighthouseSelectedOnly && line.tier === 'A'
                               ? '严选'
-                              : line.tier}
+                              : tierDisplay(line.tier)}
                           </td>
                           <td>单价 {formatMoney(line.unitPrice)}</td>
                           <td>数量 {line.quantity}</td>

@@ -709,7 +709,7 @@ export interface EngagementCurrentMarketPrices {
   precision: 8
   lines: {
     actionType: EngagementActionType
-    tier: 'S' | 'A' | 'B' | 'C' | 'D'
+    tier: 'S' | 'A' | 'B' | 'C' | 'D' | 'F'
     pricingSource: 'PILOT' | 'LEGACY'
     unitPrice: string
   }[]
