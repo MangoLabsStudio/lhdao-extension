@@ -1,5 +1,7 @@
 {
-  "input": { "actions": ["LIKE", "RT"] },
+  "input": {
+    "actions": ["LIKE", "RT"]
+  },
   "response": {
     "asOf": "2026-08-30T06:32:00.000Z",
     "currency": "LUX",
@@ -33,6 +35,12 @@
         "actionType": "LIKE",
         "tier": "D",
         "pricingSource": "LEGACY",
+        "unitPrice": "0.30000000"
+      },
+      {
+        "actionType": "LIKE",
+        "tier": "F",
+        "pricingSource": "LEGACY",
         "unitPrice": "0.10000000"
       },
       {
@@ -56,14 +64,20 @@
       {
         "actionType": "RT",
         "tier": "C",
-        "pricingSource": "LEGACY",
-        "unitPrice": "10.00000000"
+        "pricingSource": "PILOT",
+        "unitPrice": "9.75000000"
       },
       {
         "actionType": "RT",
         "tier": "D",
-        "pricingSource": "LEGACY",
-        "unitPrice": "5.00000000"
+        "pricingSource": "PILOT",
+        "unitPrice": "5.85000000"
+      },
+      {
+        "actionType": "RT",
+        "tier": "F",
+        "pricingSource": "PILOT",
+        "unitPrice": "4.87500000"
       }
     ]
   }

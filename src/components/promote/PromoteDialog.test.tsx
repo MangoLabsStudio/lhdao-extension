@@ -165,6 +165,139 @@ describe('PromoteDialog device recovery', () => {
     document.body.replaceChildren()
   })
 
+  it('quotes and submits the editable D- seats using raw F', async () => {
+    const fQuote = {
+      ...quote,
+      lines: [
+        {
+          ...quote.lines[0]!,
+          tier: 'F',
+          quantity: 20,
+          unitPrice: '0.10000000',
+        },
+      ],
+    }
+    currentPricesResponse = () => ({
+      type: 'current-engagement-prices-result',
+      ok: true,
+      prices: {
+        ...currentPrices,
+        lines: [
+          ...currentPrices.lines,
+          {
+            actionType: 'LIKE',
+            tier: 'F',
+            pricingSource: 'LEGACY',
+            unitPrice: '0.10000000',
+          },
+        ],
+      },
+    })
+    previewResponse = () => ({
+      type: 'promote-pricing-result',
+      ok: true,
+      quote: fQuote,
+      payment,
+    })
+    promoteResponse = () => ({
+      type: 'promote-result',
+      ok: true,
+      campaignIds: ['f-campaign'],
+      reinvested: false,
+    })
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <PromoteDialog
+          tweetUrl="https://x.com/lighthouse/status/1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    expect(container.textContent).toContain('D- 档')
+    await vi.waitFor(() => expect(container.textContent).toContain('LIKE/D-'))
+    expect(container.textContent).not.toContain('LIKE/F')
+    await act(async () => findButton('赞').click())
+    const input = container.querySelector(
+      'input[aria-label="D-档招募人数"]',
+    ) as HTMLInputElement
+    expect(input).toBeInstanceOf(HTMLInputElement)
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set?.call(input, '20')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const fActions = [{ actionType: 'LIKE', tierSlots: { F: 20 } }]
+    await vi.waitFor(() =>
+      expect(requests).toContainEqual({
+        type: 'preview-promote-tweet-pricing',
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions: fActions,
+        lighthouseSelectedOnly: false,
+      }),
+    )
+    await vi.waitFor(() =>
+      expect(container.querySelector('.lh-quote-table')?.textContent).toContain(
+        'LIKE/D-',
+      ),
+    )
+    await act(async () => findButton('确认推广').click())
+    await vi.waitFor(() =>
+      expect(requests).toContainEqual(
+        expect.objectContaining({
+          type: 'promote-tweet',
+          actions: fActions,
+          quoteId: fQuote.quoteId,
+        }),
+      ),
+    )
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain('已为 1 个动作建单'),
+    )
+    expect(
+      JSON.parse(localStorage.getItem('lhdao:promote:last')!),
+    ).toMatchObject({ slots: { F: 20 } })
+  })
+
+  it('restores mixed D and F counts from the last configuration', async () => {
+    localStorage.setItem(
+      'lhdao:promote:last',
+      JSON.stringify({
+        actions: ['RT'],
+        slots: { D: 2, F: 3 },
+        reinvest: false,
+        reinvestCount: 3,
+      }),
+    )
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <PromoteDialog
+          tweetUrl="https://x.com/lighthouse/status/1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    await act(async () => findButton('按上次配置').click())
+    await vi.waitFor(() =>
+      expect(requests).toContainEqual({
+        type: 'preview-promote-tweet-pricing',
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions: [{ actionType: 'RT', tierSlots: { D: 2, F: 3 } }],
+        lighthouseSelectedOnly: false,
+      }),
+    )
+    expect(
+      (
+        container.querySelector(
+          'input[aria-label="D-档招募人数"]',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe('3')
+  })
+
   it('offers reconnect and never retries the promotion automatically', async () => {
     root = createRoot(container)
     await act(async () =>
