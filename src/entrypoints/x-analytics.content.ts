@@ -44,12 +44,14 @@ function mountCaptureDialog(): void {
       dialog, button { font: 14px/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; }
       dialog {
         position: fixed; inset: 24px 24px auto auto; margin: 0;
-        box-sizing: border-box; width: min(560px, calc(100vw - 32px));
-        max-height: calc(100dvh - 32px); overflow: auto; padding: 28px;
+        box-sizing: border-box; width: min(440px, calc(100vw - 32px));
+        height: min(520px, calc(100dvh - 48px)); overflow: auto; padding: 28px;
         border: 1px solid #d7e5e3; border-radius: 20px;
         background: #fff; color: #0f172a;
         box-shadow: 0 24px 80px #0f172a33;
       }
+      dialog[open] { display: flex; flex-direction: column; }
+      dialog > * { flex-shrink: 0; }
       dialog::backdrop { background: #0f172a80; }
       header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
       .brand { display: flex; align-items: center; gap: 9px; color: #0f766e; font-size: 12px; font-weight: 700; letter-spacing: .08em; }
@@ -67,7 +69,7 @@ function mountCaptureDialog(): void {
         background: #0f766e; color: white; cursor: pointer; font-weight: 700; }
       button:focus-visible { outline: 3px solid #5eead4; outline-offset: 3px; }
       button:disabled { cursor: wait; opacity: .65; }
-      [data-capture] { width: 100%; }
+      [data-capture] { width: 100%; margin-top: auto; }
       [data-close] { flex-shrink: 0; width: 36px; height: 36px; padding: 0;
         background: #f1f5f9; color: #475569; font-size: 24px; line-height: 1; }
       [data-launch] { display: flex; align-items: center; gap: 8px; position: fixed; right: 24px; top: 24px; z-index: 2147483647;
@@ -77,7 +79,7 @@ function mountCaptureDialog(): void {
       [role="status"]:empty { display: none; }
       [data-error="true"] { color: #b42318; }
       @media (max-width: 480px) {
-        dialog { top: 16px; right: 16px; }
+        dialog { top: 16px; right: 16px; height: min(520px, calc(100dvh - 32px)); }
         [data-launch] { top: 16px; right: 16px; }
       }
       @media (prefers-color-scheme: dark) {
