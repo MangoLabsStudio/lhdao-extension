@@ -65,6 +65,12 @@ function mountCaptureDialog(): void {
       p { margin: 0 0 20px; color: #475569; }
       .period { display: flex; justify-content: space-between; padding: 14px 16px;
         margin-bottom: 20px; border-radius: 12px; background: #f0fdfa; color: #115e59; }
+      .privacy { margin-bottom: 20px; padding: 16px; border: 1px solid #e2e8f0;
+        border-radius: 12px; background: #f8fafc; }
+      .privacy h3 { display: flex; align-items: center; gap: 8px; margin: 0;
+        font-size: 14px; line-height: 1.5; }
+      .privacy svg { width: 18px; height: 18px; color: #0f766e; flex-shrink: 0; }
+      .privacy p { margin: 8px 0 0; font-size: 13px; line-height: 1.6; }
       button { border: 0; border-radius: 999px; padding: 11px 16px;
         background: #0f766e; color: white; cursor: pointer; font-weight: 700; }
       button:focus-visible { outline: 3px solid #5eead4; outline-offset: 3px; }
@@ -87,6 +93,8 @@ function mountCaptureDialog(): void {
         p { color: #cbd5e1; }
         .brand, [role="status"] { color: #5eead4; }
         .period { background: #134e4a; color: #ccfbf1; }
+        .privacy { background: #1e293b; border-color: #334155; }
+        .privacy svg { color: #5eead4; }
         [data-close] { background: #1e293b; color: #cbd5e1; }
         [data-error="true"] { color: #fda29b; }
       }
@@ -105,6 +113,16 @@ function mountCaptureDialog(): void {
       </header>
       <p id="capture-description">读取近三个月的账号汇总，保存到你的 KOL 资料，用于严选申请。</p>
       <div class="period"><span>采集范围</span><strong>近三个月 · 3M</strong></div>
+      <section class="privacy" aria-labelledby="privacy-title">
+        <h3 id="privacy-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z" /><path d="m8.5 12 2.5 2.5 4.5-5" />
+          </svg>
+          数据与隐私保护
+        </h3>
+        <p>本次仅采集申请所需的 X 账号标识及近三个月的账号汇总数据，不读取私信、密码或其他无关信息。</p>
+        <p>采集数据通过加密连接传输，并受到访问权限控制。</p>
+      </section>
       <button type="button" data-capture autofocus>采集并保存</button>
       <div role="status" aria-live="polite"></div>
     </dialog>
