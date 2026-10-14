@@ -13,6 +13,39 @@ describe('X account analytics capture', () => {
     document.body.innerHTML = ''
   })
 
+  it('recognizes the selected 3M pill in the current X design system', () => {
+    document.body.innerHTML = `
+      <button data-slot="xds-button" class="group x-button transition-colors h-8 min-w-8 text-subtext1 bg-btn-primary text-inverted hover:bg-btn-primary-hover aria-expanded:bg-btn-primary-hover active:bg-btn-primary-pressed px-4 shrink-0"><span class="x-button-slot">3M</span></button>
+    `
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(true)
+  })
+
+  it('does not treat the current X outline pill as selected', () => {
+    document.body.innerHTML = `
+      <button data-slot="xds-button" class="group x-button transition-colors h-8 min-w-8 text-subtext1 border border-solid border-normal text-primary hover:bg-btn-ghost-hover aria-expanded:bg-btn-ghost-hover active:bg-btn-ghost-pressed px-4 shrink-0"><span class="x-button-slot">3M</span></button>
+    `
+    expect(isThreeMonthSelected(findThreeMonthButton(document)!)).toBe(false)
+  })
+
+  it('ignores aria-hidden animation digits beside accessible follower totals', () => {
+    document.body.innerHTML = `
+      <button data-testid="SideNav_AccountSwitcher_Button">@wang_jl80536</button>
+      <button>Impressions 12K</button><button>Engagement rate 1.5%</button>
+      <button>Engagements 189</button><button>Profile visits 18</button>
+      <button>Replies 93</button><button>Likes 57</button>
+      <button>Reposts 3</button><button>Bookmarks 18</button><button>Shares 0</button>
+      <div><div><div>Verified followers</div></div><div>
+        <span class="inline-flex"><span class="sr-only">627</span><span aria-hidden="true" class="flex select-none"><span class="invisible w-0">0</span><span>6</span><span>2</span><span>7</span></span></span>
+        / <span class="inline-flex"><span class="sr-only">2.1K</span><span aria-hidden="true" class="flex select-none"><span class="invisible w-0">0</span><span>2</span><span>.</span><span>1</span><span>K</span></span></span>
+      </div></div>
+    `
+    expect(captureXAnalyticsPage(document)?.metrics).toMatchObject({
+      verifiedFollowers: 627,
+      followers: 2100,
+      impressions: 12000,
+    })
+  })
+
   it('reads the signed-in handle and every 3M account summary card', () => {
     document.body.innerHTML = `
       <button data-testid="SideNav_AccountSwitcher_Button">
