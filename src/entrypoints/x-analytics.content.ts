@@ -37,6 +37,7 @@ function mountCaptureDialog(): void {
   const host = document.createElement('div')
   host.id = HOST_ID
   const shadow = host.attachShadow({ mode: 'closed' })
+  const logoUrl = chrome.runtime.getURL('icon/128.png')
   shadow.innerHTML = `
     <style>
       :host { all: initial; }
@@ -51,7 +52,13 @@ function mountCaptureDialog(): void {
       }
       dialog::backdrop { background: #0f172a80; }
       header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-      .brand { color: #0f766e; font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+      .brand { display: flex; align-items: center; gap: 9px; color: #0f766e; font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+      .brand img { width: 32px; height: 32px; flex-shrink: 0; }
+      .brand-divider { width: 1px; height: 20px; background: #cbd5e1; margin: 0 3px; }
+      .x-logo { display: grid; place-items: center; width: 32px; height: 32px;
+        border-radius: 8px; background: #0f172a; color: #fff; flex-shrink: 0; }
+      .x-logo svg { display: block; width: 18px; height: 18px; }
+      [data-launch] img { width: 22px; height: 22px; }
       h2 { margin: 8px 0 12px; font-size: 22px; line-height: 1.4; }
       p { margin: 0 0 20px; color: #475569; }
       .period { display: flex; justify-content: space-between; padding: 14px 16px;
@@ -63,7 +70,7 @@ function mountCaptureDialog(): void {
       [data-capture] { width: 100%; }
       [data-close] { flex-shrink: 0; width: 36px; height: 36px; padding: 0;
         background: #f1f5f9; color: #475569; font-size: 24px; line-height: 1; }
-      [data-launch] { position: fixed; right: 24px; top: 24px; z-index: 2147483647;
+      [data-launch] { display: flex; align-items: center; gap: 8px; position: fixed; right: 24px; top: 24px; z-index: 2147483647;
         box-shadow: 0 4px 20px #0f172a26; }
       [hidden] { display: none !important; }
       [role="status"] { margin-top: 12px; color: #0f766e; overflow-wrap: anywhere; }
@@ -82,10 +89,16 @@ function mountCaptureDialog(): void {
         [data-error="true"] { color: #fda29b; }
       }
     </style>
-    <button type="button" data-launch hidden>采集 X 数据</button>
+    <button type="button" data-launch hidden><img src="${logoUrl}" alt="" width="22" height="22">采集 X 数据</button>
     <dialog aria-labelledby="capture-title" aria-describedby="capture-description">
       <header>
-        <div><div class="brand">LIGHTHOUSE</div><h2 id="capture-title">采集 X 账号数据</h2></div>
+        <div><div class="brand">
+          <img src="${logoUrl}" alt="" width="32" height="32"><span>LIGHTHOUSE</span>
+          <span class="brand-divider" aria-hidden="true"></span>
+          <span class="x-logo"><svg viewBox="0 0 13 12" role="img" aria-label="X（Twitter）" xmlns="http://www.w3.org/2000/svg">
+            <path d="M10.2383 0H12.2317L7.87665 5.08308L13 12H8.98846L5.84648 7.80492L2.25133 12H0.25671L4.91485 6.56308L0 0H4.11338L6.95346 3.83446L10.2383 0ZM9.53864 10.7815H10.6432L3.51319 1.15446H2.32786L9.53864 10.7815Z" fill="currentColor" />
+          </svg></span>
+        </div><h2 id="capture-title">采集 X 账号数据</h2></div>
         <button type="button" data-close aria-label="关闭弹窗">×</button>
       </header>
       <p id="capture-description">读取近三个月的账号汇总，保存到你的 KOL 资料，用于严选申请。</p>
