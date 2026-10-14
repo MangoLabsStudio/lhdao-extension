@@ -55,9 +55,7 @@ export function findThreeMonthButton(
 
 const selectedDataStates = new Set(['active', 'on', 'selected', 'checked'])
 
-// X 分析页范围选择器不用任何 ARIA/data 属性：选中的范围是实心胶囊
-// （bg-text + border-transparent + text-background），未选中是描边胶囊
-// （bg-transparent）。class 是语义化 design-token，不是哈希名。
+// X 的范围按钮没有选中态 ARIA；兼容旧版胶囊和新版 XDS 的实心样式。
 const xSelectedPillClasses = [
   'bg-text',
   'border-transparent',
@@ -72,6 +70,11 @@ export function isThreeMonthSelected(button: HTMLButtonElement): boolean {
   if (state !== null) return selectedDataStates.has(state)
   const classList = button.classList
   if (classList.contains('bg-transparent')) return false
+  if (button.getAttribute('data-slot') === 'xds-button')
+    return (
+      classList.contains('bg-btn-primary') &&
+      classList.contains('text-inverted')
+    )
   return xSelectedPillClasses.every((cls) => classList.contains(cls))
 }
 
@@ -246,6 +249,7 @@ function accessibleText(node: Node, visited = new Set<Node>()): string {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
   if (node.nodeType !== Node.ELEMENT_NODE) return ''
   const element = node as Element
+  if (element.getAttribute('aria-hidden') === 'true') return ''
   if (element.localName === 'number-flow-react') {
     const value = numberFlowText(element)
     if (value) return value
