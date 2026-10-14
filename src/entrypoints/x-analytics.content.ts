@@ -1,6 +1,5 @@
 import { sendMessage } from '@/lib/messaging'
 import {
-  findThreeMonthButton,
   rollingNinetyDayPeriod,
   waitForThreeMonthCapture,
 } from '@/lib/x-analytics-capture'
@@ -28,11 +27,11 @@ export default defineContentScript({
   ],
   runAt: 'document_idle',
   main() {
-    mountCaptureDialog()
+    return mountCaptureDialog()
   },
 })
 
-function mountCaptureDialog(): void {
+async function mountCaptureDialog(): Promise<void> {
   if (document.getElementById(HOST_ID)) return
   const host = document.createElement('div')
   host.id = HOST_ID
@@ -144,30 +143,49 @@ function mountCaptureDialog(): void {
     launcher.hidden = false
     launcher.focus()
   })
+  let expectedUsername: string | undefined
   button.addEventListener('click', () => {
-    void saveCapture(button, status)
+    void saveCapture(button, status, expectedUsername)
   })
+  button.disabled = true
   open()
+  try {
+    const request = await sendMessage({ type: 'claim-x-analytics-capture' })
+    button.disabled = false
+    if (
+      request.type === 'x-analytics-auto-capture' &&
+      request.autoCapture &&
+      request.twitterUsername
+    ) {
+      expectedUsername = request.twitterUsername
+      await saveCapture(button, status, expectedUsername)
+    }
+  } catch {
+    button.disabled = false
+    fail(status, '插件连接异常，请刷新页面后重试。')
+  }
 }
 
 async function saveCapture(
   button: HTMLButtonElement,
   status: HTMLElement,
+  expectedUsername?: string,
 ): Promise<void> {
+  if (button.disabled) return
   button.disabled = true
   status.dataset.error = 'false'
   status.textContent = '正在切换到 3M 并读取汇总…'
   try {
-    const range = findThreeMonthButton(document)
-    if (!range) return fail(status, 'X 分析页尚未加载完整，请稍后重试。')
-    range.click()
     const result = await waitForThreeMonthCapture({
       root: document,
+      selectRange: true,
+      timeoutMs: 30_000,
+      stableForMs: 1000,
     })
     if (!result.rangeSelected)
       return fail(
         status,
-        '未能确认 3M 已选中，请关闭弹窗，在 X 页面选择 3M 后重试。',
+        '暂时无法读取 X 分析页，请确认已登录且可以访问账号分析，然后点击重试。',
       )
     if (!result.capture)
       return fail(
@@ -176,6 +194,14 @@ async function saveCapture(
       )
     const page = result.capture
 
+    if (
+      expectedUsername &&
+      page.twitterUsername.toLowerCase() !== expectedUsername.toLowerCase()
+    )
+      return fail(
+        status,
+        `当前是 @${page.twitterUsername}，请切换到申请账号 @${expectedUsername} 后重试。`,
+      )
     const account = await sendMessage({ type: 'get-x-analytics-status' })
     if (account.type !== 'x-analytics-status')
       return fail(status, '插件连接异常，请刷新页面后重试。')
@@ -210,7 +236,7 @@ async function saveCapture(
       }[code]
       return fail(status, message)
     }
-    status.textContent = '已保存到 KOL 资料，可以返回 Lighthouse 继续严选申请。'
+    status.textContent = '已保存到 KOL 资料，请返回 Lighthouse 提交严选申请。'
     button.textContent = '重新采集并保存'
   } catch {
     fail(status, '采集失败，请刷新页面后重试。')

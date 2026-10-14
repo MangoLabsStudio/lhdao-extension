@@ -44,7 +44,7 @@ export default defineContentScript({
           {
             __lhdaoExtPong__: true,
             version,
-            capabilities: [],
+            capabilities: ['x-analytics-auto-capture'],
           },
           window.location.origin,
         )
@@ -60,12 +60,47 @@ export default defineContentScript({
             __lhdaoExtQuery__?: string
             id?: string
             campaignId?: string
+            twitterUsername?: string
             tweetId?: string
           }
         | undefined
       if (!d || typeof d !== 'object') return
       if (d.__lhdaoExtPing__ === true) {
         pong()
+        return
+      }
+      if (
+        d.__lhdaoExtQuery__ === 'start-x-analytics' &&
+        typeof d.twitterUsername === 'string'
+      ) {
+        const id = d.id
+        chrome.runtime
+          .sendMessage({
+            type: 'start-x-analytics-capture',
+            twitterUsername: d.twitterUsername,
+          })
+          .then((r) =>
+            window.postMessage(
+              {
+                __lhdaoExtResult__: 'start-x-analytics',
+                id,
+                ok: r?.type === 'x-analytics-start-result' && r.ok === true,
+                code: r?.code,
+              },
+              window.location.origin,
+            ),
+          )
+          .catch(() =>
+            window.postMessage(
+              {
+                __lhdaoExtResult__: 'start-x-analytics',
+                id,
+                ok: false,
+                code: 'EXT_BRIDGE_ERROR',
+              },
+              window.location.origin,
+            ),
+          )
         return
       }
       // [网页走插件签名验证] 网页发 {__lhdaoExtQuery__:'verify', id, campaignId}
