@@ -42,6 +42,7 @@ function mountCaptureDialog(): void {
       :host { all: initial; }
       dialog, button { font: 14px/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; }
       dialog {
+        position: fixed; inset: 24px 24px auto auto; margin: 0;
         box-sizing: border-box; width: min(440px, calc(100vw - 32px));
         max-height: calc(100dvh - 32px); overflow: auto; padding: 28px;
         border: 1px solid #d7e5e3; border-radius: 20px;
@@ -62,12 +63,16 @@ function mountCaptureDialog(): void {
       [data-capture] { width: 100%; }
       [data-close] { flex-shrink: 0; width: 36px; height: 36px; padding: 0;
         background: #f1f5f9; color: #475569; font-size: 24px; line-height: 1; }
-      [data-launch] { position: fixed; right: 24px; bottom: 24px; z-index: 2147483647;
+      [data-launch] { position: fixed; right: 24px; top: 24px; z-index: 2147483647;
         box-shadow: 0 4px 20px #0f172a26; }
       [hidden] { display: none !important; }
       [role="status"] { margin-top: 12px; color: #0f766e; overflow-wrap: anywhere; }
       [role="status"]:empty { display: none; }
       [data-error="true"] { color: #b42318; }
+      @media (max-width: 480px) {
+        dialog { top: 16px; right: 16px; }
+        [data-launch] { top: 16px; right: 16px; }
+      }
       @media (prefers-color-scheme: dark) {
         dialog { background: #0f172a; color: #f8fafc; border-color: #334155; }
         p { color: #cbd5e1; }
