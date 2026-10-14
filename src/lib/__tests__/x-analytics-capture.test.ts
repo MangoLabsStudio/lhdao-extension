@@ -50,6 +50,53 @@ describe('X account analytics capture', () => {
     })
   })
 
+  it('reads bilingual labels inserted by page translation on X analytics', () => {
+    document.body.innerHTML = `
+      <button data-testid="SideNav_AccountSwitcher_Button">@wang_jl80536</button>
+      <button>Verified followers 认证追随者 631 / 2.1K</button>
+      <div><span>Active followers</span><span>活跃追随者</span> 1.5K / 2.1K</div>
+      <button>Impressions 印象 11.9K ↓ -53%</button>
+      <button>Engagement rate 参与率 1.5% ↓ -26%</button>
+      <button>Engagements 演出 185 ↓ -66%</button>
+      <button>Profile visits 资料访问 18 ↓ -72%</button>
+      <button>Replies 回复 90 ↓ -64%</button>
+      <button>Likes 喜欢 56 ↓ -71%</button>
+      <button>Reposts 转载 3 ↑ 50%</button>
+      <button>Bookmarks 书签 18 ↓ -14%</button>
+      <button>Shares 股份 0 ↓ -100%</button>
+    `
+    expect(captureXAnalyticsPage(document)?.metrics).toEqual({
+      verifiedFollowers: 631,
+      activeFollowers: 1500,
+      followers: 2100,
+      impressions: 11900,
+      engagementRate: 0.015,
+      engagements: 185,
+      profileVisits: 18,
+      replies: 90,
+      likes: 56,
+      reposts: 3,
+      bookmarks: 18,
+      shares: 0,
+    })
+  })
+
+  it('does not mistake a comparison percentage for a missing translated metric', () => {
+    document.body.innerHTML = '<button>Impressions 印象 — ↓ -53%</button>'
+    expect(diagnoseXAnalyticsPage(document).missing).toContain('impressions')
+  })
+
+  it('distinguishes an already selected 3M range from missing metric values', async () => {
+    document.body.innerHTML = '<button aria-pressed="true">3M</button>'
+    const result = await waitForThreeMonthCapture({
+      root: document,
+      timeoutMs: 0,
+    })
+    expect(result.rangeSelected).toBe(true)
+    expect(result.capture).toBeNull()
+    expect(result.missing).toContain('impressions')
+  })
+
   it('fails closed when a card or account identity is missing', () => {
     document.body.innerHTML = '<button>Impressions 0</button>'
     expect(captureXAnalyticsPage(document)).toBeNull()
@@ -344,7 +391,7 @@ describe('3M range refresh guard', () => {
       sleep: clock.sleep,
     })
 
-    expect(result.refreshed).toBe(false)
+    expect(result.rangeSelected).toBe(false)
   })
 
   it('accepts the capture once 3M is selected and the metrics change', async () => {
@@ -369,7 +416,7 @@ describe('3M range refresh guard', () => {
       },
     })
 
-    expect(result.refreshed).toBe(true)
+    expect(result.rangeSelected).toBe(true)
     expect(result.capture?.metrics.impressions).toBe(42_000)
   })
 
@@ -385,7 +432,7 @@ describe('3M range refresh guard', () => {
       sleep: clock.sleep,
     })
 
-    expect(result.refreshed).toBe(true)
+    expect(result.rangeSelected).toBe(true)
     expect(result.capture?.metrics.impressions).toBe(11_700)
   })
 
@@ -407,7 +454,7 @@ describe('3M range refresh guard', () => {
       },
     })
 
-    expect(result.refreshed).toBe(true)
+    expect(result.rangeSelected).toBe(true)
     expect(result.capture?.metrics.impressions).toBe(11_700)
   })
 })

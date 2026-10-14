@@ -84,7 +84,7 @@ export interface ThreeMonthCaptureWait {
 }
 
 export interface ThreeMonthCaptureResult extends XAnalyticsPageDiagnostic {
-  refreshed: boolean
+  rangeSelected: boolean
 }
 
 export async function waitForThreeMonthCapture({
@@ -98,10 +98,10 @@ export async function waitForThreeMonthCapture({
   for (;;) {
     const diagnostic = diagnoseXAnalyticsPage(root)
     const range = findThreeMonthButton(root)
-    if (range && isThreeMonthSelected(range) && diagnostic.capture) {
-      return { ...diagnostic, refreshed: true }
+    const rangeSelected = Boolean(range && isThreeMonthSelected(range))
+    if ((rangeSelected && diagnostic.capture) || now() >= deadline) {
+      return { ...diagnostic, rangeSelected }
     }
-    if (now() >= deadline) return { ...diagnostic, refreshed: false }
     await sleep(intervalMs)
   }
 }
@@ -132,7 +132,7 @@ export function diagnoseXAnalyticsPage(
   for (const control of candidates) {
     const text = accessibleText(control).replace(/\s+/g, ' ').trim()
     const followers = text.match(
-      /^(Verified followers|Active followers)\s+([\d.,]+[KMB]?)\s*\/\s*([\d.,]+[KMB]?)/i,
+      /^(Verified followers|Active followers)[\s\p{Script=Han}]+([\d.,]+[KMB]?)\s*\/\s*([\d.,]+[KMB]?)/iu,
     )
     if (followers) {
       const value = parseCompactNumber(followers[2])
@@ -150,7 +150,11 @@ export function diagnoseXAnalyticsPage(
     }
     for (const [label, key] of Object.entries(summaryMetrics)) {
       if (!text.toLowerCase().startsWith(`${label.toLowerCase()} `)) continue
-      const raw = text.slice(label.length).trim().split(/\s+/)[0]
+      // Page translation inserts Chinese labels between the original label and value.
+      const raw = text
+        .slice(label.length)
+        .replace(/^[\s\p{Script=Han}]+/u, '')
+        .split(/\s+/)[0]
       const value =
         key === 'engagementRate' ? parsePercent(raw) : parseCompactNumber(raw)
       if (value === null) continue
