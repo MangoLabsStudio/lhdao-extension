@@ -44,7 +44,7 @@ function mountCaptureDialog(): void {
       dialog, button { font: 14px/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; }
       dialog {
         position: fixed; inset: 24px 24px auto auto; margin: 0;
-        box-sizing: border-box; width: min(440px, calc(100vw - 32px));
+        box-sizing: border-box; width: min(560px, calc(100vw - 32px));
         max-height: calc(100dvh - 32px); overflow: auto; padding: 28px;
         border: 1px solid #d7e5e3; border-radius: 20px;
         background: #fff; color: #0f172a;
