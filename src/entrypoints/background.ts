@@ -89,6 +89,12 @@ import {
 } from '@/lib/storage'
 import { tierDisplay } from '@/lib/tier-display'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
+import {
+  claimAnalyticsCapture,
+  finishAnalyticsCapture,
+  pendingAnalyticsCapture,
+  startAnalyticsCapture,
+} from '@/lib/x-analytics-auto-capture'
 import type {
   // MsgRequest, // Binance Square handler disabled
   MsgResponse,
@@ -320,6 +326,10 @@ export default defineBackground(() => {
   void chrome.alarms.clear(ALARM_NAME)
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
+    if (req.type === 'start-x-analytics-capture')
+      return startAnalyticsCapture(req.twitterUsername, sender)
+    if (req.type === 'claim-x-analytics-capture')
+      return claimAnalyticsCapture(sender)
     if (
       sender.id === chrome.runtime.id &&
       ((req.type === 'get-popup-data' &&
@@ -361,12 +371,17 @@ export default defineBackground(() => {
             completed: status.myXAnalytics.completed,
           }
         }
+        const pending =
+          sender.tab?.id === undefined
+            ? null
+            : await pendingAnalyticsCapture(sender.tab.id)
         const observed = req.twitterUsername.toLowerCase()
         const bound = status.myXAnalytics.twitterUsername?.toLowerCase() ?? null
         if (
           !status.myXAnalytics.twitterUserId ||
           !bound ||
-          observed !== bound
+          observed !== bound ||
+          (pending && pending.twitterUsername !== bound)
         ) {
           return {
             type: 'x-analytics-save-result',
@@ -388,6 +403,8 @@ export default defineBackground(() => {
             },
           },
         )
+        if (sender.tab?.id !== undefined)
+          await finishAnalyticsCapture(sender.tab.id).catch(() => {})
         return {
           type: 'x-analytics-save-result',
           ok: true,

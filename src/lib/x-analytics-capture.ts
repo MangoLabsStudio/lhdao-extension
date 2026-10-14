@@ -78,6 +78,8 @@ export function isThreeMonthSelected(button: HTMLButtonElement): boolean {
 export interface ThreeMonthCaptureWait {
   root: ParentNode
   timeoutMs?: number
+  selectRange?: boolean
+  stableForMs?: number
   intervalMs?: number
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -91,17 +93,40 @@ export async function waitForThreeMonthCapture({
   root,
   timeoutMs = 8_000,
   intervalMs = 250,
+  selectRange = false,
+  stableForMs = 0,
   now = () => Date.now(),
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }: ThreeMonthCaptureWait): Promise<ThreeMonthCaptureResult> {
   const deadline = now() + timeoutMs
+  let lastClickAt = Number.NEGATIVE_INFINITY
+  let stableSince = now()
+  let previous = ''
   for (;;) {
-    const diagnostic = diagnoseXAnalyticsPage(root)
     const range = findThreeMonthButton(root)
-    const rangeSelected = Boolean(range && isThreeMonthSelected(range))
-    if ((rangeSelected && diagnostic.capture) || now() >= deadline) {
-      return { ...diagnostic, rangeSelected }
+    if (
+      selectRange &&
+      range &&
+      !isThreeMonthSelected(range) &&
+      !range.disabled &&
+      range.getAttribute('aria-disabled') !== 'true' &&
+      now() - lastClickAt >= 1000
+    ) {
+      lastClickAt = now()
+      range.click()
     }
+    const diagnostic = diagnoseXAnalyticsPage(root)
+    const rangeSelected = Boolean(range && isThreeMonthSelected(range))
+    const signature =
+      rangeSelected && diagnostic.capture
+        ? JSON.stringify(diagnostic.capture)
+        : ''
+    if (!signature || signature !== previous) stableSince = now()
+    previous = signature
+    if (signature && now() - stableSince >= stableForMs)
+      return { ...diagnostic, rangeSelected }
+    if (now() >= deadline)
+      return { ...diagnostic, capture: null, rangeSelected }
     await sleep(intervalMs)
   }
 }

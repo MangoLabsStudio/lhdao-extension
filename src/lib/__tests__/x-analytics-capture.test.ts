@@ -458,3 +458,52 @@ describe('3M range refresh guard', () => {
     expect(result.capture?.metrics.impressions).toBe(11_700)
   })
 })
+
+it('waits for a late 3M selector, selects it once, and waits for stable complete values', async () => {
+  document.body.innerHTML = ''
+  let now = 0
+  const click = vi.fn(() => {
+    document.querySelector('button')!.setAttribute('aria-pressed', 'true')
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      `<div>@demo</div><button>Verified followers 2 / 10</button><button>Impressions 10</button><button>Engagement rate 1%</button><button>Engagements 1</button><button>Profile visits 1</button><button>Replies 1</button><button>Likes 1</button><button>Reposts 0</button><button>Bookmarks 0</button><button>Shares 0</button>`,
+    )
+  })
+  const result = await waitForThreeMonthCapture({
+    root: document,
+    selectRange: true,
+    stableForMs: 750,
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms
+      if (now === 500) {
+        document.body.innerHTML = '<button aria-pressed="false">3M</button>'
+        document.querySelector('button')!.addEventListener('click', click)
+      }
+    },
+  })
+  expect(result.capture?.twitterUsername).toBe('demo')
+  expect(click).toHaveBeenCalledTimes(1)
+  expect(now).toBeGreaterThanOrEqual(1250)
+})
+
+it('retries an unhydrated 3M control after it becomes interactive', async () => {
+  document.body.innerHTML = '<button disabled aria-pressed="false">3M</button>'
+  const button = document.querySelector('button')!
+  const click = vi.spyOn(button, 'click')
+  let now = 0
+  await waitForThreeMonthCapture({
+    root: document,
+    selectRange: true,
+    timeoutMs: 3000,
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms
+      if (now === 500) button.disabled = false
+      if (now === 1000)
+        button.onclick = () => button.setAttribute('aria-pressed', 'true')
+    },
+  })
+  expect(button.getAttribute('aria-pressed')).toBe('true')
+  expect(click).toHaveBeenCalledTimes(2)
+})

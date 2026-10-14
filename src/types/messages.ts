@@ -32,6 +32,8 @@ import type {
 export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
 
 export type MsgRequest =
+  | { type: 'start-x-analytics-capture'; twitterUsername: string }
+  | { type: 'claim-x-analytics-capture' }
   | { type: 'get-x-analytics-status' }
   | {
       type: 'save-x-analytics'
@@ -130,6 +132,12 @@ export type MsgRequest =
 // ── Responses ────────────────────────────────────────────────────────
 
 export type MsgResponse =
+  | { type: 'x-analytics-start-result'; ok: boolean; code?: string }
+  | {
+      type: 'x-analytics-auto-capture'
+      autoCapture: boolean
+      twitterUsername?: string
+    }
   | {
       type: 'x-analytics-status'
       twitterUserId: string | null
