@@ -22,6 +22,11 @@ let container: HTMLDivElement
 
 beforeEach(async () => {
   fakeBrowser.reset()
+  vi.spyOn(fakeBrowser.runtime, 'getManifest').mockReturnValue({
+    manifest_version: 3,
+    name: 'Lighthouse',
+    version: '9.8.7',
+  })
   vi.mocked(gql).mockClear()
   Object.assign(globalThis, {
     chrome: fakeBrowser,
@@ -36,6 +41,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
+  vi.restoreAllMocks()
 })
 
 it('shows an existing token without automatically querying me', async () => {
@@ -44,4 +50,5 @@ it('shows an existing token without automatically querying me', async () => {
 
   expect(gql).not.toHaveBeenCalled()
   expect(container.textContent).toContain('token 已保存')
+  expect(container.textContent).toContain('Lighthouse Extension · v9.8.7')
 })

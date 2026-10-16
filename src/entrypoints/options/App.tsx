@@ -184,7 +184,9 @@ export function App() {
         <p>
           token 仅存于 chrome.storage.local,不会出现在 localStorage 或 cookie。
         </p>
-        <p className="mt-1">Lighthouse Extension · v0.1.0</p>
+        <p className="mt-1">
+          Lighthouse Extension · v{chrome.runtime.getManifest().version}
+        </p>
       </footer>
     </div>
   )

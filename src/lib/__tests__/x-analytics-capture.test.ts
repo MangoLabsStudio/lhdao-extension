@@ -634,3 +634,74 @@ it('accepts equal final metrics when the cards were cleared and reloaded after t
   expect(result.capture?.metrics.impressions).toBe(100)
   expect(elapsed).toBeGreaterThanOrEqual(1750)
 })
+
+it.each([
+  'Something went wrong, but don’t fret — it’s not your fault.',
+  '出错了，但别担心 — 这不是你的错。',
+])('reports the X error screen without waiting for missing metrics: %s', async (message) => {
+  document.body.innerHTML = `<main><span>${message}</span><button>Retry</button></main>`
+  const sleep = vi.fn()
+  const result = await waitForThreeMonthCapture({
+    root: document,
+    sleep,
+    timeoutMs: 0,
+  })
+  expect(result.pageError).toBe('X_PAGE_ERROR')
+  expect(result.capture).toBeNull()
+  expect(sleep).not.toHaveBeenCalled()
+})
+
+it.each([
+  '<aside><span>Something went wrong, but don’t fret — it’s not your fault.</span></aside>',
+  '<article><span>Something went wrong, but don’t fret — it’s not your fault.</span></article>',
+  '<div hidden><span>Something went wrong, but don’t fret — it’s not your fault.</span></div>',
+])('does not mistake unrelated or hidden content for an X error: %s', async (html) => {
+  document.body.innerHTML = `<main>${html}</main>`
+  const result = await waitForThreeMonthCapture({
+    root: document,
+    timeoutMs: 0,
+  })
+  expect(result.pageError).toBeUndefined()
+})
+
+it('uses validated API metrics without requiring DOM metric cards', async () => {
+  document.body.innerHTML =
+    '<button aria-pressed="true">3M</button><button data-testid="SideNav_AccountSwitcher_Button">@demo</button>'
+  const result = await waitForThreeMonthCapture({
+    root: document,
+    timeoutMs: 0,
+    network: () => ({
+      ok: true,
+      from: 0,
+      to: 1,
+      twitterUserId: '123',
+      metrics: { impressions: 1201 } as never,
+    }),
+  })
+  expect(result.capture).toMatchObject({
+    twitterUsername: 'demo',
+    twitterUserId: '123',
+    metrics: { impressions: 1201 },
+  })
+})
+it('never silently saves DOM metrics when API capture is requested but absent', async () => {
+  document.body.innerHTML = '<button aria-pressed="true">3M</button>'
+  const result = await waitForThreeMonthCapture({
+    root: document,
+    timeoutMs: 0,
+    network: () => undefined,
+  })
+  expect(result.capture).toBeNull()
+  expect(result.missing).toEqual(['networkResponse'])
+})
+
+it('prefers the known API error over X generic error screen', async () => {
+  document.body.innerHTML =
+    '<main><span>Something went wrong, but don’t fret — it’s not your fault.</span></main>'
+  const result = await waitForThreeMonthCapture({
+    root: document,
+    timeoutMs: 0,
+    network: () => ({ ok: false, from: 0, to: 1, code: 'HTTP_429' }),
+  })
+  expect(result.apiError).toBe('HTTP_429')
+})

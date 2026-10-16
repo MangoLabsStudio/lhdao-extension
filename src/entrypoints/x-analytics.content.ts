@@ -3,6 +3,7 @@ import {
   rollingNinetyDayPeriod,
   waitForThreeMonthCapture,
 } from '@/lib/x-analytics-capture'
+import { createAnalyticsNetworkReader } from '@/lib/x-analytics-network'
 
 const HOST_ID = 'lhdao-x-analytics-capture'
 const metricLabels: Record<string, string> = {
@@ -25,13 +26,23 @@ export default defineContentScript({
     'https://x.com/i/account_analytics*',
     'https://twitter.com/i/account_analytics*',
   ],
-  runAt: 'document_idle',
-  main() {
-    return mountCaptureDialog()
+  runAt: 'document_start',
+  async main(ctx) {
+    const network = createAnalyticsNetworkReader(window)
+    ctx.onInvalidated?.(() => network.dispose())
+    if (!document.documentElement)
+      await new Promise<void>((resolve) =>
+        document.addEventListener('DOMContentLoaded', () => resolve(), {
+          once: true,
+        }),
+      )
+    return mountCaptureDialog(network.get)
   },
 })
 
-async function mountCaptureDialog(): Promise<void> {
+async function mountCaptureDialog(
+  network: ReturnType<typeof createAnalyticsNetworkReader>['get'],
+): Promise<void> {
   if (document.getElementById(HOST_ID)) return
   const host = document.createElement('div')
   host.id = HOST_ID
@@ -145,7 +156,7 @@ async function mountCaptureDialog(): Promise<void> {
   })
   let expectedUsername: string | undefined
   button.addEventListener('click', () => {
-    void saveCapture(button, status, expectedUsername)
+    void saveCapture(button, status, expectedUsername, network)
   })
   button.disabled = true
   open()
@@ -158,7 +169,7 @@ async function mountCaptureDialog(): Promise<void> {
       request.twitterUsername
     ) {
       expectedUsername = request.twitterUsername
-      await saveCapture(button, status, expectedUsername)
+      await saveCapture(button, status, expectedUsername, network)
     }
   } catch {
     button.disabled = false
@@ -170,22 +181,53 @@ async function saveCapture(
   button: HTMLButtonElement,
   status: HTMLElement,
   expectedUsername?: string,
+  network?: ReturnType<typeof createAnalyticsNetworkReader>['get'],
 ): Promise<void> {
   if (button.disabled) return
   button.disabled = true
   status.dataset.error = 'false'
-  status.textContent = '正在切换到 3M 并读取汇总…'
+  status.textContent = '正在切换到 3M 并等待分析接口响应…'
+  let stage: 'read' | 'account' | 'save' = 'read'
   try {
     const result = await waitForThreeMonthCapture({
       root: document,
+      network,
       selectRange: true,
       timeoutMs: 30_000,
       stableForMs: 1000,
     })
+    if (result.apiError) {
+      const explanations: Record<string, string> = {
+        HTTP_401: 'X 登录状态已失效，请重新登录 X 后重试。',
+        HTTP_403: 'X 拒绝了分析请求，请检查该账号是否能正常访问分析功能。',
+        HTTP_404:
+          'X 分析接口返回 404，未找到请求的资源；无法仅凭此判断账号是否受限。',
+        HTTP_429: 'X 请求过于频繁，请稍后重试。',
+        GRAPHQL:
+          'X 分析接口返回了业务错误，未取得完整数据。请在 X 分析页重试。',
+        SCHEMA:
+          'X 分析响应缺少必要字段或结构不受支持，请联系客服检查插件兼容性。',
+        NETWORK: 'X 分析请求未完成，请检查网络后重试。',
+      }
+      return fail(
+        status,
+        `${explanations[result.apiError] ?? 'X 分析服务暂时异常，请稍后重试。'} 本次未保存。（${result.apiError}）`,
+      )
+    }
+    if (result.pageError)
+      return fail(
+        status,
+        'X 分析页加载失败，本次未采集或保存。页面提示“出错了”，未提供具体原因；请先关闭弹窗，在 X 页面点击 Retry（重试）或刷新，确认数据恢复后再重试采集。',
+      )
     if (!result.rangeSelected)
       return fail(
         status,
         '暂时无法读取 X 分析页，请确认已登录且可以访问账号分析，然后点击重试。',
+      )
+    if (!result.capture && result.missing.includes('networkResponse'))
+      return fail(
+        status,
+        '未收到可验证的近 90 天分析响应，本次未保存。请刷新 X 分析页后重试；若仍失败，请联系客服检查接口兼容性。',
       )
     if (!result.capture && result.missing.includes('periodRefresh'))
       return fail(
@@ -207,6 +249,8 @@ async function saveCapture(
         status,
         `当前是 @${page.twitterUsername}，请切换到申请账号 @${expectedUsername} 后重试。`,
       )
+    stage = 'account'
+    status.textContent = '数据已读取，正在核对绑定账号…'
     const account = await sendMessage({ type: 'get-x-analytics-status' })
     if (account.type !== 'x-analytics-status')
       return fail(status, '插件连接异常，请刷新页面后重试。')
@@ -221,12 +265,21 @@ async function saveCapture(
         `当前是 @${page.twitterUsername}，请切换到已绑定的 @${account.twitterUsername}。`,
       )
 
+    if (page.twitterUserId && page.twitterUserId !== account.twitterUserId)
+      return fail(
+        status,
+        '分析响应的账号与 Lighthouse 绑定账号不一致，本次未保存。请切换到绑定账号后重新采集。',
+      )
     const capturedAt = new Date()
+    stage = 'save'
+    status.textContent = '数据已读取，正在保存到 Lighthouse…'
     const saved = await sendMessage({
       type: 'save-x-analytics',
       captureId: crypto.randomUUID(),
       twitterUsername: page.twitterUsername,
-      ...rollingNinetyDayPeriod(capturedAt),
+      ...(page.periodStart && page.periodEnd
+        ? { periodStart: page.periodStart, periodEnd: page.periodEnd }
+        : rollingNinetyDayPeriod(capturedAt)),
       capturedAt: capturedAt.toISOString(),
       metrics: page.metrics,
     })
@@ -244,8 +297,17 @@ async function saveCapture(
     status.textContent = '已保存到 KOL 资料，请返回 Lighthouse 提交严选申请。'
     button.textContent = '重新采集并保存'
   } catch {
-    fail(status, '采集失败，请刷新页面后重试。')
+    fail(
+      status,
+      {
+        read: '读取 X 页面失败，尚未保存。请刷新 X 分析页后重试。',
+        account:
+          '无法核对 Lighthouse 绑定账号，尚未保存。请检查插件连接后重试。',
+        save: '未能确认保存结果。请检查 Lighthouse 申请页的采集状态；若未更新，请重试。',
+      }[stage],
+    )
   } finally {
+    if (status.dataset.error === 'true') button.textContent = '重试采集'
     button.disabled = false
   }
 }

@@ -1,3 +1,5 @@
+import type { AnalyticsResponse } from './x-analytics-network'
+
 const summaryMetrics = {
   Impressions: 'impressions',
   'Engagement rate': 'engagementRate',
@@ -18,6 +20,9 @@ const requiredMetrics = [
 
 export interface XAnalyticsPageCapture {
   twitterUsername: string
+  twitterUserId?: string
+  periodStart?: string
+  periodEnd?: string
   metrics: Record<(typeof requiredMetrics)[number], number> & {
     activeFollowers: number | null
   }
@@ -79,6 +84,7 @@ export function isThreeMonthSelected(button: HTMLButtonElement): boolean {
 }
 
 export interface ThreeMonthCaptureWait {
+  network?: () => AnalyticsResponse | undefined
   root: ParentNode
   timeoutMs?: number
   selectRange?: boolean
@@ -90,6 +96,8 @@ export interface ThreeMonthCaptureWait {
 
 export interface ThreeMonthCaptureResult extends XAnalyticsPageDiagnostic {
   rangeSelected: boolean
+  pageError?: 'X_PAGE_ERROR'
+  apiError?: string
 }
 
 // Keep an unconfirmed switch across retries; the selected pill alone is not evidence of fresh data.
@@ -105,6 +113,7 @@ function periodSignature(capture: XAnalyticsPageCapture | null): string {
 
 export async function waitForThreeMonthCapture({
   root,
+  network,
   timeoutMs = 8_000,
   intervalMs = 250,
   selectRange = false,
@@ -117,8 +126,37 @@ export async function waitForThreeMonthCapture({
   let stableSince = now()
   let previous = ''
   for (;;) {
+    // Read X's own error screen, never tweet content or the extension dialog.
+    const primary = root.querySelector(
+      '[data-testid="primaryColumn"], main, [role="main"]',
+    )
+    const pageFailed =
+      primary &&
+      Array.from(primary.querySelectorAll('span, p, div')).some((element) => {
+        if (
+          element.children.length ||
+          element.closest('article, aside, nav, [hidden], [aria-hidden="true"]')
+        )
+          return false
+        const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+        return (
+          /^Something went wrong, but don[’']t fret/i.test(text) ||
+          /^出错了，但别担心/.test(text)
+        )
+      })
+    if (pageFailed) {
+      const response = network?.()
+      return {
+        capture: null,
+        missing: [],
+        rangeSelected: false,
+        pageError: 'X_PAGE_ERROR',
+        ...(response && !response.ok ? { apiError: response.code } : {}),
+      }
+    }
     const range = findThreeMonthButton(root)
     if (
+      !network &&
       range &&
       !isThreeMonthSelected(range) &&
       !pendingPeriodRefresh.has(root)
@@ -138,6 +176,42 @@ export async function waitForThreeMonthCapture({
     ) {
       lastClickAt = now()
       range.click()
+    }
+    if (network) {
+      const result = network()
+      const rangeSelected = Boolean(range && isThreeMonthSelected(range))
+      const handle = root
+        .querySelector('[data-testid="SideNav_AccountSwitcher_Button"]')
+        ?.textContent?.match(/@([A-Za-z0-9_]{1,15})\b/)?.[1]
+      if (result && !result.ok)
+        return {
+          capture: null,
+          missing: [],
+          rangeSelected,
+          apiError: result.code,
+        }
+      if (rangeSelected && result?.ok && handle)
+        return {
+          capture: {
+            twitterUsername: handle,
+            twitterUserId: result.twitterUserId,
+            periodStart: new Date(result.from).toISOString().slice(0, 10),
+            periodEnd: new Date(result.to - 1).toISOString().slice(0, 10),
+            metrics: result.metrics,
+          },
+          missing: [],
+          rangeSelected,
+        }
+      if (now() >= deadline)
+        return {
+          capture: null,
+          rangeSelected,
+          missing: [
+            result?.ok && !handle ? 'twitterUsername' : 'networkResponse',
+          ],
+        }
+      await sleep(intervalMs)
+      continue
     }
     const diagnostic = diagnoseXAnalyticsPage(root)
     const rangeSelected = Boolean(range && isThreeMonthSelected(range))

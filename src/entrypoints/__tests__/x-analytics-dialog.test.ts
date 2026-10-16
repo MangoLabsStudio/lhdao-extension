@@ -210,3 +210,214 @@ it('explains an unconfirmed period refresh and does not save old data', async ()
     expect.objectContaining({ type: 'save-x-analytics' }),
   )
 })
+
+it('explains an X page failure immediately and never attempts to save', async () => {
+  document.body.innerHTML = `<main><span>Something went wrong, but don’t fret — it’s not your fault.</span><button>Retry</button></main>`
+  const send = vi.spyOn(messaging, 'sendMessage')
+  const button = shadow.querySelector<HTMLButtonElement>('[data-capture]')!
+  button.click()
+  await vi.waitFor(() => {
+    expect(shadow.querySelector('[role="status"]')?.textContent).toContain(
+      'X 分析页加载失败',
+    )
+    expect(button.disabled).toBe(false)
+  })
+  expect(button.textContent).toBe('重试采集')
+  expect(send).not.toHaveBeenCalledWith(
+    expect.objectContaining({ type: 'save-x-analytics' }),
+  )
+})
+
+it.each([
+  ['read', '读取 X 页面失败'],
+  ['account', '无法核对 Lighthouse 绑定账号'],
+  ['save', '未能确认保存结果'],
+])('reports a failure at the %s stage without claiming success', async (stage, message) => {
+  const wait = vi.spyOn(capture, 'waitForThreeMonthCapture').mockResolvedValue({
+    rangeSelected: true,
+    missing: [],
+    capture: {
+      twitterUsername: 'demo_kol',
+      metrics: {} as capture.XAnalyticsPageCapture['metrics'],
+    },
+  })
+  if (stage === 'read') wait.mockRejectedValue(new Error('read failed'))
+  const send = vi
+    .spyOn(messaging, 'sendMessage')
+    .mockImplementation(async (request) => {
+      if (stage === 'account' || request.type === 'save-x-analytics')
+        throw new Error('connection interrupted')
+      return {
+        type: 'x-analytics-status',
+        twitterUserId: 'demo-id',
+        twitterUsername: 'demo_kol',
+        completed: false,
+      }
+    })
+  const button = shadow.querySelector<HTMLButtonElement>('[data-capture]')!
+  button.click()
+  await vi.waitFor(() => {
+    expect(shadow.querySelector('[role="status"]')?.textContent).toContain(
+      message,
+    )
+    expect(button.disabled).toBe(false)
+  })
+  expect(button.textContent).toBe('重试采集')
+  if (stage !== 'save')
+    expect(send).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'save-x-analytics' }),
+    )
+})
+
+it('shows an API HTTP error and never falls back to saving DOM data', async () => {
+  vi.spyOn(capture, 'waitForThreeMonthCapture').mockResolvedValue({
+    rangeSelected: true,
+    capture: null,
+    missing: [],
+    apiError: 'HTTP_403',
+  })
+  const send = vi.spyOn(messaging, 'sendMessage')
+  shadow.querySelector<HTMLButtonElement>('[data-capture]')!.click()
+  await vi.waitFor(() =>
+    expect(shadow.querySelector('[role="status"]')?.textContent).toContain(
+      'HTTP_403',
+    ),
+  )
+  expect(send).not.toHaveBeenCalledWith(
+    expect.objectContaining({ type: 'save-x-analytics' }),
+  )
+})
+
+it('rejects an API identity mismatch even when the displayed handle matches', async () => {
+  vi.spyOn(capture, 'waitForThreeMonthCapture').mockResolvedValue({
+    rangeSelected: true,
+    missing: [],
+    capture: {
+      twitterUsername: 'demo',
+      twitterUserId: 'wrong-id',
+      metrics: {} as never,
+    },
+  })
+  const send = vi.spyOn(messaging, 'sendMessage').mockResolvedValue({
+    type: 'x-analytics-status',
+    twitterUsername: 'demo',
+    twitterUserId: 'bound-id',
+    completed: false,
+  })
+  shadow.querySelector<HTMLButtonElement>('[data-capture]')!.click()
+  await vi.waitFor(() =>
+    expect(shadow.querySelector('[role="status"]')?.textContent).toContain(
+      '分析响应的账号',
+    ),
+  )
+  expect(send).not.toHaveBeenCalledWith(
+    expect.objectContaining({ type: 'save-x-analytics' }),
+  )
+})
+
+it('saves an actual normalized bridge event with no DOM metric cards', async () => {
+  const { ANALYTICS_EVENT } = await import('@/lib/x-analytics-network')
+  document.body.innerHTML =
+    '<button aria-pressed="true">3M</button><button data-testid="SideNav_AccountSwitcher_Button">@demo</button>'
+  const metrics = {
+    impressions: 1201,
+    engagements: 9,
+    engagementRate: 9 / 1201,
+    followers: 100,
+    verifiedFollowers: 12,
+    activeFollowers: null,
+    likes: 7,
+    replies: 2,
+    reposts: 0,
+    bookmarks: 0,
+    shares: 0,
+    profileVisits: 0,
+  }
+  const to = (Math.floor(Date.now() / 86400000) + 1) * 86400000
+  const send = vi
+    .spyOn(messaging, 'sendMessage')
+    .mockImplementation(async (message) => {
+      if (message.type === 'get-x-analytics-status')
+        return {
+          type: 'x-analytics-status',
+          twitterUsername: 'demo',
+          twitterUserId: '123',
+          completed: false,
+        }
+      return {
+        type: 'x-analytics-save-result',
+        ok: true,
+        savedAt: new Date().toISOString(),
+      }
+    })
+  window.dispatchEvent(
+    new MessageEvent('message', {
+      source: window,
+      origin: location.origin,
+      data: {
+        type: ANALYTICS_EVENT,
+        startedAt: Date.now(),
+        result: {
+          ok: true,
+          from: to - 90 * 86400000,
+          to,
+          twitterUserId: '123',
+          metrics,
+        },
+      },
+    }),
+  )
+  shadow.querySelector<HTMLButtonElement>('[data-capture]')!.click()
+  await vi.waitFor(() =>
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'save-x-analytics',
+        twitterUsername: 'demo',
+        metrics,
+      }),
+    ),
+  )
+  expect(shadow.querySelector('[role="status"]')?.textContent).toContain(
+    '已保存到 KOL 资料',
+  )
+})
+
+it('saves the response date range even if the clock changes before account verification finishes', async () => {
+  const period = { periodStart: '2026-07-19', periodEnd: '2026-10-16' }
+  vi.spyOn(capture, 'waitForThreeMonthCapture').mockResolvedValue({
+    rangeSelected: true,
+    missing: [],
+    capture: {
+      twitterUsername: 'demo',
+      twitterUserId: '123',
+      ...period,
+      metrics: {} as never,
+    },
+  })
+  const send = vi
+    .spyOn(messaging, 'sendMessage')
+    .mockImplementation(async (message) => {
+      if (message.type === 'get-x-analytics-status')
+        return {
+          type: 'x-analytics-status',
+          twitterUsername: 'demo',
+          twitterUserId: '123',
+          completed: false,
+        }
+      return {
+        type: 'x-analytics-save-result',
+        ok: true,
+        savedAt: new Date().toISOString(),
+      }
+    })
+  vi.spyOn(capture, 'rollingNinetyDayPeriod').mockReturnValue({
+    periodStart: '2026-07-20',
+    periodEnd: '2026-10-17',
+  })
+  shadow.querySelector<HTMLButtonElement>('[data-capture]')!.click()
+  await vi.waitFor(() =>
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'save-x-analytics', ...period }),
+    ),
+  )
+})

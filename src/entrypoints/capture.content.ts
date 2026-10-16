@@ -13,6 +13,7 @@ import {
   extractCreatedCommentTweetId,
   extractFollowFromResponse,
 } from '@/lib/engagement-capture'
+import { installAnalyticsNetworkObserver } from '@/lib/x-analytics-network-observer'
 
 const FOLLOW_RE = /\/friendships\/create/
 const GQL_OP_RE = /\/graphql\/[^/]+\/([A-Za-z0-9_]+)/
@@ -23,6 +24,7 @@ export default defineContentScript({
   world: 'MAIN',
   runAt: 'document_start',
   main() {
+    installAnalyticsNetworkObserver()
     dbg('capture.content 已注入 (MAIN world)')
 
     const opFromUrl = (url?: string): string | null => {
