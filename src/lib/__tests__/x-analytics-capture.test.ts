@@ -469,7 +469,7 @@ describe('3M range refresh guard', () => {
     expect(result.capture?.metrics.impressions).toBe(11_700)
   })
 
-  it('accepts unchanged metrics after switching to 3M', async () => {
+  it('rejects unchanged metrics after switching to 3M without a refresh', async () => {
     renderAnalyticsPage(false)
     let tick = 0
 
@@ -488,7 +488,7 @@ describe('3M range refresh guard', () => {
     })
 
     expect(result.rangeSelected).toBe(true)
-    expect(result.capture?.metrics.impressions).toBe(11_700)
+    expect(result.capture).toBeNull()
   })
 })
 
@@ -539,4 +539,98 @@ it('retries an unhydrated 3M control after it becomes interactive', async () => 
   })
   expect(button.getAttribute('aria-pressed')).toBe('true')
   expect(click).toHaveBeenCalledTimes(2)
+})
+
+function slowRangePage() {
+  const page = document.implementation.createHTMLDocument()
+  page.body.innerHTML = `<button data-testid="SideNav_AccountSwitcher_Button">@creator</button><button id="range">3M</button><button id="followers">Verified followers 598 / 2.2K</button><button id="impressions">Impressions 100</button><button>Engagement rate 1.3%</button><button>Engagements 158</button><button>Profile visits 23</button><button>Replies 74</button><button>Likes 46</button><button>Reposts 2</button><button>Bookmarks 13</button><button>Shares 0</button>`
+  page.querySelector<HTMLButtonElement>('#range')!.onclick = () =>
+    page.querySelector('#range')!.setAttribute('aria-pressed', 'true')
+  return page
+}
+
+it('waits for period metrics to refresh after 3M selects immediately', async () => {
+  const page = slowRangePage()
+  let elapsed = 0
+  const result = await waitForThreeMonthCapture({
+    root: page,
+    selectRange: true,
+    stableForMs: 1000,
+    timeoutMs: 5000,
+    now: () => elapsed,
+    sleep: async (ms) => {
+      elapsed += ms
+      if (elapsed === 250)
+        page.querySelector('#followers')!.textContent =
+          'Verified followers 599 / 2.2K'
+      if (elapsed === 2000)
+        page.querySelector('#impressions')!.textContent = 'Impressions 9000'
+    },
+  })
+  expect(result.capture?.metrics.impressions).toBe(9000)
+  expect(elapsed).toBeGreaterThanOrEqual(3000)
+})
+
+it('does not bypass an unconfirmed refresh when the user retries', async () => {
+  const page = slowRangePage()
+  let elapsed = 0
+  const options = {
+    root: page,
+    selectRange: true,
+    stableForMs: 250,
+    timeoutMs: 1000,
+    now: () => elapsed,
+    sleep: async (ms: number) => {
+      elapsed += ms
+    },
+  }
+  expect((await waitForThreeMonthCapture(options)).capture).toBeNull()
+  expect((await waitForThreeMonthCapture(options)).capture).toBeNull()
+  page.querySelector('#impressions')!.textContent = 'Impressions 9000'
+  expect(
+    (await waitForThreeMonthCapture(options)).capture?.metrics.impressions,
+  ).toBe(9000)
+})
+
+it('waits for loading to finish even when 3M is already selected', async () => {
+  const page = slowRangePage()
+  page.querySelector('#range')!.setAttribute('aria-pressed', 'true')
+  page.body.setAttribute('aria-busy', 'true')
+  let elapsed = 0
+  const result = await waitForThreeMonthCapture({
+    root: page,
+    stableForMs: 250,
+    timeoutMs: 3000,
+    now: () => elapsed,
+    sleep: async (ms) => {
+      elapsed += ms
+      if (elapsed === 1500) {
+        page.body.removeAttribute('aria-busy')
+        page.querySelector('#impressions')!.textContent = 'Impressions 9000'
+      }
+    },
+  })
+  expect(result.capture?.metrics.impressions).toBe(9000)
+  expect(elapsed).toBeGreaterThanOrEqual(1750)
+})
+
+it('accepts equal final metrics when the cards were cleared and reloaded after the switch', async () => {
+  const page = slowRangePage()
+  let elapsed = 0
+  const result = await waitForThreeMonthCapture({
+    root: page,
+    selectRange: true,
+    stableForMs: 250,
+    timeoutMs: 3000,
+    now: () => elapsed,
+    sleep: async (ms) => {
+      elapsed += ms
+      if (elapsed === 500)
+        page.querySelector('#impressions')!.textContent = 'Impressions —'
+      if (elapsed === 1500)
+        page.querySelector('#impressions')!.textContent = 'Impressions 100'
+    },
+  })
+  expect(result.capture?.metrics.impressions).toBe(100)
+  expect(elapsed).toBeGreaterThanOrEqual(1750)
 })

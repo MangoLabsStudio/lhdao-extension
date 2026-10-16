@@ -4,7 +4,9 @@ import { readFile, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const EXPECTED_EXTENSION_VERSION = '0.4.16'
+const { version: EXPECTED_EXTENSION_VERSION } = JSON.parse(
+  await readFile(resolve(import.meta.dirname, '..', 'package.json'), 'utf8'),
+)
 const BASE_PERMISSIONS = ['storage', 'alarms']
 const FIXED_HOST_PERMISSIONS = [
   'https://x.com/*',

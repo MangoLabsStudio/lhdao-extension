@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, test } from 'vitest'
+
+const packageVersion = JSON.parse(await readFile(join(import.meta.dirname, '..', 'package.json'), 'utf8')).version
 
 let verifier = {}
 try {
@@ -37,7 +39,7 @@ function validManifest(overrides = {}) {
   return {
     manifest_version: 3,
     name: 'Lighthouse',
-    version: '0.4.16',
+    version: packageVersion,
     permissions: ['storage', 'alarms'],
     host_permissions: PRODUCTION_HOSTS,
     optional_host_permissions: [],
@@ -183,7 +185,7 @@ describe('requires exact version, permissions, and host permissions', () => {
   const verify = productionManifestVerifier()
   const cases = [
     ['manifest version', { manifest_version: 2 }, /manifest_version.*3/i],
-    ['extension version', { version: '0.1.6' }, /version.*0\.4\.16/i],
+    ['extension version', { version: '0.1.6' }, /Extension version must be/i],
     [
       'permissions',
       { permissions: ['storage', 'alarms', 'activeTab', 'scripting'] },

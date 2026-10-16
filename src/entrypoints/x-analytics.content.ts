@@ -187,6 +187,11 @@ async function saveCapture(
         status,
         '暂时无法读取 X 分析页，请确认已登录且可以访问账号分析，然后点击重试。',
       )
+    if (!result.capture && result.missing.includes('periodRefresh'))
+      return fail(
+        status,
+        '尚未确认 3M 数据刷新完成，本次未保存。请等待加载完成后重试；若仍无变化，请刷新 X 分析页。',
+      )
     if (!result.capture)
       return fail(
         status,

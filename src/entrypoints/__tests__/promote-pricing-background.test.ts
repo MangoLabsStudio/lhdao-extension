@@ -123,6 +123,40 @@ describe('plugin promote pricing background handlers', () => {
     gqlMock.mockReset()
   })
 
+  it('accepts the five-tier price response from the existing production backend', async () => {
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    const legacyPrices = {
+      ...currentPrices,
+      lines: currentPrices.lines.filter((line) => line.tier !== 'F'),
+    }
+    gqlMock.mockResolvedValue({ currentEngagementMarketPrices: legacyPrices })
+    await expect(
+      currentEngagementMarketPricesHandler({
+        actions: requestedCurrentActions,
+      }),
+    ).resolves.toMatchObject({ ok: true, prices: legacyPrices })
+  })
+
+  it('rejects inconsistent tier sets across requested actions', async () => {
+    await localStore.set('apiToken', 'lhdao_pk_test')
+    gqlMock.mockResolvedValue({
+      currentEngagementMarketPrices: {
+        ...currentPrices,
+        lines: currentPrices.lines.filter(
+          (line) => !(line.actionType === 'LIKE' && line.tier === 'F'),
+        ),
+      },
+    })
+    await expect(
+      currentEngagementMarketPricesHandler({
+        actions: requestedCurrentActions,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'PLUGIN_CURRENT_PRICES_RESPONSE_INVALID',
+    })
+  })
+
   it('uses the signed current-price operation with a closed action input', async () => {
     await localStore.set('apiToken', 'lhdao_pk_test')
     gqlMock.mockResolvedValue({ currentEngagementMarketPrices: currentPrices })

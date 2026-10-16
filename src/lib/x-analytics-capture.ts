@@ -92,6 +92,17 @@ export interface ThreeMonthCaptureResult extends XAnalyticsPageDiagnostic {
   rangeSelected: boolean
 }
 
+// Keep an unconfirmed switch across retries; the selected pill alone is not evidence of fresh data.
+const pendingPeriodRefresh = new WeakMap<ParentNode, string>()
+
+function periodSignature(capture: XAnalyticsPageCapture | null): string {
+  return capture
+    ? JSON.stringify(
+        Object.values(summaryMetrics).map((key) => capture.metrics[key]),
+      )
+    : ''
+}
+
 export async function waitForThreeMonthCapture({
   root,
   timeoutMs = 8_000,
@@ -108,6 +119,16 @@ export async function waitForThreeMonthCapture({
   for (;;) {
     const range = findThreeMonthButton(root)
     if (
+      range &&
+      !isThreeMonthSelected(range) &&
+      !pendingPeriodRefresh.has(root)
+    ) {
+      pendingPeriodRefresh.set(
+        root,
+        periodSignature(captureXAnalyticsPage(root)),
+      )
+    }
+    if (
       selectRange &&
       range &&
       !isThreeMonthSelected(range) &&
@@ -120,16 +141,39 @@ export async function waitForThreeMonthCapture({
     }
     const diagnostic = diagnoseXAnalyticsPage(root)
     const rangeSelected = Boolean(range && isThreeMonthSelected(range))
+    const loading = Array.from(
+      root.querySelectorAll('[aria-busy="true"], [role="progressbar"]'),
+    ).some((element) => !element.closest('[hidden], [aria-hidden="true"]'))
+    if (
+      rangeSelected &&
+      !diagnostic.capture &&
+      pendingPeriodRefresh.has(root)
+    ) {
+      pendingPeriodRefresh.set(root, '')
+    }
+    const refreshed =
+      !pendingPeriodRefresh.has(root) ||
+      periodSignature(diagnostic.capture) !== pendingPeriodRefresh.get(root)
     const signature =
-      rangeSelected && diagnostic.capture
+      rangeSelected && refreshed && !loading && diagnostic.capture
         ? JSON.stringify(diagnostic.capture)
         : ''
     if (!signature || signature !== previous) stableSince = now()
     previous = signature
-    if (signature && now() - stableSince >= stableForMs)
+    if (signature && now() - stableSince >= stableForMs) {
+      pendingPeriodRefresh.delete(root)
       return { ...diagnostic, rangeSelected }
+    }
     if (now() >= deadline)
-      return { ...diagnostic, capture: null, rangeSelected }
+      return {
+        ...diagnostic,
+        capture: null,
+        rangeSelected,
+        missing:
+          !refreshed || loading
+            ? ['periodRefresh', ...diagnostic.missing]
+            : diagnostic.missing,
+      }
     await sleep(intervalMs)
   }
 }

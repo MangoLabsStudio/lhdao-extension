@@ -335,7 +335,16 @@ export function PromoteDialog({
     setReinvestCount(last.reinvestCount || 3)
   }
 
-  const totalSlots = ALL_TIERS.reduce((s, t) => s + (slots[t] ?? 0), 0)
+  const availableTiers = React.useMemo(
+    () =>
+      ALL_TIERS.filter(
+        (tier) =>
+          tier !== 'F' ||
+          currentPrices?.lines.some((line) => line.tier === 'F'),
+      ),
+    [currentPrices],
+  )
+  const totalSlots = availableTiers.reduce((s, t) => s + (slots[t] ?? 0), 0)
   const payloadActions = React.useMemo(
     () =>
       actions.map((actionType) => {
@@ -346,12 +355,12 @@ export function PromoteDialog({
           }
         }
         const tierSlots: Record<string, number> = {}
-        for (const tier of ALL_TIERS) {
+        for (const tier of availableTiers) {
           if ((slots[tier] ?? 0) > 0) tierSlots[tier] = slots[tier]
         }
         return { actionType, tierSlots }
       }),
-    [actions, lighthouseSelectedOnly, selectedCounts, slots],
+    [actions, availableTiers, lighthouseSelectedOnly, selectedCounts, slots],
   )
   const hasQuoteInput =
     actions.length > 0 &&
@@ -716,7 +725,7 @@ export function PromoteDialog({
               <>
                 <div className="lh-label">每档招募人数(应用到每个动作)</div>
                 <div className="lh-tiers">
-                  {ALL_TIERS.map((t) => (
+                  {availableTiers.map((t) => (
                     <div key={t} className="lh-tier">
                       <span className="lh-tier-name">{tierDisplay(t)} 档</span>
                       <input

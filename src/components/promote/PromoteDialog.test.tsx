@@ -165,6 +165,39 @@ describe('PromoteDialog device recovery', () => {
     document.body.replaceChildren()
   })
 
+  it('hides unsupported F seats and excludes saved F counts from a five-tier quote', async () => {
+    localStorage.setItem(
+      'lhdao:promote:last',
+      JSON.stringify({
+        actions: ['LIKE'],
+        slots: { A: 5, F: 20 },
+        reinvest: false,
+        reinvestCount: 3,
+      }),
+    )
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <PromoteDialog
+          tweetUrl="https://x.com/lighthouse/status/1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    expect(
+      container.querySelector('input[aria-label="D-档招募人数"]'),
+    ).toBeNull()
+    await act(async () => findButton('按上次配置').click())
+    await vi.waitFor(() =>
+      expect(requests).toContainEqual({
+        type: 'preview-promote-tweet-pricing',
+        tweetUrl: 'https://x.com/lighthouse/status/1',
+        actions: [{ actionType: 'LIKE', tierSlots: { A: 5 } }],
+        lighthouseSelectedOnly: false,
+      }),
+    )
+  })
+
   it('quotes and submits the editable D- seats using raw F', async () => {
     const fQuote = {
       ...quote,
@@ -261,7 +294,23 @@ describe('PromoteDialog device recovery', () => {
     ).toMatchObject({ slots: { F: 20 } })
   })
 
-  it('restores mixed D and F counts from the last configuration', async () => {
+  it('restores mixed D and F counts when the backend supports F', async () => {
+    currentPricesResponse = () => ({
+      type: 'current-engagement-prices-result',
+      ok: true,
+      prices: {
+        ...currentPrices,
+        lines: [
+          ...currentPrices.lines,
+          {
+            actionType: 'RT',
+            tier: 'F',
+            pricingSource: 'LEGACY',
+            unitPrice: '0.10000000',
+          },
+        ],
+      },
+    })
     localStorage.setItem(
       'lhdao:promote:last',
       JSON.stringify({

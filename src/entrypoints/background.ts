@@ -1611,7 +1611,10 @@ export async function previewPromoteTweetPricingHandler(req: {
 }
 
 const PROMOTE_ACTIONS = new Set<PromoteAction>(['LIKE', 'RT', 'COMMENT'])
-const CURRENT_PRICE_TIERS = ['S', 'A', 'B', 'C', 'D', 'F'] as const
+const CURRENT_PRICE_TIER_SETS = [
+  ['S', 'A', 'B', 'C', 'D'],
+  ['S', 'A', 'B', 'C', 'D', 'F'],
+] as const
 const QUOTE_TIERS = new Set(['A', 'B', 'C', 'D', 'F'])
 const MONEY_STRING = /^(?:0|[1-9]\d{0,15})\.\d{8}$/
 
@@ -1721,12 +1724,16 @@ function isCurrentEngagementMarketPrices(
     !isValidDateString(value.asOf) ||
     value.currency !== 'LUX' ||
     value.precision !== 8 ||
-    !Array.isArray(value.lines) ||
-    value.lines.length !== requestedActions.length * CURRENT_PRICE_TIERS.length
+    !Array.isArray(value.lines)
   ) {
     return false
   }
-  return value.lines.every(
+  const lines = value.lines
+  const tiers = CURRENT_PRICE_TIER_SETS.find(
+    (tiers) => lines.length === requestedActions.length * tiers.length,
+  )
+  if (!tiers) return false
+  return lines.every(
     (line, index) =>
       isRecord(line) &&
       hasExactKeys(line, [
@@ -1735,9 +1742,8 @@ function isCurrentEngagementMarketPrices(
         'pricingSource',
         'unitPrice',
       ]) &&
-      line.actionType ===
-        requestedActions[Math.floor(index / CURRENT_PRICE_TIERS.length)] &&
-      line.tier === CURRENT_PRICE_TIERS[index % CURRENT_PRICE_TIERS.length] &&
+      line.actionType === requestedActions[Math.floor(index / tiers.length)] &&
+      line.tier === tiers[index % tiers.length] &&
       (line.pricingSource === 'PILOT' || line.pricingSource === 'LEGACY') &&
       isMoneyString(line.unitPrice),
   )

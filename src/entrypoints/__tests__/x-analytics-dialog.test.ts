@@ -189,3 +189,24 @@ it('does not save an automatic capture from a different X account', async () => 
     '请切换到申请账号 @demo_kol',
   )
 })
+
+it('explains an unconfirmed period refresh and does not save old data', async () => {
+  vi.spyOn(capture, 'waitForThreeMonthCapture').mockResolvedValue({
+    rangeSelected: true,
+    capture: null,
+    missing: ['periodRefresh'],
+  })
+  const send = vi.spyOn(messaging, 'sendMessage')
+  shadow.querySelector<HTMLButtonElement>('[data-capture]')!.click()
+  await vi.waitFor(() =>
+    expect(shadow.querySelector('[role="status"]')?.textContent).toContain(
+      '本次未保存',
+    ),
+  )
+  expect(shadow.querySelector('[role="status"]')?.textContent).not.toContain(
+    'periodRefresh',
+  )
+  expect(send).not.toHaveBeenCalledWith(
+    expect.objectContaining({ type: 'save-x-analytics' }),
+  )
+})
