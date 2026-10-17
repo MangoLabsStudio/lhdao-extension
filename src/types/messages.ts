@@ -34,6 +34,16 @@ export type PromoteAction = 'LIKE' | 'RT' | 'COMMENT'
 export type MsgRequest =
   | { type: 'start-x-analytics-capture'; twitterUsername: string }
   | { type: 'claim-x-analytics-capture' }
+  | {
+      type: 'x-analytics-progress'
+      phase: 'reading' | 'account' | 'saving' | 'error'
+      message: string
+    }
+  | {
+      type: 'x-analytics-window-action'
+      tabId: number
+      action: 'retry' | 'show-page'
+    }
   | { type: 'get-x-analytics-status' }
   | {
       type: 'save-x-analytics'

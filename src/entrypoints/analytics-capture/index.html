@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lighthouse · X 数据采集</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="brands"><img src="/icon/128.png" alt="Lighthouse" /><strong>LIGHTHOUSE</strong><span class="divider"></span><span class="x-logo" aria-label="X（Twitter）"><svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.64 7.584H.47l8.6-9.835L0 1.154h7.594l5.243 6.932Zm-1.29 19.49h2.039L6.487 3.24H4.3Z"/></svg></span></div>
+        <span class="eyebrow">LIGHTHOUSE TOP PICKS</span>
+        <h1>采集 X 账号数据</h1>
+        <p class="intro">正在为你的严选申请准备账号资料</p>
+      </header>
+      <section class="collection" aria-label="采集进度">
+        <div class="account"><span id="account">正在核对账号</span><span class="range">近三个月 · 3M</span></div>
+        <div class="progress-icon" id="progress-icon" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path class="loading-mark" d="M12 3a9 9 0 1 1-9 9"/><g class="error-mark"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 3v.1"/></g></svg></div>
+        <h2 id="phase">准备采集</h2>
+        <p id="status" role="status" aria-live="polite">正在连接采集任务…</p>
+        <div class="track" aria-hidden="true"><span id="progress"></span></div>
+      </section>
+      <section class="privacy">
+        <h2><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><rect x="9" y="10" width="6" height="5" rx="1"/><path d="M10 10V8a2 2 0 0 1 4 0v2"/></svg>数据与隐私保护</h2>
+        <p>仅采集申请所需的 X 账号标识及近三个月汇总数据，不读取私信、密码或其他无关信息。数据通过加密连接传输，并受访问权限控制。</p>
+      </section>
+      <footer>
+        <button id="retry" hidden type="button">重试采集</button>
+        <button id="show-page" type="button" class="secondary">打开 X 分析页 ↗</button>
+        <small>采集并保存成功后，将自动返回 Lighthouse。</small>
+      </footer>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

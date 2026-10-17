@@ -90,9 +90,13 @@ import {
 import { tierDisplay } from '@/lib/tier-display'
 import { extractTweetIdFromUrl } from '@/lib/twitter-dom'
 import {
+  analyticsWindowAction,
   claimAnalyticsCapture,
+  closeAnalyticsCaptureTab,
+  closeAnalyticsCaptureWindow,
   finishAnalyticsCapture,
   pendingAnalyticsCapture,
+  reportAnalyticsCapture,
   startAnalyticsCapture,
 } from '@/lib/x-analytics-auto-capture'
 import type {
@@ -325,7 +329,18 @@ export default defineBackground(() => {
   // 清除旧版本的轮询；首次打开弹窗或 X 页面读取数据时才初始化。
   void chrome.alarms.clear(ALARM_NAME)
 
+  chrome.windows.onRemoved.addListener((id) => {
+    void closeAnalyticsCaptureWindow(id).catch(() => {})
+  })
+  chrome.tabs.onRemoved.addListener((id) => {
+    void closeAnalyticsCaptureTab(id).catch(() => {})
+  })
+
   onMessage(async (req, sender): Promise<MsgResponse> => {
+    if (req.type === 'x-analytics-progress')
+      return reportAnalyticsCapture(sender, req.phase, req.message)
+    if (req.type === 'x-analytics-window-action')
+      return analyticsWindowAction(sender, req.tabId, req.action)
     if (req.type === 'start-x-analytics-capture')
       return startAnalyticsCapture(req.twitterUsername, sender)
     if (req.type === 'claim-x-analytics-capture')
@@ -375,6 +390,12 @@ export default defineBackground(() => {
           sender.tab?.id === undefined
             ? null
             : await pendingAnalyticsCapture(sender.tab.id)
+        if (!pending?.claimed || pending.phase === 'error')
+          return {
+            type: 'x-analytics-save-result',
+            ok: false,
+            code: 'INCOMPLETE',
+          }
         const observed = req.twitterUsername.toLowerCase()
         const bound = status.myXAnalytics.twitterUsername?.toLowerCase() ?? null
         if (

@@ -1,0 +1,44 @@
+:root { font: 14px/1.6 ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; color: #182525; background: #fff; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { padding: 28px; max-width: 540px; margin: auto; }
+.brands { display: flex; align-items: center; gap: 10px; margin-bottom: 25px; font-size: 12px; letter-spacing: .08em; }
+.brands img { width: 32px; height: 32px; }
+.divider { height: 22px; width: 1px; background: #e2e8e7; margin: 0 6px; }
+.x-logo { display: grid; place-items: center; background: #111; color: white; border-radius: 9px; width: 32px; height: 32px; }
+.x-logo svg { width: 17px; height: 17px; }
+.eyebrow { color: #0f766e; font-size: 10px; font-weight: 650; letter-spacing: .13em; }
+h1 { margin: 5px 0 6px; font-size: 23px; line-height: 1.4; letter-spacing: -.02em; }
+p { margin: 0; }
+.intro { color: #6a7876; font-size: 13px; }
+.collection { margin-top: 22px; padding: 18px; border: 1px solid #dce9e6; border-radius: 16px; background: #f7fbfa; text-align: center; }
+.account { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+#account { font-weight: 600; overflow-wrap: anywhere; }
+.range { color: #60736f; white-space: nowrap; }
+.progress-icon { color: #0f766e; display: grid; place-items: center; margin: 22px auto 12px; width: 46px; height: 46px; background: #e3f2ee; border-radius: 50%; }
+.progress-icon svg { width: 23px; height: 23px; animation: spin 1s linear infinite; }
+h2 { font-size: 15px; margin: 0 0 6px; font-weight: 650; }
+#status { color: #60736f; font-size: 12px; min-height: 40px; overflow-wrap: anywhere; }
+.track { height: 3px; background: #e1eae7; border-radius: 2px; margin-top: 18px; overflow: hidden; }
+#progress { display: block; width: 12%; height: 100%; background: #16877a; transition: width .3s ease; }
+body[data-error="true"] .progress-icon { color: #b94830; background: #fff0e9; }
+body[data-error="true"] .progress-icon svg { animation: none; }
+body[data-error="true"] #status { color: #a03c28; }
+.privacy { margin-top: 20px; }
+.privacy h2 { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.privacy svg { width: 16px; height: 16px; color: #68867d; }
+.privacy p { font-size: 12px; color: #7c8985; }
+footer { display: grid; gap: 8px; margin-top: 22px; }
+button { font: inherit; font-size: 13px; font-weight: 600; padding: 10px; border-radius: 10px; border: 1px solid #0f766e; background: #0f766e; color: white; cursor: pointer; }
+button.secondary { background: white; color: #53665f; border-color: #dce5e1; }
+button:focus-visible { outline: 3px solid #8ed1c6; outline-offset: 2px; }
+button:disabled { opacity: .6; cursor: wait; }
+small { text-align: center; font-size: 11px; color: #8a9691; margin-top: 4px; }
+[hidden] { display: none !important; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .progress-icon svg { animation: none; } #progress { transition: none; } }
+@media (max-width: 360px) { main { padding: 20px; } }
+
+.error-mark { display: none; }
+body[data-error="true"] .loading-mark { display: none; }
+body[data-error="true"] .error-mark { display: block; }
