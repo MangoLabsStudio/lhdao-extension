@@ -123,10 +123,15 @@ export async function runAnalyticsCapture(
       const message = {
         NO_TOKEN: '请先连接 Lighthouse 插件账号。',
         WRONG_X_ACCOUNT: '当前 X 账号与 Lighthouse 绑定账号不一致。',
-        INCOMPLETE: '数据不完整，请刷新 X 分析页后重试。',
+        INCOMPLETE:
+          '数据已读取，但保存校验未通过。请重新开始采集；仍失败请联系支持。',
         NETWORK: '保存失败，请检查网络后重试。',
       }[code]
-      return fail(message)
+      return fail(
+        saved.type === 'x-analytics-save-result' && !saved.ok && saved.message
+          ? saved.message
+          : message,
+      )
     }
   } catch {
     await fail(

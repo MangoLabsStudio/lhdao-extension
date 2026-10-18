@@ -40,6 +40,11 @@ vi.mock('@/lib/gql', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/gql')>()
   return { ...orig, gql: (...args: unknown[]) => gqlMock(...args) }
 })
+const analyticsPending = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/x-analytics-auto-capture', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/x-analytics-auto-capture')>()),
+  pendingAnalyticsCapture: analyticsPending,
+}))
 vi.mock('@/lib/env', () => ({
   API_ENDPOINT: 'https://api.test/graphql',
   WEB_ENDPOINT: 'https://web.test',
@@ -448,5 +453,71 @@ describe('verified task cache', () => {
       (await background.readTasksSnapshot()).byTweet['123'][0].campaignId,
     ).toBe('c-verified')
     expect(messaging.broadcastToContent).not.toHaveBeenCalled()
+  })
+})
+
+describe('analytics save error propagation', () => {
+  const sender = () => ({
+    id: chrome.runtime.id,
+    frameId: 0,
+    url: 'https://x.com/i/account_analytics',
+    tab: {
+      id: 20,
+      url: 'https://x.com/i/account_analytics',
+    } as chrome.tabs.Tab,
+  })
+  const request = {
+    type: 'save-x-analytics',
+    captureId: 'capture',
+    twitterUsername: 'demo',
+    capturedAt: '2026-10-18T01:28:00Z',
+    periodStart: '2026-07-21',
+    periodEnd: '2026-10-18',
+    metrics: {},
+  } as MsgRequest
+  it.each([
+    true,
+    false,
+  ])('only forwards reviewed public backend messages (%s)', async (publicError) => {
+    analyticsPending.mockResolvedValue({
+      claimed: true,
+      phase: 'saving',
+      twitterUsername: 'demo',
+    })
+    gqlMock
+      .mockResolvedValueOnce({
+        myXAnalytics: { twitterUserId: '123', twitterUsername: 'demo' },
+      })
+      .mockRejectedValueOnce(
+        new GqlError('rejected', [
+          {
+            message: '设备时间偏差过大，请同步系统时间后重试。',
+            extensions: { code: 'X_ANALYTICS_INCOMPLETE', publicError },
+          },
+        ]),
+      )
+    const result = await handler(request, sender())
+    expect(result).toMatchObject({
+      type: 'x-analytics-save-result',
+      ok: false,
+      code: 'INCOMPLETE',
+    })
+    if (publicError)
+      expect(result).toHaveProperty(
+        'message',
+        '设备时间偏差过大，请同步系统时间后重试。',
+      )
+    else expect(result).not.toHaveProperty('message')
+  })
+  it('identifies an expired capture session before saving', async () => {
+    analyticsPending.mockResolvedValue(null)
+    gqlMock.mockResolvedValue({
+      myXAnalytics: { twitterUserId: '123', twitterUsername: 'demo' },
+    })
+    expect(await handler(request, sender())).toMatchObject({
+      code: 'INCOMPLETE',
+      message: expect.stringContaining('会话已失效'),
+    })
+    expect(gqlMock).toHaveBeenCalledTimes(1)
   })
 })

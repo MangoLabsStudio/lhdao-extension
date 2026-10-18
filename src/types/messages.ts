@@ -159,6 +159,7 @@ export type MsgResponse =
       type: 'x-analytics-save-result'
       ok: false
       code: 'NO_TOKEN' | 'WRONG_X_ACCOUNT' | 'INCOMPLETE' | 'NETWORK'
+      message?: string
     }
   //   | { type: 'binance-probe-targets'; targets: BinanceProbeTarget[] }
   //   | {

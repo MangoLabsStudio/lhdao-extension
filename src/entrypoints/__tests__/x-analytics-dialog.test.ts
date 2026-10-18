@@ -176,7 +176,7 @@ it('keeps API errors distinct from backend save rejection', async () => {
   await runAnalyticsCapture(report, 'demo')
   expect(report).toHaveBeenLastCalledWith(
     'error',
-    expect.stringContaining('数据不完整'),
+    expect.stringContaining('保存校验未通过'),
   )
 })
 it('saves an actual normalized bridge event with no DOM metric cards', async () => {
@@ -229,5 +229,26 @@ it('preserves the response date range if the clock changes before account verifi
   await runAnalyticsCapture(report, 'demo')
   expect(messaging.sendMessage).toHaveBeenCalledWith(
     expect.objectContaining({ type: 'save-x-analytics', ...period }),
+  )
+})
+
+it('shows the reviewed backend reason instead of asking users to blindly refresh', async () => {
+  successfulCapture()
+  const send = vi.mocked(messaging.sendMessage)
+  const original = send.getMockImplementation()!
+  send.mockImplementation((request) =>
+    request.type === 'save-x-analytics'
+      ? Promise.resolve({
+          type: 'x-analytics-save-result',
+          ok: false,
+          code: 'INCOMPLETE',
+          message: '设备时间偏差过大，请同步系统时间后重试。',
+        })
+      : original(request),
+  )
+  await runAnalyticsCapture(report, 'demo')
+  expect(report).toHaveBeenLastCalledWith(
+    'error',
+    '设备时间偏差过大，请同步系统时间后重试。',
   )
 })

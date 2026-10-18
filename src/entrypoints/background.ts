@@ -395,6 +395,7 @@ export default defineBackground(() => {
             type: 'x-analytics-save-result',
             ok: false,
             code: 'INCOMPLETE',
+            message: '本次采集会话已失效，请返回 Lighthouse 重新开始采集。',
           }
         const observed = req.twitterUsername.toLowerCase()
         const bound = status.myXAnalytics.twitterUsername?.toLowerCase() ?? null
@@ -444,6 +445,9 @@ export default defineBackground(() => {
               ok: false,
               code: 'WRONG_X_ACCOUNT',
             }
+          const analyticsError = error.graphqlErrors?.find(
+            (item) => item.extensions?.code === 'X_ANALYTICS_INCOMPLETE',
+          )
           if (
             codes.some((value) =>
               String(value).includes('X_ANALYTICS_INCOMPLETE'),
@@ -453,6 +457,10 @@ export default defineBackground(() => {
               type: 'x-analytics-save-result',
               ok: false,
               code: 'INCOMPLETE',
+              ...(analyticsError?.extensions?.publicError === true &&
+              analyticsError.message.length <= 240
+                ? { message: analyticsError.message }
+                : {}),
             }
           if (error.kind === 'CLIENT')
             return {
