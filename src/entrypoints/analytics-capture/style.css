@@ -42,3 +42,14 @@ small { text-align: center; font-size: 11px; color: #8a9691; margin-top: 4px; }
 .error-mark { display: none; }
 body[data-error="true"] .loading-mark { display: none; }
 body[data-error="true"] .error-mark { display: block; }
+
+.recovery { color: #0f766e; margin-top: 10px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.preview { margin-top: 18px; border: 1px solid #e1e8e5; border-radius: 12px; padding: 14px; }
+.preview h2 { font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.preview h2 span { font-size: 10px; font-weight: 400; color: #64756e; }
+#metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 8px; margin: 14px 0; }
+#metrics dt { color: #64756e; font-size: 11px; }
+#metrics dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#metrics [data-missing="true"] dd { color: #8b642b; font-size: 12px; font-weight: 400; }
+#missing { font-size: 11px; color: #64756e; line-height: 1.7; }
+@media (max-width: 360px) { #metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

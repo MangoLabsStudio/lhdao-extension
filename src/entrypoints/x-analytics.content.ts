@@ -21,16 +21,18 @@ export default defineContentScript({
       )
         return
       await runAnalyticsCapture(
-        async (phase, message) => {
+        async (phase, message, details) => {
           const response = await sendMessage({
             type: 'x-analytics-progress',
             phase,
             message,
+            details: { ...details, runId: request.runId },
           })
           if (response.type !== 'ack') throw new Error('Capture ended')
         },
         request.twitterUsername,
         network.get,
+        { runId: request.runId, resume: request.resume },
       )
     } finally {
       network.dispose()

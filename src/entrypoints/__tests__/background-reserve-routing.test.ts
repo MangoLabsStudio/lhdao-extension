@@ -44,6 +44,7 @@ const analyticsPending = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/x-analytics-auto-capture', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/x-analytics-auto-capture')>()),
   pendingAnalyticsCapture: analyticsPending,
+  retainAnalyticsSave: vi.fn(async () => true),
 }))
 vi.mock('@/lib/env', () => ({
   API_ENDPOINT: 'https://api.test/graphql',
@@ -482,6 +483,7 @@ describe('analytics save error propagation', () => {
     analyticsPending.mockResolvedValue({
       claimed: true,
       phase: 'saving',
+      twitterUserId: '123',
       twitterUsername: 'demo',
     })
     gqlMock

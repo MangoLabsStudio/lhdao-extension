@@ -105,6 +105,7 @@ it.each([
   expect(report).toHaveBeenLastCalledWith(
     'error',
     expect.stringContaining(message),
+    expect.any(Object),
   )
   expect(messaging.sendMessage).not.toHaveBeenCalledWith(
     expect.objectContaining({ type: 'save-x-analytics' }),
@@ -123,6 +124,7 @@ it.each([
   expect(report).toHaveBeenLastCalledWith(
     'error',
     expect.stringContaining(message),
+    expect.any(Object),
   )
   expect(messaging.sendMessage).not.toHaveBeenCalledWith(
     expect.objectContaining({ type: 'save-x-analytics' }),
@@ -149,6 +151,7 @@ it.each([
   expect(report).toHaveBeenLastCalledWith(
     'error',
     expect.stringContaining(message),
+    expect.any(Object),
   )
 })
 it('stops before saving when the capture window has been closed', async () => {
@@ -177,6 +180,7 @@ it('keeps API errors distinct from backend save rejection', async () => {
   expect(report).toHaveBeenLastCalledWith(
     'error',
     expect.stringContaining('保存校验未通过'),
+    expect.objectContaining({ retryable: false }),
   )
 })
 it('saves an actual normalized bridge event with no DOM metric cards', async () => {
@@ -250,5 +254,101 @@ it('shows the reviewed backend reason instead of asking users to blindly refresh
   expect(report).toHaveBeenLastCalledWith(
     'error',
     '设备时间偏差过大，请同步系统时间后重试。',
+    expect.objectContaining({ retryable: false }),
+  )
+})
+
+it('resumes a save with the original immutable capture ID without rereading X', async () => {
+  const read = successfulCapture()
+  const resume = {
+    captureId: 'same-capture-id',
+    twitterUsername: 'demo',
+    ...capture.rollingNinetyDayPeriod(new Date()),
+    capturedAt: new Date().toISOString(),
+    metrics,
+  }
+  await runAnalyticsCapture(report, 'demo', undefined, {
+    runId: 'second-run',
+    resume,
+  })
+  expect(read).not.toHaveBeenCalled()
+  expect(messaging.sendMessage).toHaveBeenCalledWith({
+    type: 'save-x-analytics',
+    ...resume,
+    runId: 'second-run',
+  })
+})
+it.each([
+  ['HTTP_503', true],
+  ['NETWORK', true],
+  ['SCHEMA', true],
+  ['HTTP_401', false],
+  ['HTTP_403', false],
+  ['HTTP_429', false],
+])('classifies %s retryability without dropping partial data', async (code, retryable) => {
+  const to = (Math.floor(Date.now() / 86400000) + 1) * 86400000
+  const preview = {
+    twitterUserId: '123',
+    from: to - 90 * 86400000,
+    to,
+    metrics: { followers: 100 },
+  }
+  vi.spyOn(capture, 'waitForThreeMonthCapture').mockResolvedValue({
+    rangeSelected: true,
+    capture: null,
+    missing: [],
+    apiError: code as string,
+    preview,
+  })
+  await runAnalyticsCapture(report, 'demo')
+  expect(report).toHaveBeenLastCalledWith('error', expect.any(String), {
+    retryable,
+    discardSave: false,
+    preview,
+  })
+  expect(messaging.sendMessage).not.toHaveBeenCalledWith(
+    expect.objectContaining({ type: 'save-x-analytics' }),
+  )
+})
+
+it('pauses an uncertain save without discarding its payload when rate limited', async () => {
+  successfulCapture()
+  const send = vi.mocked(messaging.sendMessage)
+  const original = send.getMockImplementation()!
+  send.mockImplementation((request) =>
+    request.type === 'save-x-analytics'
+      ? Promise.resolve({
+          type: 'x-analytics-save-result',
+          ok: false,
+          code: 'NETWORK',
+          retryable: false,
+        })
+      : original(request),
+  )
+  await runAnalyticsCapture(report, 'demo')
+  expect(report).toHaveBeenLastCalledWith(
+    'error',
+    expect.any(String),
+    expect.objectContaining({ retryable: false, discardSave: false }),
+  )
+})
+
+it('honors rate-limit pause while verifying the bound account', async () => {
+  successfulCapture()
+  vi.mocked(messaging.sendMessage).mockResolvedValue({
+    type: 'x-analytics-save-result',
+    ok: false,
+    code: 'NETWORK',
+    retryable: false,
+    message: '请求过于频繁',
+  })
+  await runAnalyticsCapture(report, 'demo')
+  expect(report).toHaveBeenLastCalledWith(
+    'error',
+    '请求过于频繁',
+    expect.objectContaining({ retryable: false }),
+  )
+  expect(messaging.sendMessage).not.toHaveBeenCalledWith(
+    expect.objectContaining({ type: 'save-x-analytics' }),
   )
 })

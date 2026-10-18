@@ -97,6 +97,7 @@ import {
   finishAnalyticsCapture,
   pendingAnalyticsCapture,
   reportAnalyticsCapture,
+  retainAnalyticsSave,
   startAnalyticsCapture,
 } from '@/lib/x-analytics-auto-capture'
 import type {
@@ -338,7 +339,7 @@ export default defineBackground(() => {
 
   onMessage(async (req, sender): Promise<MsgResponse> => {
     if (req.type === 'x-analytics-progress')
-      return reportAnalyticsCapture(sender, req.phase, req.message)
+      return reportAnalyticsCapture(sender, req.phase, req.message, req.details)
     if (req.type === 'x-analytics-window-action')
       return analyticsWindowAction(sender, req.tabId, req.action)
     if (req.type === 'start-x-analytics-capture')
@@ -390,7 +391,11 @@ export default defineBackground(() => {
           sender.tab?.id === undefined
             ? null
             : await pendingAnalyticsCapture(sender.tab.id)
-        if (!pending?.claimed || pending.phase === 'error')
+        if (
+          !pending?.claimed ||
+          pending.runId !== req.runId ||
+          ['error', 'retrying'].includes(pending.phase)
+        )
           return {
             type: 'x-analytics-save-result',
             ok: false,
@@ -402,6 +407,7 @@ export default defineBackground(() => {
         if (
           !status.myXAnalytics.twitterUserId ||
           !bound ||
+          pending.twitterUserId !== status.myXAnalytics.twitterUserId ||
           observed !== bound ||
           (pending && pending.twitterUsername !== bound)
         ) {
@@ -411,6 +417,14 @@ export default defineBackground(() => {
             code: 'WRONG_X_ACCOUNT',
           }
         }
+        const { type: _type, runId, ...payload } = req
+        if (!(await retainAnalyticsSave(sender.tab!.id!, runId, payload)))
+          return {
+            type: 'x-analytics-save-result',
+            ok: false,
+            code: 'INCOMPLETE',
+            message: '采集会话已更新，请返回 Lighthouse 重新开始。',
+          }
         const result = await gql<SaveXAnalyticsResult, SaveXAnalyticsVars>(
           SAVE_X_ANALYTICS_MUTATION,
           {
@@ -426,7 +440,7 @@ export default defineBackground(() => {
           },
         )
         if (sender.tab?.id !== undefined)
-          await finishAnalyticsCapture(sender.tab.id).catch(() => {})
+          await finishAnalyticsCapture(sender.tab.id, req.runId).catch(() => {})
         return {
           type: 'x-analytics-save-result',
           ok: true,
@@ -461,6 +475,46 @@ export default defineBackground(() => {
               analyticsError.message.length <= 240
                 ? { message: analyticsError.message }
                 : {}),
+            }
+          if (
+            error.httpStatus === 401 ||
+            error.httpStatus === 403 ||
+            codes.some((code) =>
+              [
+                'UNAUTHENTICATED',
+                'FORBIDDEN',
+                'PLUGIN_DEVICE_DENIED',
+                'PLUGIN_TOKEN_REVOKED',
+              ].includes(String(code)),
+            )
+          )
+            return {
+              type: 'x-analytics-save-result',
+              ok: false,
+              code: 'NO_TOKEN',
+              message:
+                '插件授权已失效或无权访问，请重新连接 Lighthouse 后重试。',
+            }
+          if (error.httpStatus === 429)
+            return {
+              type: 'x-analytics-save-result',
+              ok: false,
+              code: 'NETWORK',
+              retryable: false,
+              message: '保存请求过于频繁，已暂停自动重试，请稍后再试。',
+            }
+          if (
+            codes.some((code) =>
+              ['BAD_USER_INPUT', 'GRAPHQL_VALIDATION_FAILED'].includes(
+                String(code),
+              ),
+            )
+          )
+            return {
+              type: 'x-analytics-save-result',
+              ok: false,
+              code: 'INCOMPLETE',
+              message: '保存请求校验未通过，请重新采集；仍失败请联系支持。',
             }
           if (error.kind === 'CLIENT')
             return {

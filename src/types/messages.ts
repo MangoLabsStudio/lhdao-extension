@@ -1,4 +1,8 @@
 import type { CascadeWarning } from '@/lib/queries'
+import type {
+  AnalyticsSavePayload,
+  CaptureProgress,
+} from '@/lib/x-analytics-recovery'
 /**
  * Content script ↔ Background service worker RPC 协议。
  *
@@ -38,15 +42,17 @@ export type MsgRequest =
       type: 'x-analytics-progress'
       phase: 'reading' | 'account' | 'saving' | 'error'
       message: string
+      details?: CaptureProgress
     }
   | {
       type: 'x-analytics-window-action'
       tabId: number
-      action: 'retry' | 'show-page'
+      action: 'retry' | 'auto-retry' | 'show-page'
     }
   | { type: 'get-x-analytics-status' }
   | {
       type: 'save-x-analytics'
+      runId?: string
       captureId: string
       twitterUsername: string
       periodStart: string
@@ -146,6 +152,8 @@ export type MsgResponse =
   | {
       type: 'x-analytics-auto-capture'
       autoCapture: boolean
+      runId?: string
+      resume?: AnalyticsSavePayload
       twitterUsername?: string
     }
   | {
@@ -159,6 +167,7 @@ export type MsgResponse =
       type: 'x-analytics-save-result'
       ok: false
       code: 'NO_TOKEN' | 'WRONG_X_ACCOUNT' | 'INCOMPLETE' | 'NETWORK'
+      retryable?: boolean
       message?: string
     }
   //   | { type: 'binance-probe-targets'; targets: BinanceProbeTarget[] }

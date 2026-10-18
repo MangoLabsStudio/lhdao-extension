@@ -181,3 +181,85 @@ it('validates the normalized page bridge and expires cached responses', async ()
     reader.dispose()
   }
 })
+
+it('retains valid aggregate metrics when a follower field is missing', () => {
+  const json = response()
+  delete (json.data.viewer_v2.user_results.result as Record<string, unknown>)
+    .verified_follower_count
+  expect(parseAnalyticsResponse(request(), 200, json)).toMatchObject({
+    ok: false,
+    code: 'SCHEMA',
+    preview: {
+      twitterUserId: '123',
+      from,
+      to,
+      metrics: { impressions: 1201, followers: 100 },
+    },
+  })
+})
+it('retains followers but never invents zero aggregates from absent series', () => {
+  const json = response()
+  delete (json.data.viewer_v2.user_results.result as Record<string, unknown>)
+    .current_time_series
+  const result = parseAnalyticsResponse(request(), 200, json)
+  expect(result).toMatchObject({
+    ok: false,
+    preview: { metrics: { followers: 100, verifiedFollowers: 12 } },
+  })
+  expect(
+    'preview' in result && result.preview?.metrics.impressions,
+  ).toBeUndefined()
+})
+
+it('preserves valid values in a partial GraphQL response without accepting it as complete', () => {
+  const result = parseAnalyticsResponse(request(), 200, {
+    ...response(),
+    errors: [{ message: 'temporary partial error' }],
+  })
+  expect(result).toMatchObject({
+    ok: false,
+    code: 'GRAPHQL',
+    preview: { metrics: { impressions: 1201 } },
+  })
+})
+it('revalidates partial previews crossing the page bridge', async () => {
+  const { createAnalyticsNetworkReader } = await import(
+    '../x-analytics-network'
+  )
+  const reader = createAnalyticsNetworkReader(window, () => now)
+  const event = (preview: unknown) =>
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        origin: location.origin,
+        data: {
+          type: 'lhdao:analytics-response:v1',
+          startedAt: now,
+          result: { ok: false, code: 'SCHEMA', from, to, preview },
+        },
+      }),
+    )
+  try {
+    event({
+      twitterUserId: '123',
+      from,
+      to,
+      metrics: { followers: 100, impressions: -1, shares: 0 },
+    })
+    expect(reader.get()).toMatchObject({
+      preview: { metrics: { followers: 100, shares: 0 } },
+    })
+    expect(reader.get()).not.toMatchObject({
+      preview: { metrics: { impressions: -1 } },
+    })
+    event({
+      twitterUserId: '123',
+      from: from + 86400000,
+      to: to + 86400000,
+      metrics: { followers: 100 },
+    })
+    expect(reader.get()).not.toHaveProperty('preview')
+  } finally {
+    reader.dispose()
+  }
+})

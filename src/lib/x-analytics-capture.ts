@@ -1,4 +1,5 @@
 import type { AnalyticsResponse } from './x-analytics-network'
+import type { AnalyticsPreview } from './x-analytics-recovery'
 
 const summaryMetrics = {
   Impressions: 'impressions',
@@ -98,6 +99,7 @@ export interface ThreeMonthCaptureResult extends XAnalyticsPageDiagnostic {
   rangeSelected: boolean
   pageError?: 'X_PAGE_ERROR'
   apiError?: string
+  preview?: AnalyticsPreview
 }
 
 // Keep an unconfirmed switch across retries; the selected pill alone is not evidence of fresh data.
@@ -151,7 +153,9 @@ export async function waitForThreeMonthCapture({
         missing: [],
         rangeSelected: false,
         pageError: 'X_PAGE_ERROR',
-        ...(response && !response.ok ? { apiError: response.code } : {}),
+        ...(response && !response.ok
+          ? { apiError: response.code, preview: response.preview }
+          : {}),
       }
     }
     const range = findThreeMonthButton(root)
@@ -189,6 +193,7 @@ export async function waitForThreeMonthCapture({
           missing: [],
           rangeSelected,
           apiError: result.code,
+          preview: result.preview,
         }
       if (rangeSelected && result?.ok && handle)
         return {

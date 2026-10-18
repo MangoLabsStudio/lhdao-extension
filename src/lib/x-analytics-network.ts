@@ -1,4 +1,5 @@
 import type { XAnalyticsPageCapture } from './x-analytics-capture'
+import { type AnalyticsPreview, normalizePreview } from './x-analytics-recovery'
 
 const DAY = 86_400_000
 export const ANALYTICS_EVENT = 'lhdao:analytics-response:v1'
@@ -13,7 +14,7 @@ export type AnalyticsResponse = AnalyticsRequest &
         twitterUserId: string
         metrics: XAnalyticsPageCapture['metrics']
       }
-    | { ok: false; code: string }
+    | { ok: false; code: string; preview?: AnalyticsPreview }
   )
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -99,19 +100,19 @@ export function parseAnalyticsResponse(
   status: number,
   json: unknown,
 ): AnalyticsResponse {
+  let preview: AnalyticsPreview | undefined
   const fail = (code: string): AnalyticsResponse => ({
     ...request,
     ok: false,
     code,
+    ...(preview ? { preview } : {}),
   })
   if (status < 200 || status >= 300)
     return fail(status ? `HTTP_${status}` : 'NETWORK')
   const root = object(json)
-  if (
-    root.errors !== undefined &&
-    (!Array.isArray(root.errors) || root.errors.length)
-  )
+  if (root.errors !== undefined && !Array.isArray(root.errors))
     return fail('GRAPHQL')
+  const hasGraphQLErrors = Array.isArray(root.errors) && root.errors.length > 0
   const user = object(
     object(object(object(root.data).viewer_v2).user_results).result,
   )
@@ -131,17 +132,24 @@ export function parseAnalyticsResponse(
   const active = numericCount(
     object(user.author_follower_metrics).active_followers,
   )
-  if (
-    user.__typename !== 'User' ||
-    !userId ||
-    !count(followers) ||
-    !count(verified) ||
-    verified > followers ||
-    (active !== undefined &&
-      active !== null &&
-      (!count(active) || active > followers))
-  )
+  if (user.__typename !== 'User' || !/^\d{1,25}$/.test(userId))
     return fail('SCHEMA')
+  preview = normalizePreview({
+    ...request,
+    twitterUserId: userId,
+    metrics: {
+      followers,
+      verifiedFollowers: verified,
+      activeFollowers: active,
+    },
+  })!
+  const validFollowers =
+    count(followers) &&
+    count(verified) &&
+    verified <= followers &&
+    (active === undefined ||
+      active === null ||
+      (count(active) && active <= followers))
   const current = rows(user.current_time_series, request.from, request.to)
   // X asks for two backfill days and returns day-granularity rows from its hourly store.
   const backfill = rows(user.hourly_backfill, request.to - 2 * DAY, request.to)
@@ -189,14 +197,23 @@ export function parseAnalyticsResponse(
     if (key !== 'impressions') totals.engagements += row.count
   }
   if (!Object.values(totals).every(count)) return fail('SCHEMA')
+  preview.metrics = {
+    ...preview.metrics,
+    ...totals,
+    engagementRate: totals.impressions
+      ? totals.engagements / totals.impressions
+      : 0,
+  }
+  if (hasGraphQLErrors) return fail('GRAPHQL')
+  if (!validFollowers) return fail('SCHEMA')
   return {
     ...request,
     ok: true,
     twitterUserId: userId,
     metrics: {
       ...totals,
-      followers,
-      verifiedFollowers: verified,
+      followers: followers as number,
+      verifiedFollowers: verified as number,
       activeFollowers: typeof active === 'number' ? active : null,
       engagementRate: totals.impressions
         ? totals.engagements / totals.impressions
@@ -233,7 +250,16 @@ export function createAnalyticsNetworkReader(
         !/^(HTTP_[1-5]\d\d|NETWORK|GRAPHQL|SCHEMA)$/.test(result.code)
       )
         return
-      value = { from: to - 90 * DAY, to, ok: false, code: result.code }
+      const preview = normalizePreview(result.preview)
+      value = {
+        from: to - 90 * DAY,
+        to,
+        ok: false,
+        code: result.code,
+        ...(preview?.to === to && preview.from === to - 90 * DAY
+          ? { preview }
+          : {}),
+      }
     } else {
       if (
         result.ok !== true ||

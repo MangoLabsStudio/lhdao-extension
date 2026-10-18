@@ -11,10 +11,24 @@ import {
   closeAnalyticsCaptureWindow,
   finishAnalyticsCapture,
   pendingAnalyticsCapture,
-  reportAnalyticsCapture,
+  reportAnalyticsCapture as reportCurrent,
   startAnalyticsCapture,
 } from '../x-analytics-auto-capture'
 
+const reportAnalyticsCapture: typeof reportCurrent = async (
+  sender,
+  phase,
+  message,
+  details,
+) =>
+  reportCurrent(
+    sender,
+    phase,
+    message,
+    details ?? {
+      runId: (await pendingAnalyticsCapture(sender.tab?.id ?? -1))?.runId,
+    },
+  )
 const source = (): chrome.runtime.MessageSender => ({
   id: chrome.runtime.id,
   frameId: 0,
@@ -223,4 +237,160 @@ it('falls back to browser placement when the screen rejects the requested top-ri
   expect(vi.mocked(chrome.windows.create).mock.calls[1][0]).not.toHaveProperty(
     'left',
   )
+})
+
+it('bounds automatic retries, retains preview, and rejects stale reports', async () => {
+  gql.mockResolvedValue({
+    myXAnalytics: { twitterUserId: '123', twitterUsername: 'creator' },
+  })
+  await startAnalyticsCapture('creator', source())
+  const initial = await claimAnalyticsCapture(target())
+  const to = (Math.floor(Date.now() / 86400000) + 1) * 86400000
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const current = await pendingAnalyticsCapture(20)
+    await reportAnalyticsCapture(target(), 'error', 'temporary', {
+      runId: current!.runId,
+      retryable: true,
+      preview: {
+        twitterUserId: '123',
+        from: to - 90 * 86400000,
+        to,
+        metrics: { impressions: 1201 },
+      },
+    })
+    const failed = await pendingAnalyticsCapture(20)
+    expect(failed?.preview?.metrics.impressions).toBe(1201)
+    expect(failed?.attempt).toBe(attempt)
+    expect(failed?.phase).toBe(attempt < 3 ? 'retrying' : 'error')
+    if (attempt < 3) {
+      expect(
+        await analyticsWindowAction(popupSender(), 20, 'auto-retry'),
+      ).toMatchObject({ ok: false })
+      vi.spyOn(Date, 'now').mockReturnValue(failed!.retryAt!)
+      const results = await Promise.all([
+        analyticsWindowAction(popupSender(), 20, 'auto-retry'),
+        analyticsWindowAction(popupSender(), 20, 'auto-retry'),
+      ])
+      expect(results.filter((r) => r.type === 'ack')).toHaveLength(1)
+      await claimAnalyticsCapture(target())
+    }
+  }
+  expect(
+    await analyticsWindowAction(popupSender(), 20, 'auto-retry'),
+  ).toMatchObject({ ok: false })
+  expect(
+    await reportAnalyticsCapture(target(), 'reading', 'late', {
+      runId: 'runId' in initial ? initial.runId : '',
+    }),
+  ).toMatchObject({ ok: false })
+  await closeAnalyticsCaptureWindow(30)
+  expect(
+    await analyticsWindowAction(popupSender(), 20, 'auto-retry'),
+  ).toMatchObject({ ok: false })
+})
+
+it('rejects stale generations and mismatched-account previews during an active retry', async () => {
+  gql.mockResolvedValue({
+    myXAnalytics: { twitterUserId: '123', twitterUsername: 'creator' },
+  })
+  await startAnalyticsCapture('creator', source())
+  await claimAnalyticsCapture(target())
+  const original = (await pendingAnalyticsCapture(20))!
+  await reportAnalyticsCapture(target(), 'error', 'retry')
+  await analyticsWindowAction(popupSender(), 20, 'retry')
+  await claimAnalyticsCapture(target())
+  expect(
+    await reportCurrent(target(), 'error', 'old error', {
+      runId: original.runId,
+    }),
+  ).toMatchObject({ ok: false })
+  const to = (Math.floor(Date.now() / 86400000) + 1) * 86400000
+  await reportAnalyticsCapture(target(), 'reading', 'partial', {
+    runId: (await pendingAnalyticsCapture(20))!.runId,
+    preview: {
+      twitterUserId: '456',
+      from: to - 90 * 86400000,
+      to,
+      metrics: { impressions: 999 },
+    },
+  })
+  expect((await pendingAnalyticsCapture(20))?.preview).toBeUndefined()
+  await finishAnalyticsCapture(20, original.runId)
+  expect(await pendingAnalyticsCapture(20)).not.toBeNull()
+})
+it('retains an ambiguous save for retry but clears a rejected payload for manual recapture', async () => {
+  const { retainAnalyticsSave } = await import('../x-analytics-auto-capture')
+  await startAnalyticsCapture('creator', source())
+  await claimAnalyticsCapture(target())
+  const runId = (await pendingAnalyticsCapture(20))!.runId
+  await reportAnalyticsCapture(target(), 'saving', 'saving')
+  const payload = {
+    captureId: 'same-id',
+    twitterUsername: 'creator',
+    periodStart: '2026-07-21',
+    periodEnd: '2026-10-18',
+    capturedAt: new Date().toISOString(),
+    metrics: { impressions: 42 },
+  }
+  expect(await retainAnalyticsSave(20, runId, payload)).toBe(true)
+  expect(
+    await retainAnalyticsSave(20, runId, {
+      ...payload,
+      captureId: 'different-id',
+    }),
+  ).toBe(false)
+  await reportAnalyticsCapture(target(), 'error', 'network', {
+    runId,
+    retryable: true,
+  })
+  expect((await pendingAnalyticsCapture(20))?.savePayload).toEqual(payload)
+  vi.spyOn(Date, 'now').mockReturnValue(
+    (await pendingAnalyticsCapture(20))!.retryAt!,
+  )
+  await analyticsWindowAction(popupSender(), 20, 'auto-retry')
+  expect(await claimAnalyticsCapture(target())).toMatchObject({
+    resume: payload,
+  })
+  await reportAnalyticsCapture(target(), 'error', 'rate limited', {
+    runId: (await pendingAnalyticsCapture(20))!.runId,
+    retryable: false,
+  })
+  expect((await pendingAnalyticsCapture(20))?.phase).toBe('error')
+  expect((await pendingAnalyticsCapture(20))?.savePayload).toEqual(payload)
+  await analyticsWindowAction(popupSender(), 20, 'retry')
+  expect(await claimAnalyticsCapture(target())).toMatchObject({
+    resume: payload,
+  })
+  await reportAnalyticsCapture(target(), 'error', 'invalid', {
+    runId: (await pendingAnalyticsCapture(20))!.runId,
+    retryable: false,
+    discardSave: true,
+  })
+  expect((await pendingAnalyticsCapture(20))?.savePayload).toBeUndefined()
+})
+
+it('serializes concurrent progress and cancellation without resurrecting a closed session', async () => {
+  await startAnalyticsCapture('creator', source())
+  await claimAnalyticsCapture(target())
+  const runId = (await pendingAnalyticsCapture(20))!.runId
+  await Promise.all([
+    reportCurrent(target(), 'reading', 'reading', { runId }),
+    closeAnalyticsCaptureWindow(30),
+  ])
+  expect(await pendingAnalyticsCapture(20)).toBeNull()
+})
+it('accepts a new document claim and progress while retry navigation is settling', async () => {
+  await startAnalyticsCapture('creator', source())
+  await claimAnalyticsCapture(target())
+  await reportAnalyticsCapture(target(), 'error', 'temporary')
+  const retried = analyticsWindowAction(popupSender(), 20, 'retry')
+  const claimed = claimAnalyticsCapture(target())
+  await retried
+  const result = await claimed
+  expect(result).toMatchObject({ autoCapture: true })
+  expect(
+    await reportCurrent(target(), 'reading', 'new document', {
+      runId: 'runId' in result ? result.runId : undefined,
+    }),
+  ).toEqual({ type: 'ack' })
 })
