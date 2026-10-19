@@ -1079,6 +1079,8 @@ function extractProfileHandleFromUrl(pathname: string): string | null {
 }
 
 // ── [profile 关注任务卡] 被关注目标的主页:高亮原生「关注」按钮 + 注入任务卡 ──
+// Beta and production can share an X page; legacy cleanup must not own this card.
+const FOLLOW_CARD_SELECTOR = `[data-lhdao-follow-card-owner="${chrome.runtime.id}"]`
 let followCardState: {
   host: HTMLElement
   root: Root
@@ -1131,7 +1133,7 @@ function unmountFollowCard(): void {
     followCardState.host.remove()
     followCardState = null
   }
-  document.querySelectorAll('[data-lhdao-follow-card]').forEach((el) => {
+  document.querySelectorAll(FOLLOW_CARD_SELECTOR).forEach((el) => {
     el.remove()
   })
 }
@@ -1213,11 +1215,12 @@ export function scanProfileFollowTask(): void {
   if (followCardState) unmountFollowCard()
   const anchor = document.querySelector('[data-testid="UserName"]')
   if (!anchor?.parentElement) return
-  if (document.querySelector('[data-lhdao-follow-card]')) return
+  if (document.querySelector(FOLLOW_CARD_SELECTOR)) return
   const host = createShadowHost('lhdao-follow-card', 'inline-block')
   host.style.display = 'block'
   host.style.width = '100%'
-  host.setAttribute('data-lhdao-follow-card', '1')
+  host.setAttribute('data-lhdao-host', chrome.runtime.id)
+  host.setAttribute('data-lhdao-follow-card-owner', chrome.runtime.id)
   anchor.parentElement.insertBefore(host, anchor.nextSibling)
   const root = renderInto(
     host,
