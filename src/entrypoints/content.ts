@@ -94,7 +94,7 @@ let tasksSnapshot: {
   byAuthor: Record<string, CampaignTaskCache[]>
 } | null = null
 
-async function refreshTasksSnapshot(): Promise<void> {
+export async function refreshTasksSnapshot(): Promise<void> {
   if (contextDead) return
   try {
     const r = await sendMessage({ type: 'get-tasks-snapshot' })
@@ -250,6 +250,10 @@ export default defineContentScript({
     // 启动时立刻拉一次 snapshot + 多次重试兜底 SW 冷启动失败。
     bootstrapSnapshot()
     scheduleScan()
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible')
+        void refreshFollowTaskSnapshot()
+    })
 
     // SPA 导航监听:Twitter 用 pushState 切换路由,焦点 tweet id 会变,
     // 已挂载的 article 需要重算 focal —— 把 badge 挪到当前焦点 article。
@@ -812,6 +816,7 @@ export function unmountAll() {
   mounted.clear()
   inFlight.clear()
   unmountFollowCard()
+  followVisit = null
   // 兜底:清理 stale 标记(article 可能已离开 DOM)+ 拖延 host(若有)
   for (const a of document.querySelectorAll(`[${ARTICLE_FLAG}]`)) {
     a.removeAttribute(ARTICLE_FLAG)
@@ -1078,6 +1083,11 @@ let followCardState: {
   host: HTMLElement
   root: Root
   handle: string
+  signature: string
+} | null = null
+let followVisit: {
+  handle: string
+  status: 'loading' | 'ready' | 'error'
 } | null = null
 let glowedFollowBtn: Element | null = null
 
@@ -1126,38 +1136,84 @@ function unmountFollowCard(): void {
   })
 }
 
-function scanProfileFollowTask(): void {
+export async function refreshFollowTaskSnapshot(): Promise<void> {
+  const handle = extractProfileHandleFromUrl(location.pathname)
+  if (!handle || contextDead) return
+  const visit = { handle, status: 'loading' as 'loading' | 'ready' | 'error' }
+  followVisit = visit
+  scanProfileFollowTask()
+  try {
+    const response = await sendMessage({
+      type: 'get-current-follow-task-snapshot',
+      authorHandle: handle,
+    })
+    if (
+      followVisit !== visit ||
+      extractProfileHandleFromUrl(location.pathname) !== handle ||
+      contextDead
+    )
+      return
+    if (response.type !== 'tasks-snapshot' || response.syncFailed) {
+      visit.status = 'error'
+    } else {
+      tasksSnapshot = { byTweet: response.byTweet, byAuthor: response.byAuthor }
+      visit.status = 'ready'
+    }
+  } catch (error) {
+    if (followVisit !== visit || handleContextError(error)) return
+    visit.status = 'error'
+  }
+  scanProfileFollowTask()
+}
+
+export function scanProfileFollowTask(): void {
   if (contextDead) return
   const handle = extractProfileHandleFromUrl(location.pathname)
-  const followTask =
-    handle && tasksSnapshot
-      ? (tasksSnapshot.byAuthor[handle] ?? []).find(
-          (t) => t.actionType === 'FOLLOW',
-        )
-      : undefined
-
-  // 不是 profile 页 / 该主页无关注任务 / 换了目标 → 清理旧卡
-  if (!handle || !followTask) {
+  if (!handle) {
+    followVisit = null
     unmountFollowCard()
     return
   }
-  if (followCardState && followCardState.handle !== handle) {
-    unmountFollowCard()
+  if (followVisit?.handle !== handle) {
+    void refreshFollowTaskSnapshot()
+    return
   }
-
-  // 每次 scan 都兜底高亮(X 会重渲染按钮)
-  const btnPresent = glowFollowButton()
-
-  // 已挂且卡还在 DOM 里 → 不重复挂
-  if (followCardState?.host.isConnected) return
-  // 状态残留但节点被 X 重渲染冲掉 → 卸载后重挂
+  const followTasks = (tasksSnapshot?.byAuthor[handle] ?? []).filter(
+    (t) => t.actionType === 'FOLLOW',
+  )
+  const followTask = followTasks.find((t) => t.reserved) ?? followTasks[0]
+  if (!followTask) {
+    unmountFollowCard()
+    return
+  }
+  if (followCardState && followCardState.handle !== handle) unmountFollowCard()
+  const props = {
+    key: followTask.campaignId,
+    campaignId: followTask.campaignId,
+    targetHandle: handle,
+    reward: followTask.expectedReward,
+    reserved: followTask.reserved === true,
+    timelineOnly: followTask.timelineOnly === true,
+    followButtonPresent: glowFollowButton(),
+    syncing: followVisit.status === 'loading',
+    syncFailed: followVisit.status === 'error',
+    onRefresh: () => {
+      void refreshFollowTaskSnapshot()
+    },
+  }
+  // Only render changed inputs; X's observer also sees our card mutations.
+  const signature = JSON.stringify(props)
+  if (followCardState?.host.isConnected) {
+    if (followCardState.signature !== signature) {
+      followCardState.signature = signature
+      followCardState.root.render(createElement(ProfileFollowCard, props))
+    }
+    return
+  }
   if (followCardState) unmountFollowCard()
-
-  // 锚点:UserName 区块(profile 头部,始终存在);未渲染则下轮 rAF 再试
   const anchor = document.querySelector('[data-testid="UserName"]')
   if (!anchor?.parentElement) return
   if (document.querySelector('[data-lhdao-follow-card]')) return
-
   const host = createShadowHost('lhdao-follow-card', 'inline-block')
   host.style.display = 'block'
   host.style.width = '100%'
@@ -1165,17 +1221,10 @@ function scanProfileFollowTask(): void {
   anchor.parentElement.insertBefore(host, anchor.nextSibling)
   const root = renderInto(
     host,
-    createElement(ProfileFollowCard, {
-      campaignId: followTask.campaignId,
-      targetHandle: handle,
-      reward: followTask.expectedReward,
-      reserved: followTask.reserved === true,
-      followButtonPresent: btnPresent,
-    }),
-    // 隔离页面 CSS 继承(font/color 等),但保 block 让卡片占满宽度
+    createElement(ProfileFollowCard, props),
     ':host{all:initial;display:block}',
   )
-  followCardState = { host, root, handle }
+  followCardState = { host, root, handle, signature }
 }
 
 function attachProfileBadge(bioEl: Element, member: LighthouseMember): void {
