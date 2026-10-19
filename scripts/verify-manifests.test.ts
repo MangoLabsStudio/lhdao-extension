@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, test } from 'vitest'
+import packageJson from '../package.json'
 
 let verifier = {}
 try {
@@ -37,7 +38,7 @@ function validManifest(overrides = {}) {
   return {
     manifest_version: 3,
     name: 'Lighthouse',
-    version: '0.4.14',
+    version: packageJson.version,
     permissions: ['storage', 'alarms'],
     host_permissions: PRODUCTION_HOSTS,
     optional_host_permissions: [],
@@ -183,7 +184,7 @@ describe('requires exact version, permissions, and host permissions', () => {
   const verify = productionManifestVerifier()
   const cases = [
     ['manifest version', { manifest_version: 2 }, /manifest_version.*3/i],
-    ['extension version', { version: '0.1.6' }, /version.*0\.4\.14/i],
+    ['extension version', { version: '0.1.6' }, new RegExp(`version must be ${packageJson.version.replaceAll('.', '\\.')}\\b`, 'i')],
     [
       'permissions',
       { permissions: ['storage', 'alarms', 'activeTab', 'scripting'] },

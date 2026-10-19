@@ -4,7 +4,6 @@ import { readFile, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const EXPECTED_EXTENSION_VERSION = '0.4.14'
 const BASE_PERMISSIONS = ['storage', 'alarms']
 const FIXED_HOST_PERMISSIONS = [
   'https://x.com/*',
@@ -292,9 +291,12 @@ export async function verifyManifestDirectory(directory, options = {}) {
       `manifest_version must be 3, received ${String(manifest.manifest_version)}`,
     )
   }
-  if (manifest.version !== EXPECTED_EXTENSION_VERSION) {
+  const { version: expectedVersion } = JSON.parse(
+    await readFile(resolve('package.json'), 'utf8'),
+  )
+  if (manifest.version !== expectedVersion) {
     throw new Error(
-      `Extension version must be ${EXPECTED_EXTENSION_VERSION}, received ${String(manifest.version)}`,
+      `Extension version must be ${expectedVersion}, received ${String(manifest.version)}`,
     )
   }
 
