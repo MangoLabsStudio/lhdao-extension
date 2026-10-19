@@ -24,8 +24,7 @@ const task = (id: string, reserved = false): CampaignTaskCache => ({
   expectedReward: 11.4,
   reserved,
 })
-const card = () =>
-  document.querySelector('[data-lhdao-follow-card]')?.shadowRoot
+const card = () => document.querySelector('.lhdao-follow-card')?.shadowRoot
 beforeEach(() => {
   vi.useFakeTimers()
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -57,12 +56,12 @@ afterEach(async () => {
 })
 it('refreshes once per profile visit and rerenders reservation changes on the same host', async () => {
   await act(async () => scanProfileFollowTask())
-  const host = document.querySelector('[data-lhdao-follow-card]')
+  const host = document.querySelector('.lhdao-follow-card')
   expect(card()?.textContent).toContain('返回任务页预订')
   rows = [task('follow-1', true)]
   await act(async () => refreshTasksSnapshot())
   await act(async () => scanProfileFollowTask())
-  expect(document.querySelector('[data-lhdao-follow-card]')).toBe(host)
+  expect(document.querySelector('.lhdao-follow-card')).toBe(host)
   expect(card()?.textContent).toContain('我已关注，验证')
   for (let i = 0; i < 5; i++) await act(async () => scanProfileFollowTask())
   expect(
@@ -95,7 +94,7 @@ it('updates the hint after following and recovers a card replaced by X', async (
     .setAttribute('data-testid', '123-unfollow')
   await act(async () => scanProfileFollowTask())
   expect(card()?.textContent).toContain('确认已关注 @bundlessapp')
-  document.querySelector('[data-lhdao-follow-card]')!.remove()
+  document.querySelector('.lhdao-follow-card')!.remove()
   await act(async () => scanProfileFollowTask())
   expect(card()?.textContent).toContain('我已关注，验证')
 })
@@ -137,4 +136,29 @@ it('keeps unrelated profiles quiet and removes a card when the task disappears',
   window.history.replaceState({}, '', '/someoneelse')
   await act(async () => scanProfileFollowTask())
   expect(card()).toBeUndefined()
+})
+
+it('keeps its card when another extension runs legacy cleanup', async () => {
+  rows = [task('follow-1', true)]
+  await act(async () => scanProfileFollowTask())
+  document
+    .querySelectorAll('[data-lhdao-follow-card], [data-lhdao-host="1"]')
+    .forEach((host) => {
+      host.remove()
+    })
+  expect(card()?.textContent).toContain('我已关注，验证')
+})
+it('mounts alongside other versions and leaves their cards intact', async () => {
+  const legacyCard = document.createElement('span')
+  legacyCard.setAttribute('data-lhdao-follow-card', '1')
+  const otherCard = document.createElement('span')
+  otherCard.setAttribute('data-lhdao-follow-card-owner', 'other-extension')
+  document.body.append(legacyCard, otherCard)
+  await act(async () => scanProfileFollowTask())
+  expect(card()?.textContent).toContain('返回任务页预订')
+  rows = []
+  await act(async () => refreshFollowTaskSnapshot())
+  expect(card()).toBeUndefined()
+  expect(legacyCard.isConnected).toBe(true)
+  expect(otherCard.isConnected).toBe(true)
 })
