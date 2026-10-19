@@ -2,7 +2,7 @@
 // [profile 关注任务卡] 注入在被关注目标的 X 个人主页头部。给用户三件事:
 //   ① 指示「这是关注任务,关注 @handle 领 X LUX」
 //   ② 引导点上方被高亮的原生「关注」按钮(高亮由 content.ts 贴 glow 属性)
-//   ③ 一个主按钮:未接取→接取;已接取→验证(走插件签名 verifyOnly)→成功跳回 lhdao
+//   ③ 一个主按钮:未接取→返回网页预订;已接取→验证(走插件签名 verifyOnly)→成功跳回 lhdao
 // 关注**无停留(dwell)要求**(方案 B 的 dwell 闸只作用于 LIKE/RT)。
 // Shadow DOM 内渲染,用 inline style 自包含(不依赖 Tailwind 包)。
 // ─────────────────────────────────────────────────────────────────────────
@@ -11,6 +11,10 @@ import { useState } from 'react'
 import { sendMessage } from '@/lib/messaging'
 
 interface Props {
+  timelineOnly?: boolean
+  syncing?: boolean
+  syncFailed?: boolean
+  onRefresh?: () => void
   campaignId: string
   targetHandle: string
   reward: number
@@ -19,7 +23,13 @@ interface Props {
   followButtonPresent: boolean
 }
 
-type Phase = 'idle' | 'reserving' | 'verifying' | 'success' | 'error'
+type Phase =
+  | 'idle'
+  | 'opening'
+  | 'reserving'
+  | 'verifying'
+  | 'success'
+  | 'error'
 
 const msgOf = (r: unknown, fallback: string): string => {
   if (r && typeof r === 'object' && 'message' in r) {
@@ -33,23 +43,39 @@ export function ProfileFollowCard({
   campaignId,
   targetHandle,
   reward,
-  reserved: reservedInit,
+  reserved,
+  timelineOnly = false,
+  syncing = false,
+  syncFailed = false,
+  onRefresh,
   followButtonPresent,
 }: Props) {
-  const [reserved, setReserved] = useState(reservedInit)
   const [phase, setPhase] = useState<Phase>('idle')
   const [err, setErr] = useState('')
+
+  const onOpenTask = async (): Promise<void> => {
+    setPhase('opening')
+    setErr('')
+    try {
+      const response = await sendMessage({ type: 'open-campaign', campaignId })
+      if (response.type !== 'ack') throw new Error('Open failed')
+      setPhase('idle')
+    } catch {
+      setErr('任务页打开失败，请重试')
+      setPhase('error')
+    }
+  }
 
   const onReserve = async (): Promise<void> => {
     setPhase('reserving')
     setErr('')
     try {
-      const r = await sendMessage({ type: 'reserve-task', campaignId })
-      if (r.type === 'reserve-result' && r.ok) {
-        setReserved(true)
+      const response = await sendMessage({ type: 'reserve-task', campaignId })
+      if (response.type === 'reserve-result' && response.ok) {
         setPhase('idle')
+        onRefresh?.()
       } else {
-        setErr(msgOf(r, '接取失败，请稍后重试'))
+        setErr(msgOf(response, '接取失败，请稍后重试'))
         setPhase('error')
       }
     } catch {
@@ -77,24 +103,47 @@ export function ProfileFollowCard({
     }
   }
 
-  const busy = phase === 'reserving' || phase === 'verifying'
-  const primaryLabel =
-    phase === 'success'
-      ? '✓ 已提交，正在跳转…'
-      : phase === 'verifying'
-        ? '验证中…'
-        : phase === 'reserving'
-          ? '接取中…'
-          : reserved
-            ? '我已关注，验证'
-            : '接取任务'
-  const onPrimary = reserved ? onVerify : onReserve
+  const busy =
+    syncing ||
+    phase === 'opening' ||
+    phase === 'reserving' ||
+    phase === 'verifying'
+  const primaryLabel = syncing
+    ? '同步接单状态…'
+    : syncFailed
+      ? '重试同步'
+      : phase === 'success'
+        ? '✓ 已提交，正在跳转…'
+        : phase === 'verifying'
+          ? '验证中…'
+          : phase === 'reserving'
+            ? '接取中…'
+            : phase === 'opening'
+              ? '正在打开任务页…'
+              : reserved
+                ? '我已关注，验证'
+                : timelineOnly
+                  ? '接取任务'
+                  : '返回任务页预订'
+  const onPrimary = syncFailed
+    ? onRefresh
+    : reserved
+      ? onVerify
+      : timelineOnly
+        ? onReserve
+        : onOpenTask
 
-  const hint = !reserved
-    ? `先「接取任务」，再点${followButtonPresent ? '上方高亮的' : ''}「关注」按钮`
-    : followButtonPresent
-      ? '点上方高亮的「关注」按钮完成关注，再验证'
-      : `确认已关注 @${targetHandle} 后点验证`
+  const hint = syncing
+    ? '正在确认你在任务广场的预订状态'
+    : syncFailed
+      ? '暂时无法同步接单状态，请重试'
+      : !reserved
+        ? timelineOnly
+          ? '请先接取任务，再完成关注'
+          : '请先在任务页预订席位，再完成关注'
+        : followButtonPresent
+          ? '席位已预订，完成关注后点击验证'
+          : `确认已关注 @${targetHandle} 后点验证`
 
   return (
     <div
@@ -162,7 +211,7 @@ export function ProfileFollowCard({
 
       <button
         type="button"
-        onClick={() => void onPrimary()}
+        onClick={() => void onPrimary?.()}
         disabled={busy || phase === 'success'}
         style={{
           marginTop: 10,

@@ -475,6 +475,22 @@ export default defineBackground(() => {
       await syncTasks(true)
       return readTasksSnapshot()
     }
+    if (req.type === 'get-current-follow-task-snapshot') {
+      const url = sender.url ?? sender.tab?.url ?? ''
+      const profile = url.match(
+        /^https:\/\/(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?(?:[?#].*)?$/,
+      )
+      if (
+        sender.id !== chrome.runtime.id ||
+        !sender.tab ||
+        sender.frameId !== 0 ||
+        !profile ||
+        profile[1].toLowerCase() !== req.authorHandle?.toLowerCase()
+      )
+        return { type: 'ack' }
+      await syncTasks(true)
+      return readTasksSnapshot()
+    }
     if (req.type === 'get-captured-actions') {
       // [网页 gate] 返回某 campaign 已捕获的动作类型。网页验证前预检:没捕获就
       // 直接判「未检测到动作」失败,不走异步乐观提交。tweetId 作别名兜底(捕获

@@ -554,3 +554,62 @@ it.each([
   await loadCurrentTask(sender)
   expect(gql).not.toHaveBeenCalled()
 })
+
+it('refreshes website FOLLOW reservations on a matching profile visit', async () => {
+  const background = await import('../background')
+  background.default.main()
+  await loadSnapshot()
+  vi.mocked(gql)
+    .mockClear()
+    .mockResolvedValue({
+      myReservedEngagements: [
+        {
+          ...newlyReservedComment,
+          id: 'follow-1',
+          tweetId: null,
+          targetUrl: 'https://x.com/Bundlessapp',
+          targetUsername: 'Bundlessapp',
+          actions: [{ actionType: 'FOLLOW', baseReward: 12, targetCount: 1 }],
+        },
+      ],
+    })
+  const response = await registered.handler?.(
+    {
+      type: 'get-current-follow-task-snapshot',
+      authorHandle: 'bundlessapp',
+    },
+    {
+      ...xSender(),
+      url: 'https://x.com/Bundlessapp',
+      tab: { ...xSender().tab, url: 'https://x.com/Bundlessapp' },
+    },
+  )
+  expect(response).toMatchObject({
+    type: 'tasks-snapshot',
+    byAuthor: {
+      bundlessapp: [
+        expect.objectContaining({ campaignId: 'follow-1', reserved: true }),
+      ],
+    },
+  })
+  expect(gql).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(gql).mock.calls[0][0]).toContain(
+    'query ManualMyReservedEngagements',
+  )
+})
+it.each([
+  'https://example.test/bundlessapp',
+  'https://x.com/other',
+  'https://x.com/bundlessapp/status/123',
+])('rejects profile refresh from %s', async (url) => {
+  const background = await import('../background')
+  background.default.main()
+  await registered.handler?.(
+    {
+      type: 'get-current-follow-task-snapshot',
+      authorHandle: 'bundlessapp',
+    },
+    { ...xSender(), url, tab: { ...xSender().tab, url } },
+  )
+  expect(gql).not.toHaveBeenCalled()
+})

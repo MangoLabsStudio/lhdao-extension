@@ -56,6 +56,7 @@ export type MsgRequest =
   | { type: 'get-tasks-snapshot' }
   /** Once per tweet-detail visit; refresh website reservations, not discovery. */
   | { type: 'get-current-task-snapshot'; tweetId: string }
+  | { type: 'get-current-follow-task-snapshot'; authorHandle: string }
   | { type: 'get-captured-actions'; campaignId: string; tweetId?: string }
   | {
       type: 'reserve-task'
