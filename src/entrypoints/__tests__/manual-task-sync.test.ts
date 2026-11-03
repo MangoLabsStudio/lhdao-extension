@@ -555,6 +555,43 @@ it.each([
   expect(gql).not.toHaveBeenCalled()
 })
 
+it('initializes discovery when a FOLLOW profile is the first visit', async () => {
+  vi.mocked(gql).mockResolvedValue({
+    availableEngagements: [
+      {
+        ...newlyReservedComment,
+        id: 'available-follow',
+        tweetId: null,
+        targetUrl: 'https://x.com/Bundlessapp',
+        targetUsername: 'Bundlessapp',
+        actions: [{ actionType: 'FOLLOW', baseReward: 12, targetCount: 1 }],
+      },
+    ],
+    myReservedEngagements: [],
+    availableTweets: [],
+    me: personalMe,
+  })
+  const background = await import('../background')
+  background.default.main()
+  const response = await registered.handler?.(
+    { type: 'get-current-follow-task-snapshot', authorHandle: 'bundlessapp' },
+    {
+      ...xSender(),
+      url: 'https://x.com/Bundlessapp',
+      tab: { ...xSender().tab, url: 'https://x.com/Bundlessapp' },
+    },
+  )
+  expect(response).toMatchObject({
+    ready: true,
+    byAuthor: {
+      bundlessapp: [expect.objectContaining({ campaignId: 'available-follow' })],
+    },
+  })
+  expect(await background.readPopupData()).toMatchObject({
+    profile: { id: 'user-a', newLux: 50.3 },
+  })
+})
+
 it('refreshes website FOLLOW reservations on a matching profile visit', async () => {
   const background = await import('../background')
   background.default.main()
