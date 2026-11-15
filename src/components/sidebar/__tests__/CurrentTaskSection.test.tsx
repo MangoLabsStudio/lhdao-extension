@@ -8,6 +8,15 @@ import type { MsgResponse } from '@/types/messages'
 import { MetadataBadge } from '../../chip/MetadataBadge'
 import { CurrentTaskSection } from '../CurrentTaskSection'
 
+const profile = vi.hoisted(() => ({
+  endpoint: 'https://service.lhdao.top/graphql',
+}))
+vi.mock('@/lib/env', () => ({
+  get API_ENDPOINT() {
+    return profile.endpoint
+  },
+}))
+
 let container: HTMLDivElement
 let root: Root
 let rows: CampaignTaskCache[]
@@ -18,6 +27,7 @@ let accountChanged: (
 let updated: (message: unknown) => void
 beforeEach(() => {
   fakeBrowser.reset()
+  profile.endpoint = 'https://service.lhdao.top/graphql'
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   window.history.replaceState({}, '', '/user/status/123456')
   rows = [
@@ -167,6 +177,39 @@ describe('current-task comment guide', () => {
     )
     expect(rewarded).toHaveBeenCalledOnce()
     expect(container.textContent).toContain('奖励发放中')
+    expect(messaging.sendMessage).not.toHaveBeenCalledWith({
+      type: 'force-sync',
+    })
+  })
+
+  it('shows beta submission as awaiting verification rather than completed payment', async () => {
+    profile.endpoint = 'https://app.lhdaobeta.top/lighthouse3.0/api/v3'
+    vi.useFakeTimers()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    rows[0].actionType = 'LIKE'
+    const rewarded = vi.fn()
+    const previous = vi.mocked(messaging.sendMessage).getMockImplementation()!
+    vi.mocked(messaging.sendMessage).mockImplementation(async (req) => {
+      if (req.type === 'get-captured-actions')
+        return { type: 'captured-actions', actions: ['LIKE'] }
+      if (req.type === 'verify-task')
+        return { type: 'verify-result', ok: true, reward: 0 }
+      return previous(req)
+    })
+    await act(async () =>
+      root.render(<CurrentTaskSection onRewarded={rewarded} />),
+    )
+    await act(async () => vi.advanceTimersByTime(10_000))
+    vi.mocked(messaging.sendMessage).mockClear()
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('.lh-cur-btn')!.click(),
+    )
+    expect(rewarded).toHaveBeenCalledOnce()
+    expect(container.textContent).toContain('验证已提交 · 等待核验')
+    expect(container.textContent).not.toContain('奖励发放中')
+    expect(container.querySelector('.lh-cur-done-big')?.textContent).toBe(
+      '已提交',
+    )
     expect(messaging.sendMessage).not.toHaveBeenCalledWith({
       type: 'force-sync',
     })

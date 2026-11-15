@@ -88,7 +88,10 @@ export function App() {
   }, [readData])
 
   const openOptions = () => chrome.runtime.openOptionsPage()
-  const openWeb = () => chrome.tabs.create({ url: `${WEB_ENDPOINT}/${isLighthouse3Endpoint(API_ENDPOINT) ? 'marketplace' : 'campaigns'}` })
+  const openWeb = () =>
+    chrome.tabs.create({
+      url: `${WEB_ENDPOINT}/${isLighthouse3Endpoint(API_ENDPOINT) ? 'marketplace' : 'campaigns'}`,
+    })
 
   const startPair = React.useCallback(async () => {
     const r = await sendMessage({ type: 'start-pairing' })
@@ -106,7 +109,9 @@ export function App() {
     <div className="bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <Header connected={!!data?.hasToken} hasData={!!data} />
       {isLighthouse3Endpoint(API_ENDPOINT) && (
-        <p className="px-4 py-2 text-xs text-slate-500">新灯塔测试站：请先在网页接取点赞任务，再同步到插件验证。</p>
+        <p className="px-4 py-2 text-xs text-slate-500">
+          新灯塔测试站：请先在网页接取互动任务，再同步到插件验证。
+        </p>
       )}
       {data === null ? (
         <SkeletonBlock />

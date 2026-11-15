@@ -9,9 +9,8 @@ import { dbg } from '@/lib/capture-debug'
 import {
   CAPTURE_OPS,
   type CapturedAction,
-  extractCapturedAction,
-  extractCreatedCommentTweetId,
   extractFollowFromResponse,
+  extractSuccessfulCapturedAction,
 } from '@/lib/engagement-capture'
 
 const FOLLOW_RE = /\/friendships\/create/
@@ -93,10 +92,9 @@ export default defineContentScript({
       responseJson?: unknown,
     ): void => {
       const op = opFromUrl(url)
-      const action = extractCapturedAction(op, body)
+      const action = extractSuccessfulCapturedAction(op, body, responseJson)
       if (action) {
-        const resultTweetId = extractCreatedCommentTweetId(op, responseJson)
-        post(resultTweetId ? { ...action, resultTweetId } : action)
+        post(action)
         return
       }
       if (op && CAPTURE_OP_SET.has(op)) {
@@ -175,7 +173,10 @@ export default defineContentScript({
               if (!url) return
               let responseJson: unknown
               try {
-                responseJson = JSON.parse(self.responseText)
+                responseJson =
+                  self.responseType === 'json'
+                    ? self.response
+                    : JSON.parse(self.responseText)
               } catch {}
               emitAction(url, body, responseJson)
               if (FOLLOW_RE.test(url)) {

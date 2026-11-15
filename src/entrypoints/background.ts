@@ -2328,7 +2328,23 @@ async function reserveOnly(
  * 发奖仍在后端 worker(Phase3 Twitter 权威 / Phase4 插件权威),故 submit 只回
  * accepted/status,不返 reward —— UI 显"已提交,发放中",余额由 syncTasks 稍后刷新。
  */
+const v3Verifications = new Map<string, Promise<MsgResponse>>()
+
 async function verifyOnly(campaignId: string): Promise<MsgResponse> {
+  if (!isLighthouse3Endpoint(connectionEndpoint)) return verifyOnlyInner(campaignId)
+  const key = `${await localStore.get('apiToken')}:${campaignId}`
+  const existing = v3Verifications.get(key)
+  if (existing) return existing
+  const current = verifyOnlyInner(campaignId)
+  v3Verifications.set(key, current)
+  try {
+    return await current
+  } finally {
+    if (v3Verifications.get(key) === current) v3Verifications.delete(key)
+  }
+}
+
+async function verifyOnlyInner(campaignId: string): Promise<MsgResponse> {
   const generation = syncGeneration
   const token = await localStore.get('apiToken')
   try {

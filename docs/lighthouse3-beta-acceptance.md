@@ -9,7 +9,7 @@ WXT_API_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0/api/v3 \
 WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 ```
 
-当前验收范围：网页先接 LIKE 任务 → 老插件同步本人有效接单 → X 实际动作捕获 → 票据 → 原证明提交 → 新站异步核验。网络结果不明时持久化原命令并重发，提交返回 VERIFYING 不代表成功或奖励到账。其他互动、账号分析、插件内抢单等旧操作尚未接通，不应当作完整迁移验收。
+首次 LIKE 验收范围：网页先接 LIKE 任务 → 老插件同步本人有效接单 → X 实际动作捕获 → 票据 → 原证明提交 → 新站异步核验。网络结果不明时持久化原命令并重发，提交返回 VERIFYING 不代表成功或奖励到账。该次记录仅覆盖 LIKE，不应当作完整迁移验收。后续全互动扩展见 lighthouse3-all-engagement-plan.md；账号分析、插件内抢单不在本次迁移范围。
 
 ## 已验证
 
@@ -31,8 +31,10 @@ WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 
 ## 限制和后续
 
-其他互动类型尚未接入这个老插件适配，不能宣称完整迁移完成。还需核验到期后的实际支付与撤销/异常处理。浏览器验收时 Service Worker DevTools 曾保持打开，本轮尚未验证普通休眠唤醒行为。
+RT、COMMENT、FOLLOW、COMMENT_LIKE 和组合适配已进入实现及自动回归，真实插件验收仍待逐项完成，不能宣称完整迁移完成。还需核验到期后的实际支付与撤销/异常处理。浏览器验收时 Service Worker DevTools 曾保持打开，本轮尚未验证普通休眠唤醒行为。
 
-当前安装构建还含配对错误提示保留的四行本地诊断改动（background.scheduleReset），未纳入已推送功能提交；不将它认定为配对成功的必要修复。
+首次安装构建曾含配对错误提示保留的本地诊断改动（background.scheduleReset）；本轮源码已移除该诊断，恢复正常配对错误重置。新的全互动包尚待浏览器加载与验收。
 
 新站源码：`/Users/kkruis/Desktop/project/LightHouse3.0/.local/wt-central-live`。本地工作区尚未对齐上述远端提交，不要直接强推本地 HEAD。老插件功能提交 `daedf67` 位于 `feat/lh3-legacy-plugin-beta`，未合并老插件 dev/main。
+
+本轮使用最新远端 dev c7fd682 的独立目录 `/private/tmp/lh3-engagement-shallow-20261116` 实现新站改动；旧工作区仅作参考。全类型测试记录及未完成项以 `lighthouse3-all-engagement-plan.md` 为准。

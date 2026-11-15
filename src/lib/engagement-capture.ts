@@ -115,6 +115,20 @@ export function extractCapturedAction(
   return null
 }
 
+/** Shared fetch/XHR response gate. HTTP 200 can still contain GraphQL errors. */
+export function extractSuccessfulCapturedAction(
+  op: string | null | undefined,
+  body: string | undefined,
+  responseJson: unknown,
+): CapturedAction | null {
+  const errors = asRecord(responseJson).errors
+  if (Array.isArray(errors) && errors.length > 0) return null
+  const action = extractCapturedAction(op, body)
+  if (!action) return null
+  const resultTweetId = extractCreatedCommentTweetId(op, responseJson)
+  return resultTweetId ? { ...action, resultTweetId } : action
+}
+
 export function extractCreatedCommentTweetId(
   op: string | null | undefined,
   responseJson: unknown,

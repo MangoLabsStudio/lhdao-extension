@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   actionMatchesTask,
+  type CapturedAction,
   extractCapturedAction,
   extractCreatedCommentTweetId,
   extractFollowFromResponse,
+  extractSuccessfulCapturedAction,
   mapCaptureToCampaigns,
   mergeAction,
+  type ReportedAction,
 } from '../engagement-capture'
 
 const body = (variables: unknown) => JSON.stringify({ variables })
@@ -297,5 +300,123 @@ describe('mergeAction', () => {
     expect(
       mergeAction(undefined, { actionType: 'FOLLOW', capturedAt: 'a' }),
     ).toEqual([{ actionType: 'FOLLOW', capturedAt: 'a' }])
+  })
+})
+
+describe('successful GraphQL capture shared by fetch and XHR', () => {
+  const request = body({
+    tweet_id: '123',
+    reply: { in_reply_to_tweet_id: '123' },
+    tweet_text: 'gm',
+  })
+  it.each([
+    'FavoriteTweet',
+    'CreateRetweet',
+    'CreateTweet',
+    'CreateNoteTweet',
+  ])('%s rejects HTTP 200 GraphQL errors, including partial data', (op) => {
+    for (const response of [
+      { errors: [{ message: 'denied' }] },
+      {
+        data: {
+          create_tweet: { tweet_results: { result: { rest_id: '456' } } },
+        },
+        errors: [{ message: 'failed' }],
+      },
+    ]) {
+      expect(extractSuccessfulCapturedAction(op, request, response)).toBeNull()
+    }
+  })
+  it('preserves successful actions and existing missing-response behavior', () => {
+    for (const response of [undefined, {}, { data: {}, errors: [] }]) {
+      expect(
+        extractSuccessfulCapturedAction('FavoriteTweet', request, response),
+      ).toEqual({ actionType: 'LIKE', tweetId: '123' })
+    }
+    expect(
+      extractSuccessfulCapturedAction('CreateTweet', request, {
+        data: {
+          create_tweet: { tweet_results: { result: { rest_id: '456' } } },
+        },
+      }),
+    ).toEqual({
+      actionType: 'COMMENT',
+      tweetId: '123',
+      commentText: 'gm',
+      resultTweetId: '456',
+    })
+  })
+})
+
+describe('multi-action mapping and accumulation', () => {
+  const actions: Record<string, CapturedAction> = {
+    COMMENT: {
+      actionType: 'COMMENT',
+      tweetId: '123',
+      commentText: 'original text',
+      resultTweetId: '456',
+    },
+    RT: { actionType: 'RT', tweetId: '123' },
+    FOLLOW: { actionType: 'FOLLOW', handle: 'alice' },
+    LIKE: { actionType: 'LIKE', tweetId: '123' },
+  }
+  it.each([
+    ['COMMENT', 'RT', 'FOLLOW'],
+    ['COMMENT', 'FOLLOW', 'RT'],
+    ['RT', 'COMMENT', 'FOLLOW'],
+    ['RT', 'FOLLOW', 'COMMENT'],
+    ['FOLLOW', 'COMMENT', 'RT'],
+    ['FOLLOW', 'RT', 'COMMENT'],
+  ])('accumulates %s → %s → %s without LIKE', (...order) => {
+    const snapshot = {
+      byTweet: {
+        '123': ['COMMENT', 'RT'].map((actionType) => ({
+          campaignId: 'combo',
+          actionType,
+        })),
+      },
+      byAuthor: { alice: [{ campaignId: 'combo', actionType: 'FOLLOW' }] },
+    }
+    let accumulated: ReportedAction[] = []
+    for (const [index, key] of order.entries()) {
+      const mapped = mapCaptureToCampaigns(actions[key], snapshot)
+      expect(mapped).toHaveLength(1)
+      accumulated = mergeAction(accumulated, {
+        ...mapped[0],
+        capturedAt: 'time',
+      })
+      expect(accumulated).toHaveLength(index + 1)
+    }
+    expect(accumulated.map((a) => a.actionType).sort()).toEqual([
+      'COMMENT',
+      'FOLLOW',
+      'RT',
+    ])
+    expect(accumulated.find((a) => a.actionType === 'COMMENT')).toMatchObject(
+      actions.COMMENT,
+    )
+    expect(
+      accumulated.find((a) => a.actionType === 'FOLLOW'),
+    ).not.toHaveProperty('tweetId')
+    expect(mapCaptureToCampaigns(actions.LIKE, snapshot)).toEqual([])
+  })
+  it.each([
+    ['COMMENT', 'LIKE'],
+    ['LIKE', 'COMMENT'],
+  ])('COMMENT_LIKE retains independent %s then %s evidence', (first, second) => {
+    const snapshot = {
+      byTweet: { '123': [{ campaignId: 'combo', actionType: 'COMMENT_LIKE' }] },
+      byAuthor: {},
+    }
+    let accumulated: ReportedAction[] = []
+    for (const key of [first, second, first]) {
+      const [mapped] = mapCaptureToCampaigns(actions[key], snapshot)
+      accumulated = mergeAction(accumulated, { ...mapped, capturedAt: 'time' })
+      expect(accumulated.map((a) => a.actionType)).not.toContain('COMMENT_LIKE')
+    }
+    expect(accumulated).toHaveLength(2)
+    expect(accumulated.find((a) => a.actionType === 'COMMENT')).toMatchObject(
+      actions.COMMENT,
+    )
   })
 })

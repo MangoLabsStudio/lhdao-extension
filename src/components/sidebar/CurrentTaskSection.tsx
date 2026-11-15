@@ -1,3 +1,5 @@
+import { API_ENDPOINT } from '@/lib/env'
+import { isLighthouse3Endpoint } from '@/lib/lighthouse3-transport'
 import * as React from 'react'
 import { LighthouseSelectedText } from '@/components/lighthouse/LighthouseSelectedText'
 import {
@@ -590,6 +592,7 @@ export function CurrentTaskSection({
   if (!campaign) return null
 
   if (phase === 'success') {
+    const pendingVerification = isLighthouse3Endpoint(API_ENDPOINT)
     // 发奖由后端异步处理。成功态不展示预估/最高档奖励数字,避免把异步到账前的
     // expectedReward 误解成实际发放金额;这里只确认任务已完成并已提交验证。
     return (
@@ -597,15 +600,23 @@ export function CurrentTaskSection({
         <div className="lh-cur-head">
           <span className="lh-cur-eyebrow">当前任务</span>
           {closeButton}
-          <span className="lh-cur-pill lh-cur-pill-done">已完成</span>
+          <span className="lh-cur-pill lh-cur-pill-done">
+            {pendingVerification ? '已提交' : '已完成'}
+          </span>
         </div>
         <div className="lh-cur-card">
           <div className="lh-cur-done">
             <span className="lh-cur-done-burst">
               <LogoBadge />
             </span>
-            <div className="lh-cur-done-big">已完成</div>
-            <div className="lh-cur-done-sub">验证已提交 · 奖励发放中</div>
+            <div className="lh-cur-done-big">
+              {pendingVerification ? '已提交' : '已完成'}
+            </div>
+            <div className="lh-cur-done-sub">
+              {pendingVerification
+                ? '验证已提交 · 等待核验'
+                : '验证已提交 · 奖励发放中'}
+            </div>
           </div>
           <div className="lh-cur-done-cta">
             <button

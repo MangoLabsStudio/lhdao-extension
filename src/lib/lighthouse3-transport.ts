@@ -114,14 +114,31 @@ export async function lighthouse3Pairing(
   throw new Lighthouse3Error('LH3_OPERATION_NOT_CONNECTED')
 }
 
+const engagementActions = [
+  'LIKE',
+  'RT',
+  'COMMENT',
+  'FOLLOW',
+  'COMMENT_LIKE',
+] as const
+type V3Action = {
+  actionType: (typeof engagementActions)[number]
+  baseReward: number
+  targetCount: number
+}
 type V3Task = {
   id: string
   acceptedReceiptId: string
   acceptedRewardLux: string
   penaltyDivisor: string
+  actions?: V3Action[]
   [key: string]: unknown
 }
-type V3Snapshot = { scope: 'OWN_RESERVED_LIKE'; me: unknown; tasks: V3Task[] }
+type V3Snapshot = {
+  scope: 'OWN_RESERVED_LIKE' | 'OWN_RESERVED_ENGAGEMENT'
+  me: unknown
+  tasks: V3Task[]
+}
 async function received(
   endpoint: string,
   signal?: AbortSignal,
@@ -140,35 +157,63 @@ async function received(
       },
     },
   )) as V3Snapshot
-  if (result?.scope !== 'OWN_RESERVED_LIKE' || !Array.isArray(result.tasks))
+  if (
+    !['OWN_RESERVED_LIKE', 'OWN_RESERVED_ENGAGEMENT'].includes(result?.scope) ||
+    !Array.isArray(result.tasks)
+  )
     throw new Lighthouse3Error('LH3_RESPONSE_INVALID')
+  if (result.scope === 'OWN_RESERVED_ENGAGEMENT') {
+    for (const task of result.tasks) {
+      if (
+        !Array.isArray(task.actions) ||
+        task.actions.length === 0 ||
+        task.actions.some(
+          (a) =>
+            !a ||
+            !engagementActions.includes(a.actionType) ||
+            !Number.isFinite(a.baseReward) ||
+            a.baseReward < 0 ||
+            !Number.isInteger(a.targetCount) ||
+            a.targetCount < 1,
+        ) ||
+        new Set(task.actions.map((a) => a.actionType)).size !==
+          task.actions.length
+      )
+        throw new Lighthouse3Error('LH3_RESPONSE_INVALID')
+    }
+  }
   return result
 }
-async function likeRequest(
+async function engagementRequest(
   endpoint: string,
   receiptId: string,
   kind: 'context' | 'ticket' | 'submit',
   input: unknown,
   signal?: AbortSignal,
+  family: 'like' | 'engagement' = 'like',
 ) {
   if (!/^[A-Za-z0-9_-]+$/.test(receiptId))
     throw new Lighthouse3Error('LH3_RECEIPT_INVALID')
   const suffix = kind === 'submit' ? 'verification' : kind
   return lighthouse3Post(
     endpoint,
-    `dispatch/acceptances/${receiptId}/like-${suffix}`,
+    `dispatch/acceptances/${receiptId}/${family}-${suffix}`,
     input,
     {
       signal,
       operation: {
-        id: `lh3.like.${kind}.v1`,
+        id: `lh3.${family}.${kind}.v1`,
         name:
-          kind === 'context'
-            ? 'ReadOwnPluginLikeTask'
-            : kind === 'ticket'
-              ? 'MintLikeEngagementTicket'
-              : 'SubmitLikeVerification',
-        document: `POST /api/v3/dispatch/acceptances/:acceptedReceiptId/like-${suffix}`,
+          family === 'engagement'
+            ? kind === 'ticket'
+              ? 'MintEngagementTicket'
+              : 'SubmitEngagementVerification'
+            : kind === 'context'
+              ? 'ReadOwnPluginLikeTask'
+              : kind === 'ticket'
+                ? 'MintLikeEngagementTicket'
+                : 'SubmitLikeVerification',
+        document: `POST /api/v3/dispatch/acceptances/:acceptedReceiptId/${family}-${suffix}`,
         variables: { acceptedReceiptId: receiptId, input },
       },
     },
@@ -181,6 +226,39 @@ async function pendingKey(campaignId: string) {
   return `lh3-pending:${await sha256Hex(token)}:${campaignId}`
 }
 
+const campaignOperations = new Map<string, Promise<unknown>>()
+
+async function serializeCampaign<T>(
+  key: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const previous = campaignOperations.get(key) ?? Promise.resolve()
+  const current = previous.catch(() => {}).then(work)
+  campaignOperations.set(key, current)
+  try {
+    return await current
+  } finally {
+    if (campaignOperations.get(key) === current) campaignOperations.delete(key)
+  }
+}
+
+// Only immutable input validation failures known to precede admission. Never
+// clear on expiry, replay, auth, signature or infrastructure failures: an earlier
+// attempt of the same command may already have been admitted.
+const preAdmissionRefusals = new Set([
+  'ENGAGEMENT_PROOF_INVALID',
+  'PROOF_COMMENT_INVALID',
+  'COMMENT_TOO_SHORT',
+])
+
+// Generic submit checks the durable requestKey result before active/prepare/evaluate.
+// These 409s therefore confirm that this command was not admitted (unlike LIKE).
+const genericPreAdmissionConflicts = new Set([
+  'ENGAGEMENT_CAPTURE_REQUIRED',
+  'PROOF_TS_SKEW',
+  'ENGAGEMENT_TICKET_EXPIRED',
+])
+
 /** Reuse the exact command after an uncertain response, including its original proof. */
 export async function resumeLighthouse3Proof(
   endpoint: string,
@@ -188,9 +266,21 @@ export async function resumeLighthouse3Proof(
   signal?: AbortSignal,
 ): Promise<boolean> {
   const key = await pendingKey(campaignId)
+  return serializeCampaign(key, () =>
+    resumePendingProof(endpoint, campaignId, key, signal),
+  )
+}
+
+async function resumePendingProof(
+  endpoint: string,
+  campaignId: string,
+  key: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const pending = (await chrome.storage.local.get(key))[key] as
     | {
         receiptId: string
+        family?: 'like' | 'engagement'
         input: {
           requestKey: string
           deviceId: string
@@ -201,17 +291,36 @@ export async function resumeLighthouse3Proof(
   if (!pending) return false
   if (pending.input.proof.campaignId !== campaignId)
     throw new Lighthouse3Error('LH3_RECEIPT_MISMATCH')
-  const result = (await likeRequest(
+  const result = (await engagementRequest(
     endpoint,
     pending.receiptId,
     'submit',
     pending.input,
     signal,
-  )) as { status: string; requestKey: string; campaignId: string }
+    pending.family ?? 'like',
+  ).catch(async (error: unknown) => {
+    if (
+      error instanceof Lighthouse3Error &&
+      (((error.httpStatus === 400 || error.httpStatus === 422) &&
+        preAdmissionRefusals.has(error.code)) ||
+        (pending.family === 'engagement' &&
+          error.httpStatus === 409 &&
+          genericPreAdmissionConflicts.has(error.code)))
+    )
+      await chrome.storage.local.remove(key)
+    throw error
+  })) as {
+    status: string
+    requestKey: string
+    campaignId: string
+    acceptedReceiptId?: string
+  }
   if (
     result?.status !== 'VERIFYING' ||
     result.requestKey !== pending.input.requestKey ||
-    result.campaignId !== campaignId
+    result.campaignId !== campaignId ||
+    (pending.family === 'engagement' &&
+      result.acceptedReceiptId !== pending.receiptId)
   )
     throw new Lighthouse3Error('LH3_RECEIPT_MISMATCH')
   await chrome.storage.local.remove(key)
@@ -249,18 +358,26 @@ export async function lighthouse3Operation(
     return {
       myReservedEngagements: snapshot.tasks.map((task) => ({
         ...task,
+        targetUsername:
+          typeof task.targetUsername === 'string'
+            ? task.targetUsername.trim().replace(/^@/, '').toLowerCase()
+            : task.targetUsername,
         expectedReward:
           Number(task.acceptedRewardLux) / Number(task.penaltyDivisor),
         myExpectedReward:
           Number(task.acceptedRewardLux) / Number(task.penaltyDivisor),
-        actions: [
-          {
-            actionType: 'LIKE',
-            baseReward:
-              Number(task.acceptedRewardLux) / Number(task.penaltyDivisor),
-            targetCount: 1,
-          },
-        ],
+        actions:
+          snapshot.scope === 'OWN_RESERVED_ENGAGEMENT'
+            ? task.actions
+            : [
+                {
+                  actionType: 'LIKE',
+                  baseReward:
+                    Number(task.acceptedRewardLux) /
+                    Number(task.penaltyDivisor),
+                  targetCount: 1,
+                },
+              ],
       })),
     }
   }
@@ -277,21 +394,37 @@ export async function lighthouse3Operation(
     const snapshot = await received(endpoint, signal)
     const task = snapshot.tasks.find((t) => t.id === args.campaignId)
     if (!task) throw new Lighthouse3Error('NO_ACTIVE_RESERVATION')
-    const ticket = (await likeRequest(
+    const family =
+      snapshot.scope === 'OWN_RESERVED_LIKE' ||
+      (task.actions?.length === 1 && task.actions[0].actionType === 'LIKE')
+        ? 'like'
+        : 'engagement'
+    const ticket = (await engagementRequest(
       endpoint,
       task.acceptedReceiptId,
       'ticket',
       {},
       signal,
+      family,
     )) as { ticket: string; macKey: string; expiresAt: string }
     const token = await localStore.get('apiToken')
     const key = `lh3-ticket:${await sha256Hex(token ?? '')}:${await sha256Hex(ticket.ticket)}`
     await chrome.storage.local.set({
       [key]: {
         receiptId: task.acceptedReceiptId,
+        family,
         campaignId: task.id,
         expiresAt: ticket.expiresAt,
         requestKey: crypto.randomUUID(),
+        targetTweetId: typeof task.tweetId === 'string' ? task.tweetId : null,
+        requiredActions:
+          snapshot.scope === 'OWN_RESERVED_LIKE'
+            ? ['LIKE']
+            : task.actions!.map((action) => action.actionType),
+        targetUsername:
+          typeof task.targetUsername === 'string'
+            ? task.targetUsername.trim().replace(/^@/, '').toLowerCase()
+            : null,
       },
     })
     return { mintEngagementTicket: ticket }
@@ -303,27 +436,74 @@ export async function lighthouse3Operation(
     const token = await localStore.get('apiToken')
     const key = `lh3-ticket:${await sha256Hex(token ?? '')}:${await sha256Hex(proof.ticket)}`
     const journal = (await chrome.storage.local.get(key))[key] as
-      | { receiptId: string; campaignId: string; requestKey: string }
+      | {
+          receiptId: string
+          campaignId: string
+          requestKey: string
+          family?: 'like' | 'engagement'
+          requiredActions?: string[]
+          targetUsername?: string | null
+          targetTweetId?: string | null
+        }
       | undefined
     if (!journal || journal.campaignId !== proof.campaignId)
       throw new Lighthouse3Error('LH3_RECEIPT_INVALID')
     const device = await getOrCreateDeviceIdentity()
     const pending = await pendingKey(proof.campaignId)
-    // Keep the first command intact until its outcome is known.
-    if (!(await chrome.storage.local.get(pending))[pending]) {
-      await chrome.storage.local.set({
-        [pending]: {
-          receiptId: journal.receiptId,
-          input: {
-            requestKey: journal.requestKey,
-            deviceId: device.deviceId,
-            proof,
+    return serializeCampaign(pending, async () => {
+      // Keep the first command intact until its outcome is known.
+      if (!(await chrome.storage.local.get(pending))[pending]) {
+        // Check new commands only; an uncertain command must replay unchanged.
+        // Older journals have no requirements and retain their original behavior.
+        if (journal.requiredActions) {
+          const actions = Array.isArray(proof.actions) ? proof.actions : []
+          const has = (type: string): boolean =>
+            actions.some(
+              (action) =>
+                action &&
+                action.actionType === type &&
+                (type === 'FOLLOW'
+                  ? typeof action.handle === 'string' &&
+                    !!journal.targetUsername &&
+                    action.handle.trim().replace(/^@/, '').toLowerCase() ===
+                      journal.targetUsername
+                  : typeof action.tweetId === 'string' &&
+                    action.tweetId.length > 0 &&
+                    (journal.targetTweetId === undefined ||
+                      action.tweetId === journal.targetTweetId)),
+            )
+          if (
+            (journal.targetTweetId !== undefined &&
+              actions.some(
+                (action) =>
+                  !action ||
+                  (action.actionType !== 'FOLLOW' &&
+                    action.tweetId !== journal.targetTweetId),
+              )) ||
+            !journal.requiredActions.every((type) =>
+              type === 'COMMENT_LIKE'
+                ? has('COMMENT') && has('LIKE')
+                : has(type),
+            )
+          )
+            throw new Lighthouse3Error('LH3_ACTIONS_INCOMPLETE')
+        }
+
+        await chrome.storage.local.set({
+          [pending]: {
+            receiptId: journal.receiptId,
+            family: journal.family ?? 'like',
+            input: {
+              requestKey: journal.requestKey,
+              deviceId: device.deviceId,
+              proof,
+            },
           },
-        },
-      })
-    }
-    await resumeLighthouse3Proof(endpoint, proof.campaignId, signal)
-    return { submitEngagementProof: { accepted: true, status: 'VERIFYING' } }
+        })
+      }
+      await resumePendingProof(endpoint, proof.campaignId!, pending, signal)
+      return { submitEngagementProof: { accepted: true, status: 'VERIFYING' } }
+    })
   }
   throw new Lighthouse3Error('LH3_OPERATION_NOT_CONNECTED')
 }
