@@ -19,10 +19,20 @@ WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 - 仅 storage/alarms 与 X/测试站域名权限；不使用 debugger。独立验收插件保持停用。
 - 新后端改动已发布 dev `36b7c2bf1ab38398aa4ea1ee7977a1ee1ab82d0c` 并回读确认；基于远端 `9e30da0` 保留其新增 7 个提交，使用非强制带预期 SHA 的更新。
 
-## 未完成及恢复入口
+## 2026-11-16 浏览器实际验收
 
-浏览器控制连续超时，无法继续部署控制台核验。发布后空配对请求仍返回 `LOCAL_RUNTIME_WRITE_SCOPE`，不能声明新 API 已部署或配对成功。新站 API/Worker 需核对版本及显式插件/LIKE 开关，保持其余环境配置。插件来源应精确配置为 `chrome-extension://jenfbnidlggkkpedonpiakaabbbghcfj`。最终包对任务广场链接修正后已重新构建，浏览器中还需重新加载。
+- 新站 API、Worker 部署记录均为 Done，版本 `c7fd682c6a17881c4f7693f42183b3eb77822b9b`。插件来源按安装 ID 精确配置，未启用 LIKE_COUNT 兜底。
+- kingkk 中老插件成功配对 lumi / @lumi_lly，正常显示 CONNECTED。网页接单后手动同步由 TASKS LIVE 0 变为 1。
+- 测试任务 `cmwi45trg000601o695c5fewl`（老插件验收 LIKE 20261116），发布者 0xWang健林，5 个 A 档席位，预算 2 LUX + 0.2 LUX 服务费。lumi 于 01:44 接单，约定净奖励 0.4 LUX。
+- 目标 `https://x.com/BinanceResearch/status/2120398201056596019`，X 当前账号 @lumi_lly。点击真实点赞后由 122 变为 123，老插件原任务面板由“点赞 待完成”变为“点赞 已完成”，停留要求满足后点击“验证发奖”。
+- 老插件显示“验证已提交 · 奖励发放中”；新站本人接单详情显示“已完成 / 核验已通过 / 待支付 0.4 LUX”，最早支付时间为 2026-11-17 01:47（Asia/Shanghai）。这是乐观核验提交及处理通过，**尚未实际支付**，不代表独立 X 二次核查或资金到账。
+- 验收临时将 lumi AI 改为 WEB3，补充测试认证和 public_metrics.followers_count=1000，并隔离一条已结束旧任务参与记录。测试资格是人工夹具，不能证明真实资料同步有效。原始值已备份至测试数据库容器 `/tmp/lumi-plugin-profile-1116.jsonl`、`/tmp/lumi-plugin-participant-1116.jsonl`。验收后恢复，独立查询 type_restored、details_restored、participant_exact_restored 均为 true；旧参与记录整行 JSON 与备份相同。
+- 保留真实点赞供延迟审核；此前 COMMENT 验收评论也保留。
 
-新站源码：`/Users/kkruis/Desktop/project/LightHouse3.0/.local/wt-central-live`。该本地工作区未拉取到上述远端新提交（Git HTTPS 连接重置/超时，发布改走 GitHub 连接工具）；不要直接强推本地 HEAD。远端 dev 是当前已发布来源。
+## 限制和后续
 
-尚需：核对 API/Worker 部署 → 重新加载老插件 → lumi 配对 → 真实 X 动作捕获和服务端回执 → 还原必要临时测试数据。此前 lumi 临时资料与旧参与记录已恢复，本轮未重新修改。
+其他互动类型尚未接入这个老插件适配，不能宣称完整迁移完成。还需核验到期后的实际支付与撤销/异常处理。浏览器验收时 Service Worker DevTools 曾保持打开，本轮尚未验证普通休眠唤醒行为。
+
+当前安装构建还含配对错误提示保留的四行本地诊断改动（background.scheduleReset），未纳入已推送功能提交；不将它认定为配对成功的必要修复。
+
+新站源码：`/Users/kkruis/Desktop/project/LightHouse3.0/.local/wt-central-live`。本地工作区尚未对齐上述远端提交，不要直接强推本地 HEAD。老插件功能提交 `daedf67` 位于 `feat/lh3-legacy-plugin-beta`，未合并老插件 dev/main。
