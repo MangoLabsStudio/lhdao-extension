@@ -1,3 +1,6 @@
+import { resumeLighthouse3Proof } from '../lib/lighthouse3-transport'
+import { isLighthouse3Endpoint, pairingPage } from '../lib/lighthouse3-transport'
+import { API_ENDPOINT as connectionEndpoint } from '../lib/env'
 // import {
 //   type BinanceProbeObservation,
 //   parseProbeObservation,
@@ -2086,7 +2089,7 @@ async function reportMappedCaptures(
           : { actionType: m.actionType, capturedAt }
     const merged = mergeAction(acc[m.campaignId], next)
     acc[m.campaignId] = merged // session 保留 commentText,供 verifyOnly 随签名提交
-    await gql<ReportEngagementCaptureResult>(
+    if (!isLighthouse3Endpoint(connectionEndpoint)) await gql<ReportEngagementCaptureResult>(
       REPORT_ENGAGEMENT_CAPTURE_MUTATION,
       {
         input: {
@@ -2106,7 +2109,7 @@ async function reportMappedCaptures(
       },
     )
     dbg(
-      'bg 上报成功',
+      isLighthouse3Endpoint(connectionEndpoint) ? 'bg 捕获已缓存，等待验证提交' : 'bg 上报成功',
       m.campaignId,
       merged.map((x) => x.actionType),
     )
@@ -2329,6 +2332,10 @@ async function verifyOnly(campaignId: string): Promise<MsgResponse> {
   const generation = syncGeneration
   const token = await localStore.get('apiToken')
   try {
+    if (isLighthouse3Endpoint(connectionEndpoint) && await resumeLighthouse3Proof(connectionEndpoint, campaignId)) {
+      await updateCachedEngagement(campaignId, 'verify', token, generation)
+      return { type: 'verify-result', ok: true, reward: 0 }
+    }
     // 验证前先尝试把短缓存里的原始捕获重放一次,避免"刚完成动作但
     // capturedActions 还没落 campaignId"时提交空 proof。
     queueRawCaptureReconcile()
@@ -2434,7 +2441,7 @@ async function verifyOnly(campaignId: string): Promise<MsgResponse> {
  */
 async function openTaskHall(): Promise<void> {
   const origin = new URL(WEB_ENDPOINT).origin
-  const url = `${WEB_ENDPOINT}/campaigns`
+  const url = `${WEB_ENDPOINT}/${isLighthouse3Endpoint(connectionEndpoint) ? 'marketplace' : 'campaigns'}`
   try {
     const tabs = await chrome.tabs.query({ url: `${origin}/*` })
     const onHall = tabs.find(
@@ -2464,7 +2471,7 @@ async function openTaskHall(): Promise<void> {
 /** 跳该 campaign 详情页(任务观察界面)。复用 openTaskHall 的「复用已开标签」逻辑。 */
 async function openCampaignDetail(campaignId: string): Promise<void> {
   const origin = new URL(WEB_ENDPOINT).origin
-  const url = `${WEB_ENDPOINT}/campaigns/${encodeURIComponent(campaignId)}`
+  const url = `${WEB_ENDPOINT}/${isLighthouse3Endpoint(connectionEndpoint) ? 'tasks/received' : 'campaigns'}/${encodeURIComponent(campaignId)}`
   try {
     const tabs = await chrome.tabs.query({ url: `${origin}/*` })
     const onDetail = tabs.find(
@@ -2620,7 +2627,7 @@ async function startPairing(): Promise<
   }
 
   // 开主站 connect 页
-  const url = `${WEB_ENDPOINT}/extension/connect?code=${code}`
+  const url = pairingPage(WEB_ENDPOINT, code, isLighthouse3Endpoint(connectionEndpoint))
   try {
     const tab = await chrome.tabs.create({ url, active: true })
     pairingTabId = tab.id ?? null

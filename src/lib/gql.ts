@@ -1,3 +1,4 @@
+import { isLighthouse3Endpoint, lighthouse3Operation } from './lighthouse3-transport'
 import { getOrCreateDeviceIdentity } from './device-key'
 import { API_ENDPOINT } from './env'
 import { parseRetryAfterMs } from './gql-backoff'
@@ -113,6 +114,9 @@ export async function gql<TResult, TVars = Record<string, unknown>>(
     )
 
   try {
+    if (isLighthouse3Endpoint(API_ENDPOINT)) {
+      return await waitForDeadline(() => lighthouse3Operation(API_ENDPOINT, opts?.operationName ?? inferOperationName(query) ?? '', variables ?? {}, controller.signal)) as TResult
+    }
     const token = opts?.anonymous
       ? null
       : await waitForDeadline(() => localStore.get('apiToken'))

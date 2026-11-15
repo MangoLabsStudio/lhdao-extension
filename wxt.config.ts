@@ -37,11 +37,13 @@ export default defineConfig({
     description: 'Complete Lighthouse engagement tasks',
     permissions: ['storage', 'alarms'],
     host_permissions: [
-      'https://x.com/*',
-      'https://twitter.com/*',
-      //       'https://www.binance.com/*',
-      API_HOST_PATTERN,
-      WEB_HOST_PATTERN,
+      ...new Set([
+        'https://x.com/*',
+        'https://twitter.com/*',
+        //       'https://www.binance.com/*',
+        API_HOST_PATTERN,
+        WEB_HOST_PATTERN,
+      ]),
     ],
     action: {
       default_title: 'Lighthouse',

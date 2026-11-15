@@ -14,6 +14,7 @@ const DEFAULT_API_ENDPOINT = 'https://service.lhdao.top/graphql'
 const DEFAULT_WEB_ENDPOINT = 'https://app.lhdao.top'
 const RELEASE_ENDPOINT_PROFILES = [
   [DEFAULT_API_ENDPOINT, DEFAULT_WEB_ENDPOINT],
+  ['https://app.lhdaobeta.top/lighthouse3.0/api/v3', 'https://app.lhdaobeta.top/lighthouse3.0'],
   [
     'https://service.lhdaobeta.top/graphql',
     'https://app.lhdaobeta.top',

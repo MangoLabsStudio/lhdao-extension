@@ -478,3 +478,10 @@ test('rejects disabled Binance permissions and scripts', async () => {
   }))
   await assert.rejects(verify(scriptDirectory))
 })
+
+test('accepts the v3 beta profile with one shared API/Web origin', async () => {
+  const environment = { WXT_API_ENDPOINT: 'https://app.lhdaobeta.top/lighthouse3.0/api/v3', WXT_WEB_ENDPOINT: 'https://app.lhdaobeta.top/lighthouse3.0' }
+  const manifest = validManifest({ host_permissions: ['https://x.com/*', 'https://twitter.com/*', 'https://app.lhdaobeta.top/*'], content_scripts: [{ matches: ['https://app.lhdaobeta.top/*'], js: ['content-scripts/web-presence.js'] }] })
+  await assert.doesNotReject(verifyManifestDirectory(await manifestDirectory(manifest), { environment }))
+  await assert.rejects(verifyManifestDirectory(await manifestDirectory({ ...manifest, permissions: ['storage', 'alarms', 'debugger'] }), { environment }), /permissions.*unexpected/)
+})
