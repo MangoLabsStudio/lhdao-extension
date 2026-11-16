@@ -70,4 +70,6 @@ WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 
 ### 当前 FOLLOW 查询通道探测
 
+更新（2026-11-16）：经用户授权，将老灯塔 production 服务已保存配置中的 `TWEET241_API_KEYS`、`XAPI_KEY` 同步到新测试站 API／Worker，仅修改这两项，生产服务未修改。两项服务部署均 Done（代码 `69deb15`）；API 容器 `4eb7afddc35b`、Worker 容器 `c7994a6b3be7` 内分别通过摘要比较确认两项运行时值与来源一致，未记录密钥。新 Worker 只读首 key 探测结果：Tweet241 HTTP **200**，但响应超过当前 **100KB** 上限；xAPI HTTP **401**。因此凭据同步及部署完成，FOLLOW 核验仍未通过，需调查响应限制及 xAPI 认证。来源是生产已保存配置，不代表已独立核验生产运行容器。下段 403／402 为换 key 前的历史结果。
+
 2026-11-16，从测试站 Worker 容器执行有界只读探测：`LH_FOLLOW_ENABLED` 和 `LH_FOLLOW_X_READS_APPROVED` 为 true，Tweet241/xAPI 凭据均存在。分别使用各池首个 key 查询 BinanceResearch 的 followers／following 第一页，Tweet241 HTTP **403**、xAPI HTTP **402**，均为 HTTP_ERROR；未输出凭据或响应正文，未修改验证结果。此证据证明当前两次请求被服务商拒绝，不证明全部 key 均不可用，也不能还原 15:02 的具体响应。需恢复可用查询通道后复验 FOLLOW；不能以插件已提交替代服务端核验通过。
