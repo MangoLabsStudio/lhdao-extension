@@ -69,3 +69,7 @@
 **1116、1116b、1116c、1116d 各轮已恢复并 COMMIT，当前无 active 夹具。** 1116d history 独立确认 `RESTORED_EXACT`，fixture 的 4 flags 全部 true。 较早的 all-actions 夹具于 11:49 条件恢复，独立 `user_restored`／`details_restored`／`participant_restored`／`restore_recorded` 全部为 true；本次 1116b 另确认 **RESTORED_EXACT＋4 项布尔检查全部 true**。1116d 的恢复另以上述独立 DB 结果确认。较早的 all-actions 备份为 `public.lumi_all_actions_backup_1116`、`public.lumi_all_actions_participant_1116`；关注重试使用 `lumi_follow_run_backup_1116*`、`lumi_follow_run_participant_1116*`、`lumi_follow_history_backup_1116*`，恢复脚本见 `/private/tmp/lh3-all-fixture-sql.txt` 第 3 节。人工测试资格不能证明真实资料同步有效；恢复历史夹具也不表示新 FOLLOW 接单已完成核验。
 
 剩余事项：等待用户暂停并发浏览器操作；调查首次 SYSTEM 异常释放的具体 provider 原因（当前未存储），核对释放策略行为；reload 并复验已推送 `30ce403` 的 open-campaign 修复，再继续 FOLLOW 真实链路及剩余合法组合验收；核验到期实际付款与撤销/失败修正场景。**当前无 active 夹具，但仅 LIKE、RT、COMMENT、COMMENT_LIKE 四类型 live 通过；FOLLOW 和剩余组合尚未通过，不能宣称全部验收完成。**
+
+### 当前 FOLLOW 查询通道探测
+
+2026-11-16，从测试站 Worker 容器执行有界只读探测：`LH_FOLLOW_ENABLED` 和 `LH_FOLLOW_X_READS_APPROVED` 为 true，Tweet241/xAPI 凭据均存在。分别使用各池首个 key 查询 BinanceResearch 的 followers／following 第一页，Tweet241 HTTP **403**、xAPI HTTP **402**，均为 HTTP_ERROR；未输出凭据或响应正文，未修改验证结果。此证据证明当前两次请求被服务商拒绝，不证明全部 key 均不可用，也不能还原 15:02 的具体响应。需恢复可用查询通道后复验 FOLLOW；不能以插件已提交替代服务端核验通过。

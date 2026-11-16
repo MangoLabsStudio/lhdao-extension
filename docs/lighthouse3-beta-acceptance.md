@@ -67,3 +67,7 @@ WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 - 新站完整单元 **1280 pass、3 skip、3 baseline fail**；3 项为独立基线复现的主题颜色约束 1 项、web-session 登录刷新 2 项，不记作全绿。
 - COMMENT/COMMENT_LIKE 提交后曾出现 Chrome 离开确认和焦点跳转异常（源码未发现关闭 X 标签）。跳转修复已通过 43 文件、461 项测试及 beta WXT build；已 reload，Open dashboard 实际进入新站 marketplace；成功提交后的自动跳转尚待下一次任务复验。
 - 新站实现目录为 `/private/tmp/lh3-engagement-shallow-20261116`；旧 `/Users/kkruis/Desktop/project/LightHouse3.0/.local/wt-central-live` 仅作参考。完整矩阵与未完成项见 [全互动计划](lighthouse3-all-engagement-plan.md)。
+
+### 当前 FOLLOW 查询通道探测
+
+2026-11-16，从测试站 Worker 容器执行有界只读探测：`LH_FOLLOW_ENABLED` 和 `LH_FOLLOW_X_READS_APPROVED` 为 true，Tweet241/xAPI 凭据均存在。分别使用各池首个 key 查询 BinanceResearch 的 followers／following 第一页，Tweet241 HTTP **403**、xAPI HTTP **402**，均为 HTTP_ERROR；未输出凭据或响应正文，未修改验证结果。此证据证明当前两次请求被服务商拒绝，不证明全部 key 均不可用，也不能还原 15:02 的具体响应。需恢复可用查询通道后复验 FOLLOW；不能以插件已提交替代服务端核验通过。
