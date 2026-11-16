@@ -70,6 +70,10 @@ WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 
 ### 当前 FOLLOW 查询通道探测
 
+1116e 实际验收：同 `c8d1d8c` 构造函数的独立只读 probe 在新 Worker 中返回 `FOLLOWING`，卖方 X ID `1823536928639344641`，耗时2365ms；未调用 Worker 入口或写DB。这证明真实关系查询可用，不等于任务通过。新任务 `cmwj0vu1b000301qi2o153uu3`（老插件 FOLLOW 1MiB 复验 1116e，1A席、12 LUX＋1.2费用）已创建、接单截止17:07。老插件 LIVE1，X刷新后卡片出现；实际取消关注再关注，但提交显示 ACTION_NOT_DETECTED。再次提交被自动审批拦截，要求先核对捕获；只读打开 Service Worker Console 也被拦截（将此前无 debugger 限制解释为禁止 DevTools），检查器已关闭，待用户明确允许只读任务ID/捕获布尔检查。尚未确认提交成功、自动跳转或任务核验通过。**1116e history 已 COMMIT RESTORED_EXACT；账号/资料/旧参与记录恢复已 COMMIT、4flags全true，无 active 夹具。** 新 claim 最终状态尚待回读；实际 X 关注保留。
+
+后续修复（2026-11-16）：只读完整探测 Tweet241 返回 HTTP200、139,678 bytes、TIMELINE_SHAPE_OK，确认100KB限制会拒绝正常列表。修复 `c8d1d8cb69cbe6a962833bcdc625d286f73b3b13` 已推送并独立回读远端 dev；API／Worker 部署均 Done，日志确认 Recreated／Started，Worker 新容器 `c534a4ac830b` 产物中关系查询上限确为1MiB，`FOLLOW_PRECLAIM_CHECK_ENABLED` 未启用。仅调整关系查询，资料查询仍100KB；37项测试、165断言和完整后端类型检查通过，独立 review 无阻塞。book 索引有3项既有告警，未记为全绿。老插件 `30ce403` 已在 kingkk 点击重新加载并看到“已重新加载”；X页面新content script与提交跳转仍需真实任务复验。当前没有新临时数据夹具，也未将本次部署记为真实 FOLLOW 通过。
+
 更新（2026-11-16）：经用户授权，将老灯塔 production 服务已保存配置中的 `TWEET241_API_KEYS`、`XAPI_KEY` 同步到新测试站 API／Worker，仅修改这两项，生产服务未修改。两项服务部署均 Done（代码 `69deb15`）；API 容器 `4eb7afddc35b`、Worker 容器 `c7994a6b3be7` 内分别通过摘要比较确认两项运行时值与来源一致，未记录密钥。新 Worker 只读首 key 探测结果：Tweet241 HTTP **200**，但响应超过当前 **100KB** 上限；xAPI HTTP **401**。因此凭据同步及部署完成，FOLLOW 核验仍未通过，需调查响应限制及 xAPI 认证。来源是生产已保存配置，不代表已独立核验生产运行容器。下段 403／402 为换 key 前的历史结果。
 
 2026-11-16，从测试站 Worker 容器执行有界只读探测：`LH_FOLLOW_ENABLED` 和 `LH_FOLLOW_X_READS_APPROVED` 为 true，Tweet241/xAPI 凭据均存在。分别使用各池首个 key 查询 BinanceResearch 的 followers／following 第一页，Tweet241 HTTP **403**、xAPI HTTP **402**，均为 HTTP_ERROR；未输出凭据或响应正文，未修改验证结果。此证据证明当前两次请求被服务商拒绝，不证明全部 key 均不可用，也不能还原 15:02 的具体响应。需恢复可用查询通道后复验 FOLLOW；不能以插件已提交替代服务端核验通过。
