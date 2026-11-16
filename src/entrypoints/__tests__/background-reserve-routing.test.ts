@@ -478,12 +478,8 @@ describe('task hall tab routing', () => {
           (url, i) => ({ id: i + 1, windowId: 10, url }) as chrome.tabs.Tab,
         ),
       )
-    const update = vi
-      .spyOn(chrome.tabs, 'update')
-      .mockResolvedValue(undefined)
-    const create = vi
-      .spyOn(chrome.tabs, 'create')
-      .mockResolvedValue(undefined)
+    const update = vi.spyOn(chrome.tabs, 'update').mockResolvedValue(undefined)
+    const create = vi.spyOn(chrome.tabs, 'create').mockResolvedValue(undefined)
     const focus = vi
       .spyOn(chrome.windows, 'update')
       .mockResolvedValue(undefined)
@@ -527,6 +523,47 @@ describe('task hall tab routing', () => {
     expect(update).toHaveBeenCalledExactlyOnceWith(1, {
       active: true,
       url: 'https://web.test/campaigns',
+    })
+    expect(create).not.toHaveBeenCalled()
+  })
+  const campaignId = 'cmwiwrbni000501m36ctp2pu4'
+  const detail = `https://app.lhdaobeta.top/lighthouse3.0/tasks/received/${campaignId}`
+  it.each([
+    'https://app.lhdaobeta.top/campaigns/manage/old-comment',
+    detail + '-other',
+    detail + '/edit',
+    detail + '?draft=unsaved',
+  ])('v3 open-campaign leaves unrelated tab untouched: %s', async (url) => {
+    const { update, create, focus } = setup([url])
+    await handler({ type: 'open-campaign', campaignId }, {})
+    expect(update).not.toHaveBeenCalled()
+    expect(focus).not.toHaveBeenCalled()
+    expect(create).toHaveBeenCalledExactlyOnceWith({
+      url: detail,
+      active: true,
+    })
+  })
+  it('v3 open-campaign only activates the exact detail without navigation', async () => {
+    const { update, create, focus } = setup([marketplace, detail])
+    await handler({ type: 'open-campaign', campaignId }, {})
+    expect(update).toHaveBeenCalledExactlyOnceWith(2, { active: true })
+    expect(focus).toHaveBeenCalledExactlyOnceWith(10, { focused: true })
+    expect(create).not.toHaveBeenCalled()
+  })
+  it('v3 open-campaign creates the target detail when no tabs exist', async () => {
+    const { create } = setup([])
+    await handler({ type: 'open-campaign', campaignId }, {})
+    expect(create).toHaveBeenCalledExactlyOnceWith({
+      url: detail,
+      active: true,
+    })
+  })
+  it('legacy open-campaign keeps navigating a same-origin tab', async () => {
+    const { update, create } = setup(['https://web.test/settings'], false)
+    await handler({ type: 'open-campaign', campaignId }, {})
+    expect(update).toHaveBeenCalledExactlyOnceWith(1, {
+      active: true,
+      url: `https://web.test/campaigns/${campaignId}`,
     })
     expect(create).not.toHaveBeenCalled()
   })

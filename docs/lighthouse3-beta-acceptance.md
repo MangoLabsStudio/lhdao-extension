@@ -38,19 +38,28 @@ WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 - COMMENT：任务 `cmwiolhsw000h01nd3hcm2kww`，11:20 接单，目标 `2121143384744362224`。真实评论 `https://x.com/lumi_lly/status/2122168321596391486`；老插件捕获并提交，Web 显示 COMPLETED、核验通过、待支付 **0.8 LUX**，最早 **2026-11-17 11:22**。
 - COMMENT_LIKE：任务 `cmwiomrp1000s01ndcvf4dvjq`，11:25 接单，目标 `2121928196509884566`。真实点赞 15→16 后，插件显示 LIKE 完成、COMMENT 待完成且不可提交；发布评论 `https://x.com/lumi_lly/status/2122169974923964638` 后解锁并提交。Web 显示 COMPLETED、核验通过、待支付 **1.2 LUX**，最早 **2026-11-17 11:29**。评论为服务端核验，点赞仍为乐观核验。
 - RT：任务 `cmwioi4gx000601ndhl9q4um6`，**11:33 接单**，目标 `2120398201056596019`。真实转发计数 **32→33**，老插件捕获并 submit；Web 核验通过、待支付 **20 LUX**，最早 **2026-11-17 11:36**。这是新增 live RT 证据，不等同于已实际付款。
-- FOLLOW：任务 `cmwiot5ts001601ndbeq20wvz`（BinanceResearch，12 LUX＋1.2 LUX 服务费）已于 **2026-11-16 14:12:23** 真实成功预留；claim 为 `cmwiv9euy000101qn380s01qq`，deadline **14:22:23**。预留时 DB `baselineCheckedAt=14:12:23.254`，seller／target 检查均为 true，状态 ACTIVE，acceptance receipt 存在（true）。当次插件显示 **LIVE 0**，**未执行 X follow**，未提交关注证明或通过核验。当次已定位无 `tweetId` 的 FOLLOW 被 sidebar 过滤；后续纯 FOLLOW display＋count 修复已完成，全套 **43 文件、467 项测试、typecheck、beta WXT build 均通过**，独立 review 无阻塞，并已在 kingkk reload 原插件。修复后的真实关注链路仍待验收。此前网页 received 请求返回 HTTP 200，包含 `engagementFulfillmentMode: DISPATCH`，但旧标签页客户端 strict 契约拒绝；确认 Web `69deb15` 已部署 Done 后，对卖方页硬刷新，FOLLOW 详情恢复正常，显示 **14:22 超时退出／席位释放**。该网页问题是旧标签页客户端未更新，**无需代码修复**。此前阻断涉及 1 条 `feng_btc` 历史关系（`targetTwitterId=NULL`、`participant=NULL`、对应 unified campaign 缺失，无可靠 stable ID）；它不再是“尚未成功预留”的当前状态。
+- FOLLOW：任务 `cmwiot5ts001601ndbeq20wvz`（BinanceResearch，12 LUX＋1.2 LUX 服务费）已于 **2026-11-16 14:12:23** 真实成功预留；claim 为 `cmwiv9euy000101qn380s01qq`，deadline **14:22:23**。预留时 DB `baselineCheckedAt=14:12:23.254`，seller／target 检查均为 true，状态 ACTIVE，acceptance receipt 存在（true）。当次插件显示 **LIVE 0**，**未执行 X follow**，未提交关注证明或通过核验。当次已定位无 `tweetId` 的 FOLLOW 被 sidebar 过滤；后续纯 FOLLOW display＋count 修复已完成，全套 **43 文件、467 项测试、typecheck、beta WXT build 均通过**，独立 review 无阻塞，并已在 kingkk reload 原插件。该修复后的 1116d 已执行真实关注，但验证后 WITHDRAWN，详见下文失败记录。此前网页 received 请求返回 HTTP 200，包含 `engagementFulfillmentMode: DISPATCH`，但旧标签页客户端 strict 契约拒绝；确认 Web `69deb15` 已部署 Done 后，对卖方页硬刷新，FOLLOW 详情恢复正常，显示 **14:22 超时退出／席位释放**。该网页问题是旧标签页客户端未更新，**无需代码修复**。此前阻断涉及 1 条 `feng_btc` 历史关系（`targetTwitterId=NULL`、`participant=NULL`、对应 unified campaign 缺失，无可靠 stable ID）；它不再是“尚未成功预留”的当前状态。
 
 ### 纯 FOLLOW 修复与 1116c 重试状态
 
 纯 FOLLOW display＋count 修复已通过全套 **43 文件、467 项测试**、**typecheck** 和 **beta WXT build**；独立 review 无阻塞，已在 **kingkk reload 原插件**。这证明构建与加载完成，不代表真实 FOLLOW 核验通过。
 
-1116c fixture／history 重试准备后，浏览器再次被切换窗口；**未接新任务、未执行关注**，随即恢复。1116c history 为 **RESTORED_EXACT**，fixture **4 项布尔检查全部 true**，恢复已 **COMMIT**，**无临时遗留**。当前等待用户暂停并发浏览器操作后再继续真实验收。
+1116c fixture／history 重试准备后，浏览器再次被切换窗口；**未接新任务、未执行关注**，随即恢复。1116c history 为 **RESTORED_EXACT**，fixture **4 项布尔检查全部 true**，恢复已 **COMMIT**，**该轮无临时遗留**。这是 1116c 的历史状态；后续 1116d 的未恢复状态见下文。
 
-### 本轮临时 fixture 与历史关系已恢复
+### 1116d 真实 FOLLOW 失败与当前未恢复状态
 
-**1116、1116b、1116c 各轮历史关系及 user／OAuth／旧 participant 均已恢复并 COMMIT，无临时遗留。** 较早的 all-actions 夹具于 11:49 条件恢复，独立 `user_restored`／`details_restored`／`participant_restored`／`restore_recorded` 全部为 true；本次 1116b 另确认 **RESTORED_EXACT＋4 项布尔检查全部 true**。此状态替代此前历史关系“待确认、未修改”和 fixture“尚未恢复”的记录。较早的 all-actions 备份为 `public.lumi_all_actions_backup_1116`、`public.lumi_all_actions_participant_1116`；关注重试使用 `lumi_follow_run_backup_1116*`、`lumi_follow_run_participant_1116*`、`lumi_follow_history_backup_1116*`，恢复脚本见 `/private/tmp/lh3-all-fixture-sql.txt` 第 3 节。人工测试资格不能证明真实资料同步有效；恢复历史夹具也不表示新 FOLLOW 接单已完成核验。
+- 新 campaign `cmwiwrbni000501m36ctp2pu4`，2026-11-16 **15:01 接单，deadline 15:11**。插件 **`9d17` 已加载**，popup **LIVE 1**，profile card 正常显示 **12 LUX**。
+- lumi 已真实关注 BinanceResearch，点击“我已关注验证”后，**15:02 参与状态变为 WITHDRAWN／席位释放**。DB 原因待查；这是 FOLLOW live 失败记录，不是核验通过，也不能按 15:11 deadline 推断为正常超时。
+- `open-campaign` 仍覆盖旧任务 tab，触发离站警告；选择 cancel 后保留，已补充精确目标页复用修复，474 项测试、类型检查与 beta 构建通过；尚未在浏览器重载复验。此前构建和 reload 通过不代表该问题已解决。
+- **1116d fixture／history 当前仍为 ACTIVE，尚未确认恢复。** Chrome 切到无关 Google 登录窗口后，已再次请求用户暂停操作；不能宣称本轮已恢复或无临时遗留。**先前 1116c 恢复不等于 1116d 恢复。**
+
+### 先前各轮恢复记录（不包含 1116d）
+
+**仅 1116、1116b、1116c 各轮历史关系及 user／OAuth／旧 participant 已恢复并 COMMIT；1116d 不在此恢复结论内，仍为 ACTIVE、尚未确认恢复。** 较早的 all-actions 夹具于 11:49 条件恢复，独立 `user_restored`／`details_restored`／`participant_restored`／`restore_recorded` 全部为 true；本次 1116b 另确认 **RESTORED_EXACT＋4 项布尔检查全部 true**。此恢复结论仅适用于上述先前各轮，不覆盖后续 1116d。较早的 all-actions 备份为 `public.lumi_all_actions_backup_1116`、`public.lumi_all_actions_participant_1116`；关注重试使用 `lumi_follow_run_backup_1116*`、`lumi_follow_run_participant_1116*`、`lumi_follow_history_backup_1116*`，恢复脚本见 `/private/tmp/lh3-all-fixture-sql.txt` 第 3 节。人工测试资格不能证明真实资料同步有效；恢复历史夹具也不表示新 FOLLOW 接单已完成核验。
 
 ## 限制和后续
+
+- 优先确认并恢复 1116d fixture／history、独立回读；查明 FOLLOW 15:02 WITHDRAWN 原因，并复验 open-campaign 修复。当前等待用户暂停并发操作，不宣称全恢复。
 
 - 当前仅 LIKE、COMMENT、COMMENT_LIKE、RT 有真实老插件提交及核验记录；FOLLOW 修复后真实链路、剩余多动作组合真实验收、到期实际付款及撤销/异常恢复仍未完成。上述金额均为待支付，不宣称到账或完整迁移完成。
 - 组合 worker/binder 本地回归：6 文件 **69 pass、1 skip、0 fail，645 assertions**；后端类型检查通过。跳过项是浏览器 RT 自动化用例；当前 live RT 已通过，但不能据此将整个跳过用例中的异常/恢复场景记为覆盖。全 contracts **168 pass**。

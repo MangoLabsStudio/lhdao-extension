@@ -2514,13 +2514,15 @@ async function openTaskHall(): Promise<void> {
 /** 跳该 campaign 详情页(任务观察界面)。复用 openTaskHall 的「复用已开标签」逻辑。 */
 async function openCampaignDetail(campaignId: string): Promise<void> {
   const origin = new URL(WEB_ENDPOINT).origin
-  const url = `${WEB_ENDPOINT}/${isLighthouse3Endpoint(connectionEndpoint) ? 'tasks/received' : 'campaigns'}/${encodeURIComponent(campaignId)}`
+  const v3 = isLighthouse3Endpoint(connectionEndpoint)
+  const url = `${WEB_ENDPOINT}/${v3 ? 'tasks/received' : 'campaigns'}/${encodeURIComponent(campaignId)}`
   try {
     const tabs = await chrome.tabs.query({ url: `${origin}/*` })
     const onDetail = tabs.find(
-      (t) => t.id != null && (t.url ?? '').startsWith(url),
+      (t) => t.id != null && (v3 ? t.url === url : (t.url ?? '').startsWith(url)),
     )
-    const target = onDetail ?? tabs.find((t) => t.id != null)
+    // Preserve unrelated tabs and unsaved forms on the shared beta origin.
+    const target = onDetail ?? (v3 ? undefined : tabs.find((t) => t.id != null))
     if (target?.id != null) {
       await chrome.tabs.update(
         target.id,
