@@ -40,9 +40,17 @@ vi.mock('@/lib/gql', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/gql')>()
   return { ...orig, gql: (...args: unknown[]) => gqlMock(...args) }
 })
+const endpoints = vi.hoisted(() => ({
+  api: 'https://api.test/graphql',
+  web: 'https://web.test',
+}))
 vi.mock('@/lib/env', () => ({
-  API_ENDPOINT: 'https://api.test/graphql',
-  WEB_ENDPOINT: 'https://web.test',
+  get API_ENDPOINT() {
+    return endpoints.api
+  },
+  get WEB_ENDPOINT() {
+    return endpoints.web
+  },
   SYNC_INTERVAL_SECONDS: 300,
   VERIFY_RETRY_DELAY_MS: 1000,
 }))
@@ -101,6 +109,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   fakeBrowser.reset()
+  endpoints.api = 'https://api.test/graphql'
+  endpoints.web = 'https://web.test'
   gqlMock.mockReset()
   vi.mocked(messaging.broadcastToContent).mockClear()
   token = 'account-a'
@@ -448,5 +458,76 @@ describe('verified task cache', () => {
       (await background.readTasksSnapshot()).byTweet['123'][0].campaignId,
     ).toBe('c-verified')
     expect(messaging.broadcastToContent).not.toHaveBeenCalled()
+  })
+})
+
+describe('task hall tab routing', () => {
+  const marketplace = 'https://app.lhdaobeta.top/lighthouse3.0/marketplace'
+  function setup(urls: string[], v3 = true) {
+    vi.clearAllMocks()
+    endpoints.api = v3
+      ? 'https://app.lhdaobeta.top/lighthouse3.0/api/v3'
+      : 'https://api.test/graphql'
+    endpoints.web = v3
+      ? 'https://app.lhdaobeta.top/lighthouse3.0'
+      : 'https://web.test'
+    const query = vi
+      .spyOn(chrome.tabs, 'query')
+      .mockResolvedValue(
+        urls.map(
+          (url, i) => ({ id: i + 1, windowId: 10, url }) as chrome.tabs.Tab,
+        ),
+      )
+    const update = vi
+      .spyOn(chrome.tabs, 'update')
+      .mockResolvedValue(undefined)
+    const create = vi
+      .spyOn(chrome.tabs, 'create')
+      .mockResolvedValue(undefined)
+    const focus = vi
+      .spyOn(chrome.windows, 'update')
+      .mockResolvedValue(undefined)
+    return { query, update, create, focus }
+  }
+  it.each([
+    'https://app.lhdaobeta.top/campaigns/manage/old-anchor',
+    marketplace + '/manage/form',
+    marketplace + '-other',
+    marketplace + '?draft=unsaved',
+  ])('v3 leaves unrelated tab untouched: %s', async (url) => {
+    const { update, create, focus } = setup([url])
+    await handler({ type: 'open-task-hall' }, {})
+    expect(update).not.toHaveBeenCalled()
+    expect(focus).not.toHaveBeenCalled()
+    expect(create).toHaveBeenCalledExactlyOnceWith({
+      url: marketplace,
+      active: true,
+    })
+  })
+  it('v3 only activates the exact marketplace without navigating it', async () => {
+    const { update, create } = setup([
+      'https://app.lhdaobeta.top/campaigns/manage/old-anchor',
+      marketplace,
+    ])
+    await handler({ type: 'open-task-hall' }, {})
+    expect(update).toHaveBeenCalledExactlyOnceWith(2, { active: true })
+    expect(create).not.toHaveBeenCalled()
+  })
+  it('v3 creates marketplace when no tabs exist', async () => {
+    const { create } = setup([])
+    await handler({ type: 'open-task-hall' }, {})
+    expect(create).toHaveBeenCalledExactlyOnceWith({
+      url: marketplace,
+      active: true,
+    })
+  })
+  it('legacy keeps navigating an existing same-origin tab', async () => {
+    const { update, create } = setup(['https://web.test/settings'], false)
+    await handler({ type: 'open-task-hall' }, {})
+    expect(update).toHaveBeenCalledExactlyOnceWith(1, {
+      active: true,
+      url: 'https://web.test/campaigns',
+    })
+    expect(create).not.toHaveBeenCalled()
   })
 })

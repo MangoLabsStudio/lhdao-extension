@@ -2457,13 +2457,15 @@ async function verifyOnlyInner(campaignId: string): Promise<MsgResponse> {
  */
 async function openTaskHall(): Promise<void> {
   const origin = new URL(WEB_ENDPOINT).origin
-  const url = `${WEB_ENDPOINT}/${isLighthouse3Endpoint(connectionEndpoint) ? 'marketplace' : 'campaigns'}`
+  const v3 = isLighthouse3Endpoint(connectionEndpoint)
+  const url = `${WEB_ENDPOINT}/${v3 ? 'marketplace' : 'campaigns'}`
   try {
     const tabs = await chrome.tabs.query({ url: `${origin}/*` })
     const onHall = tabs.find(
-      (t) => t.id != null && (t.url ?? '').startsWith(url),
+      (t) => t.id != null && (v3 ? t.url === url : (t.url ?? '').startsWith(url)),
     )
-    const target = onHall ?? tabs.find((t) => t.id != null)
+    // New and legacy sites share an origin; never navigate another page's form.
+    const target = onHall ?? (v3 ? undefined : tabs.find((t) => t.id != null))
     if (target?.id != null) {
       await chrome.tabs.update(
         target.id,
