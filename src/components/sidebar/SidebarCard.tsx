@@ -25,6 +25,7 @@ import { tierDisplay } from '@/lib/tier-display'
  */
 
 interface SidebarData {
+  activeEngagementCount?: number
   profile: UserProfile | null
   tweetCampaigns: TweetCampaignSummary[] | null
   tokenConfigured: boolean
@@ -46,6 +47,7 @@ export function SidebarCard() {
     const r = await sendMessage({ type: 'get-sidebar-data' })
     if (r.type === 'sidebar-data') {
       setData({
+        activeEngagementCount: r.activeEngagementCount,
         profile: r.profile,
         tweetCampaigns: r.tweetCampaigns,
         tokenConfigured: r.tokenConfigured,
@@ -88,7 +90,10 @@ export function SidebarCard() {
       ) ? (
         <LighthouseSelectedText kind="order" />
       ) : null}
-      <FooterStats profile={data.profile} taskCount={campaigns.length} />
+      <FooterStats
+        profile={data.profile}
+        taskCount={campaigns.length + (data.activeEngagementCount ?? 0)}
+      />
       <CtaRow />
     </section>
   )

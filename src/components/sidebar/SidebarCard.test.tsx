@@ -129,3 +129,19 @@ describe('Lighthouse Selected sidebar identity', () => {
     expect(container.textContent?.match(/仅灯塔严选可接/g)).toHaveLength(1)
   })
 })
+
+it('includes account-target engagement tasks in TASKS LIVE with no tweet campaigns', async () => {
+  vi.mocked(messaging.sendMessage).mockResolvedValueOnce({
+    type: 'sidebar-data',
+    tokenConfigured: true,
+    profile: null,
+    lighthouseSelectedStatus: 'unavailable',
+    tweetCampaigns: [],
+    activeEngagementCount: 1,
+  })
+  await act(async () => root.render(<SidebarCard />))
+  expect(
+    container.querySelector('.lh-foot-cell:first-child .lh-foot-value')
+      ?.textContent,
+  ).toBe('1')
+})

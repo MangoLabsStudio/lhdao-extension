@@ -33,20 +33,26 @@ WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 
 以下更新以 `/private/tmp/lh3-live-acceptance-1116-progress.md` 和本轮追加 RT 记录为依据，替代早前“全互动包尚未加载、其他类型尚未实测”的状态。时间均为 Asia/Shanghai。
 
-- API/Worker：`f1c90ce`，部署 Done、healthy；Web：`c156545`（短记 `c156`），部署 Done。
-- 老插件：`d620951` 已推送、构建并在 kingkk 重新加载。该加载版本回归 43 文件、454 项通过；最新跳转修复已通过全套 **43 文件、461 项测试**及 **beta WXT build**，已在 kingkk 原安装目录 reload，CONNECTED 和同步正常。正常 worker 唤醒和任务同步已确认。发布、加载与下列 live 结果分别记录，不代表全部场景通过。
+- API/Worker 上次已核对版本：`f1c90ce`，当时部署 Done、healthy；Web 最新 `69deb15`，Dokploy 部署 Done；`origin/dev` 最新也为 `69deb15`（此前 Web 为 `c156545`）。
+- 老插件：`d620951` 已推送、构建并在 kingkk 重新加载。该加载版本回归 43 文件、454 项通过；此前跳转修复已通过全套 **43 文件、461 项测试**及 **beta WXT build**，已在 kingkk 原安装目录 reload，CONNECTED 和同步正常。正常 worker 唤醒和任务同步已确认。发布、加载与下列 live 结果分别记录，不代表全部场景通过。
 - COMMENT：任务 `cmwiolhsw000h01nd3hcm2kww`，11:20 接单，目标 `2121143384744362224`。真实评论 `https://x.com/lumi_lly/status/2122168321596391486`；老插件捕获并提交，Web 显示 COMPLETED、核验通过、待支付 **0.8 LUX**，最早 **2026-11-17 11:22**。
 - COMMENT_LIKE：任务 `cmwiomrp1000s01ndcvf4dvjq`，11:25 接单，目标 `2121928196509884566`。真实点赞 15→16 后，插件显示 LIKE 完成、COMMENT 待完成且不可提交；发布评论 `https://x.com/lumi_lly/status/2122169974923964638` 后解锁并提交。Web 显示 COMPLETED、核验通过、待支付 **1.2 LUX**，最早 **2026-11-17 11:29**。评论为服务端核验，点赞仍为乐观核验。
 - RT：任务 `cmwioi4gx000601ndhl9q4um6`，**11:33 接单**，目标 `2120398201056596019`。真实转发计数 **32→33**，老插件捕获并 submit；Web 核验通过、待支付 **20 LUX**，最早 **2026-11-17 11:36**。这是新增 live RT 证据，不等同于已实际付款。
-- FOLLOW：已创建任务 `cmwiot5ts001601ndbeq20wvz`（BinanceResearch，12 LUX＋1.2 LUX 服务费）。接单被“历史关注奖励目标身份缺失”拦截。已定位 1 条目标 `feng_btc` 的历史关系，`targetTwitterId=NULL`、`participant=NULL`，对应 unified campaign 缺失，无可靠 stable ID。已向用户单独请求临时隔离该记录，**尚未答复、未修改**。尚未完成接单、真实关注提交或核验，不能记为通过。
+- FOLLOW：任务 `cmwiot5ts001601ndbeq20wvz`（BinanceResearch，12 LUX＋1.2 LUX 服务费）已于 **2026-11-16 14:12:23** 真实成功预留；claim 为 `cmwiv9euy000101qn380s01qq`，deadline **14:22:23**。预留时 DB `baselineCheckedAt=14:12:23.254`，seller／target 检查均为 true，状态 ACTIVE，acceptance receipt 存在（true）。当次插件显示 **LIVE 0**，**未执行 X follow**，未提交关注证明或通过核验。当次已定位无 `tweetId` 的 FOLLOW 被 sidebar 过滤；后续纯 FOLLOW display＋count 修复已完成，全套 **43 文件、467 项测试、typecheck、beta WXT build 均通过**，独立 review 无阻塞，并已在 kingkk reload 原插件。修复后的真实关注链路仍待验收。此前网页 received 请求返回 HTTP 200，包含 `engagementFulfillmentMode: DISPATCH`，但旧标签页客户端 strict 契约拒绝；确认 Web `69deb15` 已部署 Done 后，对卖方页硬刷新，FOLLOW 详情恢复正常，显示 **14:22 超时退出／席位释放**。该网页问题是旧标签页客户端未更新，**无需代码修复**。此前阻断涉及 1 条 `feng_btc` 历史关系（`targetTwitterId=NULL`、`participant=NULL`、对应 unified campaign 缺失，无可靠 stable ID）；它不再是“尚未成功预留”的当前状态。
 
-### 本轮临时 fixture 已恢复（11:49）
+### 纯 FOLLOW 修复与 1116c 重试状态
 
-2026-11-16 **11:49**，本轮临时资格/旧参与记录 fixture 已条件恢复并 **COMMIT**；独立回读 `user_restored`、`details_restored`、`participant_restored`、`restore_recorded` **全部为 true**。备份为 `public.lumi_all_actions_backup_1116`、`public.lumi_all_actions_participant_1116`，恢复脚本见 `/private/tmp/lh3-all-fixture-sql.txt` 第 3 节。本记录替代此前“尚未恢复”的状态。人工测试资格仍不能证明真实资料同步有效；上述恢复不包含尚未获批的 FOLLOW 历史关系临时隔离。
+纯 FOLLOW display＋count 修复已通过全套 **43 文件、467 项测试**、**typecheck** 和 **beta WXT build**；独立 review 无阻塞，已在 **kingkk reload 原插件**。这证明构建与加载完成，不代表真实 FOLLOW 核验通过。
+
+1116c fixture／history 重试准备后，浏览器再次被切换窗口；**未接新任务、未执行关注**，随即恢复。1116c history 为 **RESTORED_EXACT**，fixture **4 项布尔检查全部 true**，恢复已 **COMMIT**，**无临时遗留**。当前等待用户暂停并发浏览器操作后再继续真实验收。
+
+### 本轮临时 fixture 与历史关系已恢复
+
+**1116、1116b、1116c 各轮历史关系及 user／OAuth／旧 participant 均已恢复并 COMMIT，无临时遗留。** 较早的 all-actions 夹具于 11:49 条件恢复，独立 `user_restored`／`details_restored`／`participant_restored`／`restore_recorded` 全部为 true；本次 1116b 另确认 **RESTORED_EXACT＋4 项布尔检查全部 true**。此状态替代此前历史关系“待确认、未修改”和 fixture“尚未恢复”的记录。较早的 all-actions 备份为 `public.lumi_all_actions_backup_1116`、`public.lumi_all_actions_participant_1116`；关注重试使用 `lumi_follow_run_backup_1116*`、`lumi_follow_run_participant_1116*`、`lumi_follow_history_backup_1116*`，恢复脚本见 `/private/tmp/lh3-all-fixture-sql.txt` 第 3 节。人工测试资格不能证明真实资料同步有效；恢复历史夹具也不表示新 FOLLOW 接单已完成核验。
 
 ## 限制和后续
 
-- 当前仅 LIKE、COMMENT、COMMENT_LIKE、RT 有真实老插件提交及核验记录；FOLLOW 阻断、多动作组合真实验收、到期实际付款及撤销/异常恢复仍未完成。上述金额均为待支付，不宣称到账或完整迁移完成。
+- 当前仅 LIKE、COMMENT、COMMENT_LIKE、RT 有真实老插件提交及核验记录；FOLLOW 修复后真实链路、剩余多动作组合真实验收、到期实际付款及撤销/异常恢复仍未完成。上述金额均为待支付，不宣称到账或完整迁移完成。
 - 组合 worker/binder 本地回归：6 文件 **69 pass、1 skip、0 fail，645 assertions**；后端类型检查通过。跳过项是浏览器 RT 自动化用例；当前 live RT 已通过，但不能据此将整个跳过用例中的异常/恢复场景记为覆盖。全 contracts **168 pass**。
 - 新站完整单元 **1280 pass、3 skip、3 baseline fail**；3 项为独立基线复现的主题颜色约束 1 项、web-session 登录刷新 2 项，不记作全绿。
 - COMMENT/COMMENT_LIKE 提交后曾出现 Chrome 离开确认和焦点跳转异常（源码未发现关闭 X 标签）。跳转修复已通过 43 文件、461 项测试及 beta WXT build；已 reload，Open dashboard 实际进入新站 marketplace；成功提交后的自动跳转尚待下一次任务复验。

@@ -534,3 +534,40 @@ describe('comment guide sync', () => {
     expect(await sessionStore.get('activeCampaigns')).toEqual([])
   })
 })
+
+it('counts pure FOLLOW in popup and keeps its profile target in active summaries', async () => {
+  available = []
+  reserved = [
+    {
+      ...order('follow'),
+      tweetId: null,
+      targetUrl: 'https://x.com/owned',
+      targetUsername: 'owned',
+      actions: [{ actionType: 'FOLLOW', baseReward: 1, targetCount: 1 }],
+    },
+  ]
+  await syncTasks()
+  expect(await readPopupData()).toMatchObject({ taskCount: 1, tweetCount: 0 })
+  expect(await readSidebarData()).toMatchObject({ activeEngagementCount: 1 })
+  expect((await readActiveCampaignsData()).campaigns).toMatchObject([
+    { campaignId: 'follow', tweetId: null, targetUrl: 'https://x.com/owned' },
+  ])
+  expect((await readTasksSnapshot()).byAuthor.owned).toMatchObject([
+    { reserved: true },
+  ])
+})
+it('does not double count FOLLOW present in both tweet and author indexes', async () => {
+  available = []
+  reserved = [
+    {
+      ...order('combo'),
+      targetUsername: 'owned',
+      actions: [
+        { actionType: 'LIKE', baseReward: 1, targetCount: 1 },
+        { actionType: 'FOLLOW', baseReward: 1, targetCount: 1 },
+      ],
+    },
+  ]
+  await syncTasks()
+  expect(await readPopupData()).toMatchObject({ taskCount: 2, tweetCount: 1 })
+})

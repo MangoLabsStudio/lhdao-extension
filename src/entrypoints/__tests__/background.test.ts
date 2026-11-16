@@ -148,3 +148,44 @@ describe('comment guidance propagation', () => {
     ])
   })
 })
+
+describe('pure FOLLOW summaries', () => {
+  const follow = {
+    ...binanceFollowCampaign,
+    platform: 'X',
+    targetUsername: 'owned',
+    targetUrl: 'https://x.com/owned',
+  } as AvailableEngagement
+  it('shows an account target without inventing a tweet id', () => {
+    expect(buildActiveCampaignSummaries([follow])).toMatchObject([
+      {
+        campaignId: follow.id,
+        tweetId: null,
+        targetUrl: 'https://x.com/owned',
+        authorHandle: 'owned',
+        actionTypes: ['FOLLOW'],
+      },
+    ])
+    expect(flattenTasks([follow]).byTweet).toEqual({})
+    expect(flattenTasks([follow]).byAuthor.owned).toHaveLength(1)
+  })
+  it('builds the profile link from a valid follow target when URL is absent', () => {
+    expect(
+      buildActiveCampaignSummaries([{ ...follow, targetUrl: null }]),
+    ).toMatchObject([{ tweetId: null, targetUrl: 'https://x.com/owned' }])
+  })
+  it('does not admit missing tweet targets for combinations or invalid follow handles', () => {
+    expect(
+      buildActiveCampaignSummaries([
+        {
+          ...follow,
+          actions: [
+            ...follow.actions,
+            { actionType: 'LIKE', baseReward: 1, targetCount: 1 },
+          ],
+        },
+        { ...follow, targetUsername: null },
+      ]),
+    ).toEqual([])
+  })
+})

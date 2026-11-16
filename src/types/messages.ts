@@ -219,6 +219,8 @@ export type MsgResponse =
   | { type: 'active-campaigns'; campaigns: ActiveCampaignSummary[] }
   | {
       type: 'sidebar-data'
+      /** Includes account-target FOLLOW campaigns; absent in older snapshots. */
+      activeEngagementCount?: number
       /** 个人面板;未配置 token 或同步失败时 null */
       profile: UserProfile | null
       /** TWEET 类任务列表;空数组 = 暂无任务,null = 同步失败 */

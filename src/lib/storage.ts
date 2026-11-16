@@ -177,9 +177,9 @@ export interface ActiveCampaignSummary {
   rewardLux: number
   /** 该 campaign 涉及的动作类型集合 (LIKE / RT / COMMENT / COMMENT_LIKE) */
   actionTypes: CampaignTaskCache['actionType'][]
-  /** 目标推文 id (URL 抽出),供点击卡片跳转 */
-  tweetId: string
-  /** 目标推文完整 URL (https://x.com/<user>/status/<id>) */
+  /** 目标推文 id；纯 FOLLOW 没有推文，保持 null。 */
+  tweetId: string | null
+  /** 目标推文或关注账户的完整 URL。 */
   targetUrl: string
   /** 推文作者 display name,可能 null (尚未被 hourly cron 抓到) */
   authorName: string | null

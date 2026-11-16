@@ -716,13 +716,14 @@ export async function readSidebarData(): Promise<
   Extract<MsgResponse, { type: 'sidebar-data' }>
 > {
   const snapshot = await readOwnedSessionSnapshot(async () => {
-    const [profile, tweetCampaigns, lighthouseSelectedStatus] =
+    const [profile, tweetCampaigns, lighthouseSelectedStatus, activeCampaigns] =
       await Promise.all([
         sessionStore.get('userProfile'),
         sessionStore.get('tweetCampaigns'),
         sessionStore.get('lighthouseSelectedStatus'),
+        sessionStore.get('activeCampaigns'),
       ])
-    return { profile, tweetCampaigns, lighthouseSelectedStatus }
+    return { profile, tweetCampaigns, lighthouseSelectedStatus, activeCampaigns }
   })
   const tokenConfigured = !!snapshot.token
   if (!snapshot.owned || !snapshot.value) {
@@ -742,6 +743,7 @@ export async function readSidebarData(): Promise<
     type: 'sidebar-data',
     profile: profile ?? null,
     tweetCampaigns: tweetCampaigns ?? null,
+    activeEngagementCount: snapshot.value.activeCampaigns?.length ?? 0,
     tokenConfigured,
     lighthouseSelectedStatus,
   }
@@ -751,19 +753,21 @@ export async function readPopupData(): Promise<
   Extract<MsgResponse, { type: 'popup-data' }>
 > {
   const snapshot = await readOwnedSessionSnapshot(async () => {
-    const [profile, map, lastSyncAt, lastSyncError, lastSyncHttpStatus] =
+    const [profile, map, byAuthor, lastSyncAt, lastSyncError, lastSyncHttpStatus] =
       await Promise.all([
         sessionStore.get('userProfile'),
         sessionStore.get('tasksByTweetId'),
+        sessionStore.get('tasksByAuthorHandle'),
         sessionStore.get('lastSyncAt'),
         sessionStore.get('lastSyncError'),
         sessionStore.get('lastSyncHttpStatus'),
       ])
-    return { profile, map, lastSyncAt, lastSyncError, lastSyncHttpStatus }
+    return { profile, map, byAuthor, lastSyncAt, lastSyncError, lastSyncHttpStatus }
   })
   const empty = {
     profile: null,
     map: {} as Record<string, CampaignTaskCache[]>,
+    byAuthor: {} as Record<string, CampaignTaskCache[]>,
     lastSyncAt: null,
     lastSyncError: null,
     lastSyncHttpStatus: null,
@@ -775,6 +779,18 @@ export async function readPopupData(): Promise<
     if (arr.length > 0) {
       tweetCount += 1
       taskCount += arr.length
+    }
+  }
+  const countedFollows = new Set(
+    Object.values(values.map ?? {})
+      .flat()
+      .filter((task) => task.actionType === 'FOLLOW')
+      .map((task) => task.campaignId),
+  )
+  for (const task of Object.values(values.byAuthor ?? {}).flat()) {
+    if (task.actionType === 'FOLLOW' && !countedFollows.has(task.campaignId)) {
+      countedFollows.add(task.campaignId)
+      taskCount++
     }
   }
   return {
@@ -1289,7 +1305,7 @@ function buildTweetCampaignSummaries(
  *
  * 过滤:
  *  - 非 ENGAGEMENT 类型
- *  - 没有 targetUrl / tweetId
+ *  - 没有推文目标且不是有效账户目标的纯 FOLLOW
  *  - actions 全是 unsupported 类型
  */
 export function buildActiveCampaignSummaries(
@@ -1300,8 +1316,6 @@ export function buildActiveCampaignSummaries(
     if (c.type !== 'ENGAGEMENT' || c.platform !== 'X') continue
     const tweetId =
       c.tweetId ?? (c.targetUrl ? extractTweetIdFromUrl(c.targetUrl) : null)
-    if (!tweetId || !c.targetUrl) continue
-
     const supportedActions = c.actions.filter(isSupportedXAction)
     if (supportedActions.length === 0) continue
 
@@ -1309,6 +1323,15 @@ export function buildActiveCampaignSummaries(
     const actionTypes = Array.from(
       new Set(supportedActions.map((a) => a.actionType)),
     )
+
+    const followOnly = c.actions.every((a) => a.actionType === 'FOLLOW')
+    const followHandle = c.targetUsername?.trim().replace(/^@/, '').toLowerCase()
+    const validFollowTarget =
+      followOnly && !!followHandle && /^[a-z0-9_]{1,15}$/.test(followHandle)
+    if ((!tweetId || !c.targetUrl) && !validFollowTarget) continue
+    const targetUrl = validFollowTarget
+      ? `https://x.com/${followHandle}`
+      : c.targetUrl!
 
     // COMMENT 关键字提示
     const isCommentish = actionTypes.some(
@@ -1326,9 +1349,11 @@ export function buildActiveCampaignSummaries(
         supportedActions.reduce((acc, a) => acc + a.baseReward, 0),
       actionTypes,
       tweetId,
-      targetUrl: c.targetUrl,
+      targetUrl,
       authorName: c.tweetAuthorName ?? null,
-      authorHandle: c.tweetAuthorHandle ?? null,
+      authorHandle: validFollowTarget
+        ? followHandle!
+        : c.tweetAuthorHandle ?? null,
       authorAvatar: c.tweetAuthorAvatar ?? null,
       tweetPreview,
       commentKeyword,
