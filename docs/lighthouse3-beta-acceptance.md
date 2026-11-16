@@ -44,22 +44,23 @@ WXT_WEB_ENDPOINT=https://app.lhdaobeta.top/lighthouse3.0 pnpm build
 
 纯 FOLLOW display＋count 修复已通过全套 **43 文件、467 项测试**、**typecheck** 和 **beta WXT build**；独立 review 无阻塞，已在 **kingkk reload 原插件**。这证明构建与加载完成，不代表真实 FOLLOW 核验通过。
 
-1116c fixture／history 重试准备后，浏览器再次被切换窗口；**未接新任务、未执行关注**，随即恢复。1116c history 为 **RESTORED_EXACT**，fixture **4 项布尔检查全部 true**，恢复已 **COMMIT**，**该轮无临时遗留**。这是 1116c 的历史状态；后续 1116d 的未恢复状态见下文。
+1116c fixture／history 重试准备后，浏览器再次被切换窗口；**未接新任务、未执行关注**，随即恢复。1116c history 为 **RESTORED_EXACT**，fixture **4 项布尔检查全部 true**，恢复已 **COMMIT**，**该轮无临时遗留**。这是 1116c 的历史状态；后续 1116d 的失败及已确认恢复记录见下文。
 
-### 1116d 真实 FOLLOW 失败与当前未恢复状态
+### 1116d 真实 FOLLOW 失败、DB 结论与恢复确认
 
 - 新 campaign `cmwiwrbni000501m36ctp2pu4`，2026-11-16 **15:01 接单，deadline 15:11**。插件 **`9d17` 已加载**，popup **LIVE 1**，profile card 正常显示 **12 LUX**。
-- lumi 已真实关注 BinanceResearch，点击“我已关注验证”后，**15:02 参与状态变为 WITHDRAWN／席位释放**。DB 原因待查；这是 FOLLOW live 失败记录，不是核验通过，也不能按 15:11 deadline 推断为正常超时。
-- `open-campaign` 仍覆盖旧任务 tab，触发离站警告；选择 cancel 后保留，已补充精确目标页复用修复，474 项测试、类型检查与 beta 构建通过；尚未在浏览器重载复验。此前构建和 reload 通过不代表该问题已解决。
-- **1116d fixture／history 当前仍为 ACTIVE，尚未确认恢复。** Chrome 切到无关 Google 登录窗口后，已再次请求用户暂停操作；不能宣称本轮已恢复或无临时遗留。**先前 1116c 恢复不等于 1116d 恢复。**
+- lumi 已真实关注 BinanceResearch，点击“我已关注验证”后，**15:02 参与状态变为 WITHDRAWN／席位释放**。DB 已确认首次 SYSTEM 异常触发释放，非 deadline 超时，亦非确认未关注；这是 FOLLOW live 失败记录，不是核验通过。
+- DB claim `cmwix0t3l000f01m35hjfgn3q`：`RELEASED`、`attempts=1`、`submitted=2026-11-16T07:02:37.212Z`、`finished=2026-11-16T07:02:44.217Z`（UTC，对应本地 15:02），`lastError=NULL`；review 为 `RELEASE`，reason 为“系统核验通道异常重试耗尽”。event 为 `DELIVERED`、`attempts=1`。3 个 policy keys 查询为 0 rows，使用默认 `true / true / 60m`。这支持首次 SYSTEM 异常释放的结论；**具体 provider 原因未存储，不能据此判断为未关注或指定某个 provider 故障**。
+- `open-campaign` 仍覆盖旧任务 tab，触发离站警告；选择 cancel 后保留，已补充精确目标页复用修复，**`30ce403` 已推送旧插件 feature branch**，474 项测试、类型检查与 beta 构建通过；**尚未 reload**，尚未在浏览器复验。此前构建和 reload 通过不代表该问题已解决。
+- Chrome 切到无关 Google 登录窗口时，1116d 曾仍为 ACTIVE、尚未确认恢复，并再次请求用户暂停操作。**随后 1116d 已恢复并经 DB 确认：history COMMIT、RESTORED_EXACT；fixture COMMIT、4 flags 全部 true；当前无 active 夹具。** 这是 1116d 自身的恢复证据，不沿用先前 1116c 的恢复结论。
 
-### 先前各轮恢复记录（不包含 1116d）
+### 各轮恢复记录（已包含 1116d 独立确认）
 
-**仅 1116、1116b、1116c 各轮历史关系及 user／OAuth／旧 participant 已恢复并 COMMIT；1116d 不在此恢复结论内，仍为 ACTIVE、尚未确认恢复。** 较早的 all-actions 夹具于 11:49 条件恢复，独立 `user_restored`／`details_restored`／`participant_restored`／`restore_recorded` 全部为 true；本次 1116b 另确认 **RESTORED_EXACT＋4 项布尔检查全部 true**。此恢复结论仅适用于上述先前各轮，不覆盖后续 1116d。较早的 all-actions 备份为 `public.lumi_all_actions_backup_1116`、`public.lumi_all_actions_participant_1116`；关注重试使用 `lumi_follow_run_backup_1116*`、`lumi_follow_run_participant_1116*`、`lumi_follow_history_backup_1116*`，恢复脚本见 `/private/tmp/lh3-all-fixture-sql.txt` 第 3 节。人工测试资格不能证明真实资料同步有效；恢复历史夹具也不表示新 FOLLOW 接单已完成核验。
+**1116、1116b、1116c、1116d 各轮已恢复并 COMMIT，当前无 active 夹具。** 1116d history 独立确认 `RESTORED_EXACT`，fixture 的 4 flags 全部 true。 较早的 all-actions 夹具于 11:49 条件恢复，独立 `user_restored`／`details_restored`／`participant_restored`／`restore_recorded` 全部为 true；本次 1116b 另确认 **RESTORED_EXACT＋4 项布尔检查全部 true**。1116d 的恢复另以上述独立 DB 结果确认。较早的 all-actions 备份为 `public.lumi_all_actions_backup_1116`、`public.lumi_all_actions_participant_1116`；关注重试使用 `lumi_follow_run_backup_1116*`、`lumi_follow_run_participant_1116*`、`lumi_follow_history_backup_1116*`，恢复脚本见 `/private/tmp/lh3-all-fixture-sql.txt` 第 3 节。人工测试资格不能证明真实资料同步有效；恢复历史夹具也不表示新 FOLLOW 接单已完成核验。
 
 ## 限制和后续
 
-- 优先确认并恢复 1116d fixture／history、独立回读；查明 FOLLOW 15:02 WITHDRAWN 原因，并复验 open-campaign 修复。当前等待用户暂停并发操作，不宣称全恢复。
+- 1116d 已确认恢复，无 active 夹具。继续调查首次 SYSTEM 异常释放的具体 provider 原因，并 reload、复验 `30ce403` 的 open-campaign 修复；当前等待用户暂停并发操作。
 
 - 当前仅 LIKE、COMMENT、COMMENT_LIKE、RT 有真实老插件提交及核验记录；FOLLOW 修复后真实链路、剩余多动作组合真实验收、到期实际付款及撤销/异常恢复仍未完成。上述金额均为待支付，不宣称到账或完整迁移完成。
 - 组合 worker/binder 本地回归：6 文件 **69 pass、1 skip、0 fail，645 assertions**；后端类型检查通过。跳过项是浏览器 RT 自动化用例；当前 live RT 已通过，但不能据此将整个跳过用例中的异常/恢复场景记为覆盖。全 contracts **168 pass**。
