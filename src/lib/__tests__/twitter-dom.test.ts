@@ -5,6 +5,12 @@ import {
 } from '../twitter-dom'
 
 describe('extractTweetIdFromUrl', () => {
+  it('identifies legacy X targets stored with a mobile hostname and /i/web path', () => {
+    expect(
+      extractTweetIdFromUrl('https://mobile.twitter.com/i/web/status/123'),
+    ).toBe('123')
+  })
+
   it('parses x.com /<user>/status/<id>', () => {
     expect(extractTweetIdFromUrl('https://x.com/foo/status/123')).toBe('123')
   })

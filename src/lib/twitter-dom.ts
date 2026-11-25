@@ -7,7 +7,8 @@
  *   - 失败一律返回 null,不抛异常 — content script 高频调用,异常太贵
  */
 
-const TWEET_URL_REGEX = /^https?:\/\/(?:x|twitter)\.com\/[^/]+\/status\/(\d+)/
+const TWEET_URL_REGEX =
+  /^https?:\/\/(?:(?:www|mobile)\.)?(?:x|twitter)\.com\/(?:[^/]+|i\/web)\/status\/(\d+)/
 
 /**
  * 从一个绝对 URL 里抽 tweet id。识别 x.com / twitter.com,允许 /photo/N

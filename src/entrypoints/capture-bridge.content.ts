@@ -4,14 +4,17 @@
 // tweetId→campaign 映射 / 上报后端)。fire-and-forget,失败静默。
 // 放 isolated world = 能用 chrome.* 但仍不接触 x.com 页面 JS 的密钥/token。
 // ─────────────────────────────────────────────────────────────────────────
+
 import { dbg } from '@/lib/capture-debug'
 import { sendMessage } from '@/lib/messaging'
+import { rememberReservationLink } from '@/lib/reservation-link'
 
 export default defineContentScript({
   matches: ['*://x.com/*', '*://twitter.com/*'],
   world: 'ISOLATED',
   runAt: 'document_start',
   main() {
+    rememberReservationLink()
     dbg('capture-bridge 已注入 (ISOLATED world)')
     window.addEventListener('message', (e) => {
       if (e.source !== window) return

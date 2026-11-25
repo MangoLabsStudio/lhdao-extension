@@ -7,6 +7,7 @@ import {
 } from '@/lib/guide-state'
 import { sendMessage } from '@/lib/messaging'
 import type { CascadeWarning } from '@/lib/queries'
+import { requestedCampaignId } from '@/lib/reservation-link'
 import type { CampaignTaskCache } from '@/lib/storage'
 import { tierDisplay } from '@/lib/tier-display'
 
@@ -25,6 +26,8 @@ import { tierDisplay } from '@/lib/tier-display'
  */
 
 const DWELL_GOAL_MS = 10_000
+// Allow the service’s five-second reservation cache on other replicas to expire.
+const RESERVATION_RETRY_MS = 6000
 const FOCAL_POLL_MS = 500
 const DWELL_TICK_MS = 250
 // 验证成功后自动打开任务广场标签页的延时,给用户看一眼"已提交"再开。
@@ -62,6 +65,7 @@ export function CurrentTaskSection({
   const [focalId, setFocalId] = React.useState<string | null>(() =>
     focalIdFromUrl(),
   )
+  const expectedCampaignId = requestedCampaignId(focalId)
   const [dismissedTask, setDismissedTask] = React.useState<string | null>(null)
   const accountGeneration = React.useRef(0)
   const [accountVersion, setAccountVersion] = React.useState(0)
@@ -161,6 +165,26 @@ export function CurrentTaskSection({
     let cancelled = false
     const generation = accountVersion
     let loadSequence = 0
+    let waitingForReservation = !!expectedCampaignId
+    let refreshPending = false
+    let retried = false
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    const onReservationMiss = (refresh: boolean) => {
+      if (!refresh) return
+      if (retried) {
+        setStatus('missing')
+        return
+      }
+      retried = true
+      retryTimer = setTimeout(() => {
+        if (
+          !cancelled &&
+          generation === accountGeneration.current &&
+          focalId === focalIdFromUrl()
+        )
+          void load(true)
+      }, RESERVATION_RETRY_MS)
+    }
     // 本 focal 会话是否已拿到任务。拿到后,后续空快照(任务完成/名额变动暂时
     // 从快照消失,或手动同步后的 tasks-updated 回拉)不再
     // 把它清成 null —— 否则会把「进行中卡 / 成功庆祝」误清掉(自身引入的回归)。
@@ -208,6 +232,7 @@ export function CurrentTaskSection({
     }
     // 首次打开详情页时刷新已接任务；广播更新只读后台已写好的缓存。
     const load = async (refresh = false): Promise<void> => {
+      if (refresh) refreshPending = true
       const sequence = ++loadSequence
       try {
         const snap = await sendMessage(
@@ -222,10 +247,12 @@ export function CurrentTaskSection({
         )
           return
         if (snap.type !== 'tasks-snapshot') {
-          showReadFailure()
+          if (waitingForReservation) onReservationMiss(refresh)
+          else showReadFailure()
           return
         }
         if (snap.tokenConfigured === false) {
+          clearTimeout(retryTimer)
           setCampaign(null)
           setStatus('ready')
           return
@@ -245,9 +272,19 @@ export function CurrentTaskSection({
         const selected = choices.find(
           (item) => item.campaignId === selectedCampaignId.current,
         )
-        const hit = (selected?.reserved ? selected : null) ?? choices[0] ?? null
+        const hit = waitingForReservation
+          ? choices.find(
+              (item) => item.reserved && item.campaignId === expectedCampaignId,
+            )
+          : ((selected?.reserved ? selected : null) ?? choices[0])
+        if (waitingForReservation && !hit) {
+          onReservationMiss(refresh)
+          return
+        }
         setCampaignChoices(choices)
         if (hit) {
+          waitingForReservation = false
+          clearTimeout(retryTimer)
           if (selectedCampaignId.current !== hit.campaignId) {
             setDetected(new Set())
             setPhase('detecting')
@@ -292,7 +329,16 @@ export function CurrentTaskSection({
         setCampaign(null)
         setStatus('ready')
       } catch {
-        if (sequence === loadSequence) showReadFailure()
+        if (
+          cancelled ||
+          generation !== accountGeneration.current ||
+          sequence !== loadSequence
+        )
+          return
+        if (waitingForReservation) onReservationMiss(refresh)
+        else showReadFailure()
+      } finally {
+        if (refresh) refreshPending = false
       }
     }
 
@@ -301,6 +347,7 @@ export function CurrentTaskSection({
     const onMsg = (m: unknown): void => {
       if (
         !cancelled &&
+        !(waitingForReservation && refreshPending) &&
         typeof m === 'object' &&
         m !== null &&
         (m as { type?: string }).type === 'tasks-updated'
@@ -315,13 +362,14 @@ export function CurrentTaskSection({
     }
     return () => {
       cancelled = true
+      clearTimeout(retryTimer)
       try {
         chrome.runtime.onMessage.removeListener(onMsg)
       } catch {
         // ignore
       }
     }
-  }, [focalId, accountVersion, reloadVersion])
+  }, [focalId, accountVersion, reloadVersion, expectedCampaignId])
 
   // ── 页面可见性记账(mount 一次) ──
   React.useEffect(() => {
@@ -533,7 +581,15 @@ export function CurrentTaskSection({
 
   // Ordinary tweets have no task: keep background recovery invisible.
   const taskKey = `${accountVersion}:${focalId}`
-  if (!campaign || dismissedTask === taskKey || focalId !== focalIdFromUrl())
+  if (
+    (!campaign &&
+      !(
+        expectedCampaignId &&
+        (status === 'missing' || status === 'loading')
+      )) ||
+    dismissedTask === taskKey ||
+    focalId !== focalIdFromUrl()
+  )
     return null
   const closeButton = (
     <button
