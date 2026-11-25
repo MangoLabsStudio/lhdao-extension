@@ -126,18 +126,22 @@ export function extractAuthorHandleFromArticle(
   // 策略 1:data-testid="User-Name" 容器内的第一个 user-link
   const nameBlock = article.querySelector('[data-testid="User-Name"]')
   if (nameBlock) {
-    const handle = scanUserLinkIn(nameBlock, article)
+    const handle = findProfileHandle(
+      nameBlock.querySelectorAll('a[href]'),
+      article,
+    )
     if (handle) return handle
   }
 
   // 策略 2:整篇 article 内任意 user-link (兜底,某些视图 User-Name 不存在)
-  const handle = scanUserLinkIn(article, article)
-  return handle
+  return findProfileHandle(article.querySelectorAll('a[role="link"]'), article)
 }
 
-function scanUserLinkIn(scope: Element, owningArticle: Element): string | null {
-  const links = scope.querySelectorAll('a[role="link"]')
-  for (const a of Array.from(links)) {
+function findProfileHandle(
+  links: NodeListOf<Element>,
+  owningArticle: Element,
+): string | null {
+  for (const a of links) {
     if (a.closest('article') !== owningArticle) continue // 引用推文的 link,跳过
     const href = a.getAttribute('href') ?? ''
     const m = href.match(HANDLE_PATH_REGEX)
