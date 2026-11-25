@@ -584,7 +584,9 @@ it('initializes discovery when a FOLLOW profile is the first visit', async () =>
   expect(response).toMatchObject({
     ready: true,
     byAuthor: {
-      bundlessapp: [expect.objectContaining({ campaignId: 'available-follow' })],
+      bundlessapp: [
+        expect.objectContaining({ campaignId: 'available-follow' }),
+      ],
     },
   })
   expect(await background.readPopupData()).toMatchObject({
