@@ -107,6 +107,61 @@ describe('current-task comment guide', () => {
     })
   })
 
+  it.each([
+    'LIKE',
+    'COMMENT',
+  ] as const)('automatically recovers a missing %s reservation after one retry', async (actionType) => {
+    vi.useFakeTimers()
+    window.history.replaceState(
+      {},
+      '',
+      '/user/status/123456#lhdaoTask=123456%3Aa',
+    )
+    const target = { ...rows[0], actionType }
+    rows = [{ ...target, campaignId: 'another' }]
+    await render()
+    expect(container.querySelector('.lh-cur-todo')).toBeNull()
+    await act(async () => updated({ type: 'tasks-updated' }))
+    rows = [target]
+    await act(async () => vi.advanceTimersByTimeAsync(6000))
+    expect(container.querySelector('.lh-cur-todo')?.textContent).toContain(
+      actionType === 'LIKE' ? '点赞' : '评论',
+    )
+    await act(async () => vi.advanceTimersByTimeAsync(60000))
+    expect(
+      vi
+        .mocked(messaging.sendMessage)
+        .mock.calls.filter(([req]) => req.type === 'get-current-task-snapshot'),
+    ).toHaveLength(2)
+  })
+
+  it('offers a manual retry after two misses and accepts only the requested reservation', async () => {
+    vi.useFakeTimers()
+    window.history.replaceState(
+      {},
+      '',
+      '/user/status/123456#lhdaoTask=123456%3Aa',
+    )
+    const target = rows[0]
+    rows = [{ ...target, reserved: false, timelineOnly: true }]
+    vi.mocked(messaging.sendMessage).mockRejectedValueOnce(new Error('offline'))
+    await render()
+    await act(async () => vi.advanceTimersByTimeAsync(6000))
+    expect(container.textContent).toContain('未同步到已接任务')
+    await act(async () => updated({ type: 'tasks-updated' }))
+    await act(async () => vi.advanceTimersByTimeAsync(60000))
+    expect(
+      vi
+        .mocked(messaging.sendMessage)
+        .mock.calls.filter(([req]) => req.type === 'get-current-task-snapshot'),
+    ).toHaveLength(2)
+    rows = [target]
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('.lh-cur-btn')!.click(),
+    )
+    expect(container.textContent).toContain('完整原文')
+  })
+
   it('refreshes once on detail entry and only reads cache after background updates', async () => {
     vi.useFakeTimers()
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
