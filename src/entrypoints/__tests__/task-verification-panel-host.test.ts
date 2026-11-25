@@ -89,6 +89,39 @@ afterEach(async () => {
 })
 
 describe('focused tweet verification panel host', () => {
+  it('mounts on the original post when its author is a native link and its timestamp is plain text', async () => {
+    document.body.innerHTML = `
+      <article id="original">
+        <div data-testid="User-Name"><a href="/user">Author</a></div>
+        <time>16:16</time>
+        <div role="group"><button data-testid="reply">Reply</button></div>
+      </article>
+      <article>
+        <a href="/user/status/789"><time>8s</time></a>
+        <div role="group"><button data-testid="reply">Reply</button></div>
+      </article>
+      <article>
+        <div data-testid="User-Name"><a href="/advertiser">Ad</a></div>
+        <a href="/user">@user</a>
+        <div role="group"><button data-testid="like">Like</button></div>
+      </article>
+      <article>
+        <div data-testid="tweetText"><a href="/user">@user</a></div>
+        <div role="group"><button data-testid="reply">Reply</button></div>
+      </article>`
+
+    await act(async () => scanTimeline())
+
+    expect(panel()?.textContent).toContain('评论')
+    expect(
+      document.querySelector('.lhdao-inline-task')?.closest('article')?.id,
+    ).toBe('original')
+    expect(messaging.sendMessage).toHaveBeenCalledWith({
+      type: 'get-current-task-snapshot',
+      tweetId: '123456',
+    })
+  })
+
   it('reattaches the same panel after X replaces the action controls', async () => {
     await act(async () => scanTimeline())
     const host = document.querySelector('.lhdao-inline-task')
